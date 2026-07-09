@@ -1,0 +1,30 @@
+import AppKit
+
+/// Directory picker for registering projects. Allows multiple selection so the user can pick
+/// several project folders, or a single parent folder to scan.
+enum ProjectPicker {
+    @MainActor
+    static func pick() -> [String] {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        panel.message = "Choose project folders, or a parent folder that contains repos"
+        NSApp.activate(ignoringOtherApps: true)
+        return panel.runModal() == .OK ? panel.urls.map(\.path) : []
+    }
+
+    /// Pick a single directory (for "New session…").
+    @MainActor
+    static func pickOne(prompt: String, message: String) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = prompt
+        panel.message = message
+        NSApp.activate(ignoringOtherApps: true)
+        return panel.runModal() == .OK ? panel.url?.path : nil
+    }
+}

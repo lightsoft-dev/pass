@@ -1,0 +1,87 @@
+name: Pass
+options:
+  bundleIdPrefix: dev.lightsoft
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: 2.0.0
+  FlyingFox:
+    url: https://github.com/swhitty/FlyingFox
+    from: 0.20.0
+  SwiftTerm:
+    # Pin below 1.12 — later versions add a Metal GPU backend that needs the Metal Toolchain.
+    # The default renderer is plenty for our attached-tmux terminal.
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: "1.11.2"
+
+targets:
+  Pass:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - Sources/Pass
+    dependencies:
+      - package: KeyboardShortcuts
+      - package: FlyingFox
+      - package: FlyingFox
+        product: FlyingSocks
+      - package: SwiftTerm
+    info:
+      path: Config/Info.plist
+      properties:
+        CFBundleName: Pass
+        CFBundleDisplayName: Pass
+        LSUIElement: true
+        LSMinimumSystemVersion: "14.0"
+        NSAppleEventsUsageDescription: "Pass opens tmux sessions in your terminal (Ghostty or Terminal) when you choose to attach."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        # Stable signing via the free Apple Development cert. Ad-hoc ("-") builds, but its
+        # cdhash changes every build and macOS then refuses notifications ("not allowed").
+        # A real Development identity gives a stable code identity so notifications work.
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: H66C2M66DC
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        # non-sandboxed: must spawn tmux/git, reach /private/tmp tmux socket, read any repo.
+        ENABLE_APP_SANDBOX: "NO"
+        ENABLE_HARDENED_RUNTIME: "NO"
+        SWIFT_VERSION: "5.0"
+
+  PassTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - Tests/PassTests
+    dependencies:
+      - target: Pass
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: H66C2M66DC
+        SWIFT_VERSION: "5.0"
+
+schemes:
+  Pass:
+    build:
+      targets:
+        Pass: all
+        PassTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - PassTests

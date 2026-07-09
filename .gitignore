@@ -1,0 +1,18 @@
+# XcodeGen output — regenerated from project.yml
+Pass.xcodeproj/
+Config/Info.plist
+
+# Build products
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# SPM
+.swiftpm/
+
+# Ephemeral spike runtime (scripts are tracked; logs are not)
+spikes/sample_hook_log.jsonl

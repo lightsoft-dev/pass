@@ -1,0 +1,158 @@
+import AppKit
+import SwiftUI
+import UserNotifications
+
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    let appModel = AppModel()
+    private var panelController: PanelController!
+    private let notifications = NotificationService()
+    private let hookServer = HookServer()
+    private var eventRouter: EventRouter?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Always called on the main thread; assert it so we can touch main-actor state.
+        MainActor.assumeIsolated { launch() }
+    }
+
+    @MainActor
+    private func launch() {
+        // Accessory app: no Dock icon, no app-switcher entry. (LSUIElement also sets this.)
+        NSApp.setActivationPolicy(.accessory)
+
+        // A minimal main menu so standard editing shortcuts (⌘X/C/V/A/Z) work inside the
+        // panel's text fields even though we have no visible menu bar (FINDINGS/plan R5).
+        NSApp.mainMenu = Self.makeMainMenu()
+
+        // Build stores + start the reconcile loop.
+        appModel.configure()
+        let notifications = self.notifications
+        appModel.clearSessionNotifications = { name in
+            notifications.clear(session: name, kinds: [
+                Attention.Kind.decision.rawValue, Attention.Kind.input.rawValue, Attention.Kind.finished.rawValue,
+            ])
+        }
+
+        // Panel (non-activating, keyboard-first).
+        panelController = PanelController(appModel: appModel)
+        appModel.panelController = panelController
+
+        // Global hotkey → toggle the panel.
+        HotkeyService.registerSummon { [weak self] in
+            self?.panelController.toggle()
+        }
+
+        // Notifications.
+        UNUserNotificationCenter.current().delegate = self
+        Task { [appModel, notifications] in
+            let status = await notifications.requestAuthorization()
+            await MainActor.run { appModel.notificationsBlocked = (status == .denied) }
+        }
+
+        // Hooks: detect install state; offer one-click install (don't clobber the user's file).
+        appModel.needsHookInstall = !ClaudeHooksInstaller.isInstalled()
+        if ProcessInfo.processInfo.environment["PASS_DEBUG_INSTALL_HOOKS"] == "1" {
+            appModel.installHooks()
+        }
+
+        // Hook server + event routing.
+        startHookPipeline()
+
+        if let p = ProcessInfo.processInfo.environment["PASS_DEBUG_ADD_PROJECTS"], !p.isEmpty {
+            appModel.addProjects(dirs: p.components(separatedBy: ":"))
+        }
+        if let s = ProcessInfo.processInfo.environment["PASS_DEBUG_OPEN"], !s.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [appModel, panelController] in
+                panelController?.show(preselecting: nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { appModel.forceOpenSession = s }
+            }
+        }
+
+        appModel.isReady = true
+        Log.app.info("pass launched (accessory, hook port \(PassConfig.hookPort))")
+    }
+
+    @MainActor
+    private func startHookPipeline() {
+        let notifications = self.notifications
+        let router = EventRouter(
+            sessions: appModel.sessions,
+            onAttention: { name, display, att in
+                let sound = att.kind != .finished // finished notifies silently
+                let body: String
+                switch att.kind {
+                case .decision: body = "Permission needed — \(att.preview)"
+                case .input:    body = att.preview
+                case .finished: body = att.preview
+                }
+                Task { await notifications.notify(session: name, kind: att.kind.rawValue,
+                                                  title: display, body: body, sound: sound) }
+            },
+            onResolved: { name in
+                notifications.clear(session: name, kinds: [
+                    Attention.Kind.decision.rawValue,
+                    Attention.Kind.input.rawValue,
+                    Attention.Kind.finished.rawValue,
+                ])
+            }
+        )
+        self.eventRouter = router
+
+        Task { @MainActor in
+            await hookServer.start(port: PassConfig.hookPort)
+            appModel.hookServerFailed = !(await hookServer.didBind)
+            for await hit in hookServer.events {
+                router.route(path: hit.path, raw: hit.raw)
+            }
+        }
+    }
+
+    // MARK: UNUserNotificationCenterDelegate
+
+    /// Show notifications even while pass is frontmost.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    /// Clicking a notification summons the panel (M3 will deep-link to the session).
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let sessionName = response.notification.request.content.userInfo["session"] as? String
+        Log.app.debug("notification clicked, session=\(sessionName ?? "-", privacy: .public)")
+        await MainActor.run {
+            panelController.show(preselecting: sessionName)
+        }
+    }
+
+    // MARK: Main menu
+
+    @MainActor
+    private static func makeMainMenu() -> NSMenu {
+        let main = NSMenu()
+
+        // App menu (Quit).
+        let appItem = NSMenuItem()
+        main.addItem(appItem)
+        let appMenu = NSMenu()
+        appItem.submenu = appMenu
+        appMenu.addItem(withTitle: "Quit pass", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+        // Edit menu — enables ⌘X/C/V/A/Z in text fields for an accessory app.
+        let editItem = NSMenuItem()
+        main.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editItem.submenu = editMenu
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        return main
+    }
+}

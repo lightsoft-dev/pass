@@ -1,0 +1,171 @@
+import SwiftUI
+import Observation
+
+/// Composition root + shared observable state for the whole app.
+@MainActor
+@Observable
+final class AppModel {
+    /// Number of sessions that need the user (decision + input). Drives the menu-bar badge.
+    var pendingCount: Int { sessions?.pendingCount ?? 0 }
+
+    /// Non-nil when something is wrong the user must fix (tmux missing, port busy, hooks not installed).
+    var setupProblem: String?
+
+    /// True when Claude Code hooks aren't installed yet (offer a one-click install).
+    var needsHookInstall: Bool = false
+
+    /// True when the hook server failed to bind its port.
+    var hookServerFailed: Bool = false
+
+    /// True when macOS notification banners are blocked (denied). The menu-bar badge still
+    /// works, but the user should enable notifications in System Settings for banners.
+    var notificationsBlocked: Bool = false
+
+    /// Set once services are wired, so views can react.
+    var isReady: Bool = false
+
+    /// When a notification is clicked, the session to preselect on next panel show.
+    var pendingPreselect: String?
+
+    /// Bumped by PanelController on every show so the omnibox re-takes focus (onAppear
+    /// only fires once for a cached panel).
+    var focusToken: Int = 0
+
+    /// Bumped by ⌘[ to step back from the session terminal to the inbox.
+    var backToken: Int = 0
+    func requestBack() { backToken &+= 1 }
+
+    /// Set to force the panel to open a specific session's terminal (used for testing).
+    var forceOpenSession: String?
+
+    // Stores (composition root). Set in configure() on the main actor.
+    private(set) var projects: ProjectStore!
+    private(set) var sessions: SessionStore!
+
+    weak var panelController: PanelController?
+
+    /// Set by AppDelegate — clears a session's delivered notifications.
+    var clearSessionNotifications: ((String) -> Void)?
+
+    nonisolated init() {}
+
+    /// Build the stores and start the reconcile loop. Called once from AppDelegate.
+    func configure() {
+        projects = ProjectStore()
+        sessions = SessionStore(projects: projects)
+        sessions.start()
+        isReady = true
+    }
+
+    func summon() {
+        panelController?.toggle()
+    }
+
+    func hidePanel() {
+        panelController?.hide()
+    }
+
+    var panelFloating: Bool { panelController?.isFloating ?? true }
+    func setPanelFloating(_ on: Bool) { panelController?.isFloating = on }
+    func togglePanelFloating() { panelController?.toggleFloating() }
+
+    // MARK: Session actions (called from the panel)
+
+    func attach(_ session: Session) {
+        AttachService.attach(session: session.name)
+        hidePanel()
+    }
+
+    func createSession(projectDir: String, agent: AgentKind = .claude) {
+        Task { await sessions?.createSession(projectDir: projectDir, agent: agent) }
+    }
+
+    // MARK: Project registration
+
+    /// Transient result of the last "Add projects…" action (shown in Settings).
+    var lastProjectAddMessage: String?
+
+    /// Register projects from picked folders. For each folder: if it's a git repo, register
+    /// it; otherwise scan its immediate children and register every repo found. Handles
+    /// single-project, parent-folder, and multi-select in one flow.
+    func addProjects(dirs: [String]) {
+        Task { @MainActor in
+            var added = 0
+            for dir in dirs {
+                for root in await Self.resolveProjectRoots(under: dir) {
+                    projects?.remember(rootPath: root)
+                    added += 1
+                }
+            }
+            lastProjectAddMessage = added == 0
+                ? "No git repositories found there."
+                : "Added \(added) project\(added == 1 ? "" : "s")."
+            Log.app.info("addProjects: \(added) registered from \(dirs.count) folder(s)")
+        }
+    }
+
+    private static func resolveProjectRoots(under dir: String) async -> [String] {
+        await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let fm = FileManager.default
+                // The picked folder is itself a repo → register just it.
+                if let id = GitIdentityService.identity(for: dir) {
+                    cont.resume(returning: [id.projectRoot]); return
+                }
+                // Otherwise treat it as a parent and register each child repo.
+                var roots: Set<String> = []
+                let children = (try? fm.contentsOfDirectory(atPath: dir)) ?? []
+                for name in children where !name.hasPrefix(".") {
+                    let child = (dir as NSString).appendingPathComponent(name)
+                    var isDir: ObjCBool = false
+                    guard fm.fileExists(atPath: child, isDirectory: &isDir), isDir.boolValue else { continue }
+                    if let id = GitIdentityService.identity(for: child) { roots.insert(id.projectRoot) }
+                }
+                cont.resume(returning: Array(roots).sorted())
+            }
+        }
+    }
+
+    func installHooks() {
+        let status = ClaudeHooksInstaller.install()
+        needsHookInstall = !ClaudeHooksInstaller.isInstalled()
+        Log.hooks.info("hook install requested -> \(String(describing: status), privacy: .public)")
+    }
+
+    /// Answer a pending permission decision for a session.
+    func decide(_ name: String, _ decision: ReplyInjector.Decision) {
+        guard let s = sessions?.session(named: name) else { return }
+        Task { _ = await ReplyInjector.shared.sendDecision(name, agent: s.agent, decision) }
+    }
+
+    /// Send a text reply into a session from the home input (without opening the terminal).
+    /// Returns the injection result so the UI can surface a shell-refusal.
+    @discardableResult
+    func reply(to name: String, text: String) async -> ReplyInjector.Result {
+        guard let s = sessions?.session(named: name) else { return .error("no session") }
+        let r = await ReplyInjector.shared.sendText(name, agent: s.agent, text: text)
+        // optimistic: mark working, clear the pending item
+        sessions?.applyAttention(name: name, .working)
+        return r
+    }
+
+    /// When a session's detail is opened: clear a finished FYI, and auto-resolve a pending
+    /// item the user already handled directly in a terminal ("already handled").
+    func reconcileOnOpen(_ session: Session) {
+        switch session.attention {
+        case .pending(let a) where a.kind == .finished:
+            sessions?.applyAttention(name: session.name, .idle)
+            clearSessionNotifications?(session.name)
+        case .pending(let a) where a.kind == .decision:
+            Task { [weak self] in
+                let kind = await ReplyInjector.shared.classify(session.name, agent: session.agent)
+                if kind != .permissionDialog {
+                    self?.sessions?.applyAttention(name: session.name, .idle)
+                    self?.clearSessionNotifications?(session.name)
+                }
+            }
+        default:
+            break
+        }
+    }
+}
