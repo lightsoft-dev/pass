@@ -38,6 +38,18 @@ final class ProjectStore {
         save()
     }
 
+    /// Assign (or clear, with nil/empty) the emoji shown at the front of a project's cards.
+    func setEmoji(rootPath: String, _ emoji: String?) {
+        guard let idx = projects.firstIndex(where: { $0.rootPath == rootPath }) else { return }
+        let trimmed = emoji?.trimmingCharacters(in: .whitespaces)
+        projects[idx].emoji = (trimmed?.isEmpty == false) ? String(trimmed!.prefix(2)) : nil
+        save()
+    }
+
+    func emoji(forRoot root: String) -> String? {
+        projects.first { $0.rootPath == root }?.emoji
+    }
+
     private func load() {
         guard let data = try? Data(contentsOf: fileURL),
               let list = try? JSONDecoder().decode([Project].self, from: data) else { return }

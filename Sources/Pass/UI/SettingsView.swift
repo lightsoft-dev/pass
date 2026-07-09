@@ -21,17 +21,7 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     ForEach(projects) { p in
-                        HStack(spacing: 8) {
-                            Circle().fill(ProjectColor.color(for: p.rootPath)).frame(width: 8, height: 8)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(p.name).font(.system(size: 12, weight: .medium))
-                                Text(p.rootPath).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                            }
-                            Spacer()
-                            Button { appModel.projects?.forget(rootPath: p.rootPath) } label: {
-                                Image(systemName: "minus.circle")
-                            }.buttonStyle(.borderless).foregroundStyle(.secondary)
-                        }
+                        ProjectRow(project: p)
                     }
                 }
                 HStack {
@@ -40,6 +30,8 @@ struct SettingsView: View {
                         Text(msg).font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                Text("Set an emoji to show it at the front of that project's session cards (⌃⌘Space for the emoji picker).")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("General") {
@@ -86,5 +78,37 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 420, height: 520)
         .onAppear { floating = appModel.panelFloating }
+    }
+}
+
+/// One project row in Settings — an emoji field (shown at the front of that project's cards),
+/// the name/path, and a remove button.
+private struct ProjectRow: View {
+    let project: Project
+    @Environment(AppModel.self) private var appModel
+    @State private var emoji: String = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("🙂", text: $emoji)
+                .frame(width: 40)
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: emoji) { _, new in
+                    let clipped = String(new.prefix(2))
+                    if clipped != new { emoji = clipped }
+                    appModel.projects?.setEmoji(rootPath: project.rootPath, clipped)
+                }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(project.name).font(.system(size: 12, weight: .medium))
+                Text(project.rootPath).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.head)
+            }
+            Spacer()
+            Button { appModel.projects?.forget(rootPath: project.rootPath) } label: {
+                Image(systemName: "minus.circle")
+            }.buttonStyle(.borderless).foregroundStyle(.secondary)
+        }
+        .onAppear { emoji = project.emoji ?? "" }
     }
 }

@@ -23,6 +23,7 @@ final class PanelController {
         panel.onCancel = { [weak self] in self?.hide() }
         panel.onGoBack = { [weak self] in self?.appModel.requestBack() }
         panel.onToggleFloat = { [weak self] in self?.toggleFloating() }
+        panel.onNavigate = { [weak self] event in self?.appModel.keyHandler?(event) ?? false }
         // Persist the user's chosen size across summons (position is re-centered each time).
         panel.delegate = resizeObserver
         return panel

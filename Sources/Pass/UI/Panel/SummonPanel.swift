@@ -1,5 +1,20 @@
 import AppKit
 
+/// Plain (unmodified) navigation keys, routed through performKeyEquivalent rather than
+/// SwiftUI's `.onKeyPress` — the latter depends on which control currently has focus in the
+/// responder chain, which SwiftUI's FocusState can desync after a mouse click reassigns real
+/// AppKit first-responder status. performKeyEquivalent is asked about EVERY key-down before
+/// the first responder ever sees it, so this works no matter what has focus.
+enum PanelNavKey {
+    case up, down, returnKey, escape
+}
+
+struct PanelNavEvent {
+    var key: PanelNavKey
+    var command: Bool
+    var option: Bool
+}
+
 /// A Spotlight/Raycast-style floating panel: non-activating (takes keystrokes without
 /// activating pass or deactivating the frontmost app), keyboard-first, appears over
 /// full-screen apps. Dismissal is explicit only (Esc / hotkey toggle) — it does NOT
@@ -10,6 +25,10 @@ final class SummonPanel: NSPanel {
     var onGoBack: (() -> Void)?
     /// ⌘⇧F — toggle floating vs normal window.
     var onToggleFloat: (() -> Void)?
+    /// Plain Up/Down/Return/Escape — return true to consume the event, false to let it fall
+    /// through to the normal responder chain (e.g. so Escape can still close the panel, or so
+    /// a real terminal view gets its arrow keys when one is open).
+    var onNavigate: ((PanelNavEvent) -> Bool)?
 
     init(contentRect: NSRect) {
         super.init(
@@ -44,8 +63,9 @@ final class SummonPanel: NSPanel {
     /// this is what makes copy/paste work inside the panel's text fields.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command) {
-            // ⌘[ steps back (embedded terminal owns Esc).
-            if event.charactersIgnoringModifiers == "[" {
+            // ⌘[ or ⌘W step back to the list (the embedded terminal owns Esc, so we can't
+            // use it here). ⌘W is intercepted so it never closes the whole panel window.
+            if event.charactersIgnoringModifiers == "[" || event.charactersIgnoringModifiers == "w" {
                 onGoBack?()
                 return true
             }
@@ -66,6 +86,22 @@ final class SummonPanel: NSPanel {
             default:  selector = nil
             }
             if let selector, NSApp.sendAction(selector, to: nil, from: self) {
+                return true
+            }
+        }
+
+        if !event.modifierFlags.contains(.control) {
+            let cmd = event.modifierFlags.contains(.command)
+            let opt = event.modifierFlags.contains(.option)
+            let key: PanelNavKey?
+            switch event.keyCode {
+            case 125: key = .down
+            case 126: key = .up
+            case 36:  key = .returnKey
+            case 53:  key = .escape
+            default:  key = nil
+            }
+            if let key, onNavigate?(PanelNavEvent(key: key, command: cmd, option: opt)) == true {
                 return true
             }
         }

@@ -15,6 +15,8 @@ struct SessionDetailView: View {
             header
             Divider()
             terminalBody
+            Divider()
+            footer
         }
         .task(id: session.name) {
             let controller = TerminalController(session: session.name)
@@ -31,7 +33,7 @@ struct SessionDetailView: View {
             HStack(spacing: 8) {
                 Button(action: onBack) {
                     Image(systemName: "chevron.left").foregroundStyle(.secondary)
-                }.buttonStyle(.plain).help("Back (⌘[)")
+                }.buttonStyle(.plain).help("Back to list (⌘[ or ⌘W)")
                 Circle().fill(ProjectColor.color(for: session.projectRoot)).frame(width: 8, height: 8)
                 Text(session.agent.glyph).foregroundStyle(.secondary)
                 Text(session.displayName).font(.system(size: 14, weight: .semibold)).lineLimit(1)
@@ -57,6 +59,17 @@ struct SessionDetailView: View {
             Text(a.kind == .decision ? "⚡ needs decision" : a.kind == .input ? "✎ needs input" : "✓ finished")
                 .font(.system(size: 11)).foregroundStyle(.orange)
         }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 12) {
+            Text("keys go to the session").foregroundStyle(.tertiary)
+            Spacer()
+            Text("⌘[ or ⌘W  back to list").foregroundStyle(.secondary)
+            Text("⌘⏎  open in Ghostty").foregroundStyle(.tertiary)
+        }
+        .font(.system(size: 10))
+        .padding(.horizontal, 14).padding(.vertical, 6)
     }
 
     @ViewBuilder

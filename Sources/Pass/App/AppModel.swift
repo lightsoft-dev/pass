@@ -35,6 +35,11 @@ final class AppModel {
     var backToken: Int = 0
     func requestBack() { backToken &+= 1 }
 
+    /// Set by CommandView on appear. Routes plain Up/Down/Return/Escape from
+    /// SummonPanel.performKeyEquivalent — bypasses SwiftUI's onKeyPress, which can lose track
+    /// of the focus chain after a mouse click moves real AppKit first-responder status.
+    var keyHandler: ((PanelNavEvent) -> Bool)?
+
     /// Set to force the panel to open a specific session's terminal (used for testing).
     var forceOpenSession: String?
 
@@ -136,6 +141,13 @@ final class AppModel {
     func decide(_ name: String, _ decision: ReplyInjector.Decision) {
         guard let s = sessions?.session(named: name) else { return }
         Task { _ = await ReplyInjector.shared.sendDecision(name, agent: s.agent, decision) }
+    }
+
+    /// Pick a numbered option (permission dialog / AskUserQuestion) from the home card.
+    func pickOption(_ name: String, _ number: Int) {
+        guard let s = sessions?.session(named: name) else { return }
+        Task { _ = await ReplyInjector.shared.pick(name, agent: s.agent, option: number) }
+        sessions?.applyAttention(name: name, .working) // optimistic; hook corrects
     }
 
     /// Send a text reply into a session from the home input (without opening the terminal).

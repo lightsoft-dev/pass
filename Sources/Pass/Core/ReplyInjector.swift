@@ -96,6 +96,15 @@ actor ReplyInjector {
         return .delivered
     }
 
+    /// Pick a numbered option from a menu (permission dialog / AskUserQuestion). A bare digit
+    /// selects+confirms the highlighted-by-number choice (FINDINGS.md §2). Refuses a bare shell.
+    func pick(_ session: String, agent: AgentKind, option: Int) async -> Result {
+        guard await classify(session, agent: agent) != .shell else { return .refusedShell }
+        await tmux.sendKeys(session, [String(option)])
+        Log.inject.info("picked option \(option) in \(session, privacy: .public)")
+        return .delivered
+    }
+
     private func captureTail(_ session: String, lines: Int = 12) async -> String {
         let full = await tmux.capturePane(session, colors: false)
         let all = full.split(separator: "\n", omittingEmptySubsequences: false)

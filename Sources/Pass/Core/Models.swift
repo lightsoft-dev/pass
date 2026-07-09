@@ -90,6 +90,11 @@ struct Session: Identifiable, Hashable, Sendable {
     /// The agent's most recent completed response (from the last Stop). Persists across state
     /// changes so the home feed always shows each session's last response.
     var lastMessage: String?
+    /// While the session is actively producing output, the last meaningful line on screen —
+    /// so the compact card shows what it's doing right now (not "no response yet").
+    var liveTail: String?
+    /// The project's user-assigned emoji (shown at the front of the card), if any.
+    var emoji: String?
 
     /// Human display: `repo [worktree-dir] · branch`, worktree badge distinct.
     var displayName: String {
@@ -106,6 +111,8 @@ struct Session: Identifiable, Hashable, Sendable {
 /// name is just the directory name.
 struct Project: Identifiable, Codable, Hashable, Sendable {
     var rootPath: String
+    /// Optional user-assigned emoji shown at the front of this project's session cards.
+    var emoji: String?
     var id: String { rootPath }
     var name: String { URL(fileURLWithPath: rootPath).lastPathComponent }
 }

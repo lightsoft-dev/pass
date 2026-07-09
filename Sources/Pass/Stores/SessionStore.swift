@@ -29,10 +29,12 @@ final class SessionStore {
     private let tmux: TmuxClient
     private let projects: ProjectStore
     private var pollTask: Task<Void, Never>?
+    private var saveTask: Task<Void, Never>?
 
     init(tmux: TmuxClient = .shared, projects: ProjectStore) {
         self.tmux = tmux
         self.projects = projects
+        loadPersistedState()
     }
 
     func start() {
@@ -105,12 +107,20 @@ final class SessionStore {
             )
             session.attention = attentionByName[r.name] ?? .idle
             session.lastMessage = lastMessageByName[r.name]
+            session.emoji = projects.emoji(forRoot: projectRoot)
+            // Streaming sessions: scrape the current last line so the card shows live activity.
+            if isStreaming(session) {
+                session.liveTail = PaneSummary.lastContentLine(await tmux.capturePane(r.name, colors: false))
+            }
             next.append(session)
         }
 
-        // Drop attention for sessions that no longer exist.
+        // Drop attention / last messages for sessions that no longer exist.
         let liveNames = Set(next.map(\.name))
+        let before = (attentionByName.count, lastMessageByName.count)
         attentionByName = attentionByName.filter { liveNames.contains($0.key) }
+        lastMessageByName = lastMessageByName.filter { liveNames.contains($0.key) }
+        if before != (attentionByName.count, lastMessageByName.count) { scheduleSave() }
 
         // Sort: needs-you first, then most-recent activity.
         sessions = next.sorted { a, b in
@@ -118,6 +128,15 @@ final class SessionStore {
             if ap != bp { return ap }
             return a.lastActivity > b.lastActivity
         }
+    }
+
+    /// Is the session actively producing output right now? `.working` is the definitive signal
+    /// (UserPromptSubmit fired, Stop hasn't); recent pane activity is the fallback when hooks
+    /// aren't driving state. A session waiting on the user (`.pending`) is NOT streaming.
+    private func isStreaming(_ s: Session) -> Bool {
+        if case .working = s.attention { return true }
+        if case .pending = s.attention { return false }
+        return Date().timeIntervalSince(s.lastActivity) < 3
     }
 
     private func agentKind(for r: RawSession) -> AgentKind {
@@ -178,6 +197,7 @@ final class SessionStore {
             sessions[idx].attention = state
             resort()
         }
+        scheduleSave()
     }
 
     /// Record a session's latest completed response.
@@ -186,6 +206,35 @@ final class SessionStore {
         lastMessageByName[name] = message
         if let idx = sessions.firstIndex(where: { $0.name == name }) {
             sessions[idx].lastMessage = message
+        }
+        scheduleSave()
+    }
+
+    // MARK: Persistence — the "needs you" queue + last responses survive app restarts.
+
+    private func loadPersistedState() {
+        let snap = SessionStatePersistence.load()
+        lastMessageByName = snap.lastMessages
+        for (name, p) in snap.pending {
+            guard let kind = Attention.Kind(rawValue: p.kind) else { continue }
+            attentionByName[name] = .pending(Attention(kind: kind, receivedAt: p.receivedAt, preview: p.preview))
+        }
+    }
+
+    /// Debounced write — coalesces bursts of hook events into one save.
+    private func scheduleSave() {
+        saveTask?.cancel()
+        let attn = attentionByName, last = lastMessageByName
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled, self != nil else { return }
+            var snap = SessionStatePersistence.Snapshot(pending: [:], lastMessages: last)
+            for (name, state) in attn {
+                if case .pending(let a) = state {
+                    snap.pending[name] = .init(kind: a.kind.rawValue, receivedAt: a.receivedAt, preview: a.preview)
+                }
+            }
+            SessionStatePersistence.save(snap)
         }
     }
 

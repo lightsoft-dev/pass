@@ -1,6 +1,22 @@
 import SwiftUI
 import CryptoKit
 
+/// Leading indicator on a session card: the project's assigned emoji if set, otherwise the
+/// deterministic project-color dot.
+struct SessionBadge: View {
+    let session: Session
+    var size: CGFloat = 12
+
+    var body: some View {
+        if let emoji = session.emoji, !emoji.isEmpty {
+            Text(emoji).font(.system(size: size))
+        } else {
+            Circle().fill(ProjectColor.color(for: session.projectRoot))
+                .frame(width: max(7, size * 0.6), height: max(7, size * 0.6))
+        }
+    }
+}
+
 /// Deterministic color per project root path — same repo, same hue, forever, across
 /// restarts (derived, never stored). Worktrees of a repo share the base hue.
 enum ProjectColor {
