@@ -42,9 +42,28 @@ final class PanelController {
         }
     }
 
-    private lazy var resizeObserver = PanelResizeObserver { [weak self] size in
-        self?.savedSize = size
+    /// Remembers where the user dragged the panel in normal-window mode (floating mode always
+    /// re-centers, so we don't persist its programmatic re-centering).
+    private var savedOrigin: NSPoint? {
+        get {
+            let d = UserDefaults.standard
+            guard d.object(forKey: "panel.x") != nil, d.object(forKey: "panel.y") != nil else { return nil }
+            return NSPoint(x: d.double(forKey: "panel.x"), y: d.double(forKey: "panel.y"))
+        }
+        set {
+            guard let newValue else { return }
+            UserDefaults.standard.set(newValue.x, forKey: "panel.x")
+            UserDefaults.standard.set(newValue.y, forKey: "panel.y")
+        }
     }
+
+    private lazy var resizeObserver = PanelResizeObserver(
+        onResize: { [weak self] size in self?.savedSize = size },
+        onMove: { [weak self] origin in
+            // Only remember drags in normal mode — floating mode re-centers itself each summon.
+            if self?.isFloating == false { self?.savedOrigin = origin }
+        }
+    )
 
     /// Floating (always-on-top summon panel) vs a normal window that can sit behind others
     /// and stay open while you work. Persisted.
@@ -78,9 +97,10 @@ final class PanelController {
         if let session { appModel.pendingPreselect = session }
 
         applyMode()
-        // Floating: re-center where you're working (Spotlight-style). Normal window: leave it
-        // wherever the user last put it.
-        if isFloating { centerOnActiveScreen(panel) }
+        // Floating: re-center where you're working (Spotlight-style). Normal window: restore the
+        // spot you dragged it to — but never leave it at the initial (0,0) bottom-left corner or
+        // off a disconnected screen; fall back to centering.
+        if isFloating { centerOnActiveScreen(panel) } else { positionNormalWindow(panel) }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         appModel.focusToken &+= 1 // tell the omnibox to (re)take focus on every show
@@ -88,6 +108,20 @@ final class PanelController {
 
     func hide() {
         panel?.orderOut(nil)
+    }
+
+    /// Normal-window placement: reuse the saved drag position if it lands on a connected screen,
+    /// otherwise center (so it never sticks at the default bottom-left origin).
+    private func positionNormalWindow(_ panel: NSPanel) {
+        if let origin = savedOrigin {
+            var frame = panel.frame
+            frame.origin = origin
+            if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) {
+                panel.setFrameOrigin(origin)
+                return
+            }
+        }
+        centerOnActiveScreen(panel)
     }
 
     private func centerOnActiveScreen(_ panel: NSPanel) {
@@ -104,13 +138,22 @@ final class PanelController {
     }
 }
 
-/// NSWindowDelegate that reports the panel's new size when the user resizes it.
+/// NSWindowDelegate that reports the panel's new size/position when the user resizes or moves it.
 final class PanelResizeObserver: NSObject, NSWindowDelegate {
     private let onResize: (NSSize) -> Void
-    init(onResize: @escaping (NSSize) -> Void) { self.onResize = onResize }
+    private let onMove: (NSPoint) -> Void
+    init(onResize: @escaping (NSSize) -> Void, onMove: @escaping (NSPoint) -> Void = { _ in }) {
+        self.onResize = onResize
+        self.onMove = onMove
+    }
 
     func windowDidResize(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         onResize(window.frame.size)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        onMove(window.frame.origin)
     }
 }

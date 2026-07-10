@@ -6,7 +6,7 @@ import AppKit
 /// AppKit first-responder status. performKeyEquivalent is asked about EVERY key-down before
 /// the first responder ever sees it, so this works no matter what has focus.
 enum PanelNavKey {
-    case up, down, returnKey, escape
+    case up, down, returnKey, escape, tab, delete
 }
 
 struct PanelNavEvent {
@@ -75,6 +75,10 @@ final class SummonPanel: NSPanel {
                 onToggleFloat?()
                 return true
             }
+            // ⌘⌫ asks to kill the selected session (the view confirms first).
+            if event.keyCode == 51, onNavigate?(PanelNavEvent(key: .delete, command: true, option: false)) == true {
+                return true
+            }
             let cmdShift = event.modifierFlags.contains(.shift)
             let selector: Selector?
             switch event.charactersIgnoringModifiers {
@@ -99,6 +103,7 @@ final class SummonPanel: NSPanel {
             case 126: key = .up
             case 36:  key = .returnKey
             case 53:  key = .escape
+            case 48:  key = .tab
             default:  key = nil
             }
             if let key, onNavigate?(PanelNavEvent(key: key, command: cmd, option: opt)) == true {

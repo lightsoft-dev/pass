@@ -45,4 +45,34 @@ final class DecisionParserTests: XCTestCase {
         let pane = "  2. b\n  3. c\n  4. d"
         XCTAssertTrue(DecisionParser.parse(pane).isEmpty)
     }
+
+    func testPromptScrapesQuestionAboveMenu() {
+        let pane = """
+        ⏺ Write(spike_out.txt)
+         Do you want to create spike_out.txt?
+         ❯ 1. Yes
+           2. Yes, allow all edits during this session (shift+tab)
+           3. No
+         Esc to cancel · Tab to amend
+        """
+        XCTAssertEqual(DecisionParser.prompt(pane),
+                       "Write(spike_out.txt)\nDo you want to create spike_out.txt?")
+    }
+
+    func testPromptStopsAtBlankAndStripsBoxBorders() {
+        let pane = """
+        earlier unrelated output
+
+        ╭──────────────────────────────╮
+        │ Which library should we use? │
+        ╰──────────────────────────────╯
+          1. date-fns
+        ❯ 2. Day.js
+        """
+        XCTAssertEqual(DecisionParser.prompt(pane), "Which library should we use?")
+    }
+
+    func testPromptNilWithoutMenu() {
+        XCTAssertNil(DecisionParser.prompt("just some prose with no menu here"))
+    }
 }

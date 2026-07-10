@@ -26,6 +26,14 @@ final class SessionStore {
     /// the home feed shows every session's last response regardless of current state.
     var lastMessageByName: [String: String] = [:]
 
+    /// Sessions with a needs-you request the user hasn't checked yet. Set when an input/decision
+    /// arrives; cleared only when the user opens or acts on the session (not by state changes).
+    /// Drives the persistent highlighted border.
+    private(set) var unacked: Set<String> = []
+
+    /// User-assigned display names per session (display-only; folder/tmux names untouched).
+    private(set) var aliasByName: [String: String] = [:]
+
     private let tmux: TmuxClient
     private let projects: ProjectStore
     private var pollTask: Task<Void, Never>?
@@ -108,19 +116,36 @@ final class SessionStore {
             session.attention = attentionByName[r.name] ?? .idle
             session.lastMessage = lastMessageByName[r.name]
             session.emoji = projects.emoji(forRoot: projectRoot)
-            // Streaming sessions: scrape the current last line so the card shows live activity.
+            session.unacknowledged = unacked.contains(r.name)
+            session.customName = aliasByName[r.name]
+            // Card preview always prefers Claude's transcript (the real last assistant message)
+            // over terminal scraping — for live (streaming) sessions too, not just settled ones.
+            // Fall back to pane scraping only for non-Claude agents / when no transcript is found.
             if isStreaming(session) {
-                session.liveTail = PaneSummary.lastContentLine(await tmux.capturePane(r.name, colors: false))
+                if let text = await lastAssistantText(cwd: r.cwd) {
+                    session.liveTail = text
+                } else {
+                    session.liveTail = PaneSummary.lastContentLine(await tmux.capturePane(r.name, colors: false))
+                }
+            } else if session.lastMessage == nil {
+                if let text = await lastAssistantText(cwd: r.cwd) {
+                    session.paneTail = text
+                } else {
+                    let pane = await tmux.capturePane(r.name, colors: false)
+                    session.paneTail = PaneSummary.lastAgentMessage(pane) ?? PaneSummary.lastContentLines(pane, max: 2)
+                }
             }
             next.append(session)
         }
 
         // Drop attention / last messages for sessions that no longer exist.
         let liveNames = Set(next.map(\.name))
-        let before = (attentionByName.count, lastMessageByName.count)
+        let before = (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count)
         attentionByName = attentionByName.filter { liveNames.contains($0.key) }
         lastMessageByName = lastMessageByName.filter { liveNames.contains($0.key) }
-        if before != (attentionByName.count, lastMessageByName.count) { scheduleSave() }
+        unacked = unacked.intersection(liveNames)
+        aliasByName = aliasByName.filter { liveNames.contains($0.key) }
+        if before != (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count) { scheduleSave() }
 
         // Sort: needs-you first, then most-recent activity.
         sessions = next.sorted { a, b in
@@ -153,22 +178,80 @@ final class SessionStore {
         }
     }
 
+    /// Read a session's last assistant message from Claude Code's transcript, off the main actor
+    /// (file I/O). nil for non-Claude agents / unknown cwd.
+    private func lastAssistantText(cwd: String) async -> String? {
+        guard !cwd.isEmpty else { return nil }
+        return await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: ClaudeTranscript.lastAssistantText(cwd: cwd))
+            }
+        }
+    }
+
     // MARK: Lifecycle actions
 
-    /// Create a new pass session for a project directory running the given agent.
+    /// Create a new pass session for a project directory running the given agent. Inserts an
+    /// optimistic "launching" placeholder card immediately (so there's instant feedback instead
+    /// of waiting on tmux + a full reconcile), then swaps in the real session.
     @discardableResult
     func createSession(projectDir: String, agent: AgentKind = .claude) async -> String {
+        // 1. Instant placeholder — a card appears the moment you hit create.
+        let dirRepo = URL(fileURLWithPath: projectDir).lastPathComponent
+        let provisional = Slug.sessionName(repo: dirRepo, branch: nil)
+        upsertLaunching(name: provisional, projectRoot: projectDir, cwd: projectDir, agent: agent, git: nil)
+
+        // 2. Resolve identity + spawn the tmux session.
         let git = await resolveGit(projectDir)
-        let repo = git?.repoName ?? URL(fileURLWithPath: projectDir).lastPathComponent
+        let repo = git?.repoName ?? dirRepo
         let branch = git?.isLinkedWorktree == true ? (git?.branch ?? git?.worktreeDirName) : nil
         var name = Slug.sessionName(repo: repo, branch: branch)
         name = await uniqueName(name)
-
         let projectRoot = git?.projectRoot ?? projectDir
-        await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot, agent: agent)
+        await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
+                              agent: agent, launchCommand: LaunchCommands.command(for: agent))
         projects.remember(rootPath: projectRoot)
+
+        // 3. Swap the provisional card for the real one (name may differ once git/uniqueness resolve).
+        if name != provisional { sessions.removeAll { $0.name == provisional } }
+        upsertLaunching(name: name, projectRoot: projectRoot, cwd: projectDir, agent: agent, git: git)
+
+        // 4. Finalize from tmux (clears `launching`, fills attention).
         await reconcile()
         return name
+    }
+
+    /// Insert or refresh an optimistic launching placeholder in the live list.
+    private func upsertLaunching(name: String, projectRoot: String, cwd: String, agent: AgentKind, git: GitIdentity?) {
+        var s = Session(name: name, projectRoot: projectRoot, cwd: cwd, agent: agent, git: git,
+                        lastActivity: Date(), isAttached: false)
+        s.attention = .working
+        s.launching = true
+        s.emoji = projects.emoji(forRoot: projectRoot)
+        s.customName = aliasByName[name]
+        if let idx = sessions.firstIndex(where: { $0.name == name }) { sessions[idx] = s }
+        else { sessions.append(s) }
+        resort()
+    }
+
+    /// Create a git worktree off a project's main checkout, then start a session inside it.
+    /// Triggered by a `+branch` message on the home card. Returns nil on success, or a short
+    /// error message to surface (e.g. "not a git repo", a git failure).
+    func createWorktreeSession(fromProjectRoot root: String, branch: String, agent: AgentKind) async -> String? {
+        guard let mainRoot = (await resolveGit(root))?.projectRoot else { return "not a git repo" }
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<Result<String, GitWorktreeService.Failure>, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: GitWorktreeService.addWorktree(mainRepoRoot: mainRoot, branch: branch))
+            }
+        }
+        switch result {
+        case .success(let path):
+            await createSession(projectDir: path, agent: agent)
+            return nil
+        case .failure(let e):
+            Log.tmux.error("worktree create failed: \(e.message, privacy: .public)")
+            return e.message
+        }
     }
 
     private func uniqueName(_ base: String) async -> String {
@@ -182,8 +265,12 @@ final class SessionStore {
     }
 
     func kill(_ name: String) async {
-        await tmux.killSession(name)
+        // Optimistic removal — the row animates out immediately instead of after the reconcile.
+        sessions.removeAll { $0.name == name }
         attentionByName[name] = nil
+        unacked.remove(name)
+        aliasByName.removeValue(forKey: name)
+        await tmux.killSession(name)
         await reconcile()
     }
 
@@ -193,9 +280,36 @@ final class SessionStore {
     /// preserves it) and updates the in-memory session immediately for instant UI.
     func applyAttention(name: String, _ state: AttentionState) {
         attentionByName[name] = state
+        // A fresh input/decision request marks the session unacknowledged (persistent highlight).
+        // Other transitions (working/idle/finished) leave the flag alone — only the user clears it.
+        if case .pending(let a) = state, a.kind == .decision || a.kind == .input {
+            unacked.insert(name)
+        }
         if let idx = sessions.firstIndex(where: { $0.name == name }) {
             sessions[idx].attention = state
+            sessions[idx].unacknowledged = unacked.contains(name)
             resort()
+        }
+        scheduleSave()
+    }
+
+    /// Set (or clear, with empty/whitespace) a session's user-assigned display name.
+    /// Display-only — the folder and tmux session name are untouched.
+    func setAlias(_ name: String, _ alias: String) {
+        let trimmed = alias.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { aliasByName.removeValue(forKey: name) }
+        else { aliasByName[name] = trimmed }
+        if let idx = sessions.firstIndex(where: { $0.name == name }) {
+            sessions[idx].customName = trimmed.isEmpty ? nil : trimmed
+        }
+        scheduleSave()
+    }
+
+    /// The user checked (or acted on) a session — clear its persistent needs-you highlight.
+    func acknowledge(_ name: String) {
+        guard unacked.remove(name) != nil else { return }
+        if let idx = sessions.firstIndex(where: { $0.name == name }) {
+            sessions[idx].unacknowledged = false
         }
         scheduleSave()
     }
@@ -215,6 +329,8 @@ final class SessionStore {
     private func loadPersistedState() {
         let snap = SessionStatePersistence.load()
         lastMessageByName = snap.lastMessages
+        unacked = Set(snap.unacked ?? [])
+        aliasByName = snap.aliases ?? [:]
         for (name, p) in snap.pending {
             guard let kind = Attention.Kind(rawValue: p.kind) else { continue }
             attentionByName[name] = .pending(Attention(kind: kind, receivedAt: p.receivedAt, preview: p.preview))
@@ -225,10 +341,13 @@ final class SessionStore {
     private func scheduleSave() {
         saveTask?.cancel()
         let attn = attentionByName, last = lastMessageByName
+        let unack = unacked
+        let aliases = aliasByName
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, self != nil else { return }
-            var snap = SessionStatePersistence.Snapshot(pending: [:], lastMessages: last)
+            var snap = SessionStatePersistence.Snapshot(pending: [:], lastMessages: last,
+                                                        unacked: Array(unack), aliases: aliases)
             for (name, state) in attn {
                 if case .pending(let a) = state {
                     snap.pending[name] = .init(kind: a.kind.rawValue, receivedAt: a.receivedAt, preview: a.preview)

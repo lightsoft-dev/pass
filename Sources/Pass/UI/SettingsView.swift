@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import KeyboardShortcuts
 
 /// Settings window (⌘,). Keyboard-first users rarely open it, but it's where the hotkey,
@@ -7,11 +8,23 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var appModel
     @State private var launchAtLogin = LoginItemService.isEnabled
     @State private var floating = true
+    @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
 
     var body: some View {
         Form {
             Section("Shortcut") {
                 KeyboardShortcuts.Recorder("Summon pass:", name: .summonPass)
+            }
+
+            Section("Home") {
+                Picker("Layout", selection: $homeModeRaw) {
+                    ForEach(HomeMode.allCases, id: \.rawValue) { mode in
+                        Text(mode.label).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text("Card stack: the focused session shown large with its own input, others small. Compact list: uniform rows with one input at the bottom.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Projects") {
@@ -30,7 +43,15 @@ struct SettingsView: View {
                         Text(msg).font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Text("Set an emoji to show it at the front of that project's session cards (⌃⌘Space for the emoji picker).")
+                Text("Tip: click the dot at the front of a session card to give its project an emoji.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Agent commands") {
+                ForEach(AgentKind.launchable, id: \.self) { agent in
+                    AgentCommandRow(agent: agent)
+                }
+                Text("The command pass types into a new session for each agent (e.g. add flags like --dangerously-skip-permissions). Leave a field at its default to keep the built-in.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -77,28 +98,44 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 420, height: 520)
-        .onAppear { floating = appModel.panelFloating }
+        .onAppear {
+            floating = appModel.panelFloating
+            // The summon panel floats above normal windows, so it would sit on top of Settings.
+            // Hide it and pull the app forward so Settings is actually visible/focused.
+            appModel.hidePanel()
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 }
 
-/// One project row in Settings — an emoji field (shown at the front of that project's cards),
-/// the name/path, and a remove button.
-private struct ProjectRow: View {
-    let project: Project
-    @Environment(AppModel.self) private var appModel
-    @State private var emoji: String = ""
+/// One agent's launch command — the glyph, the agent name, and an editable command field.
+/// Blank/default clears the override (see `LaunchCommands`).
+private struct AgentCommandRow: View {
+    let agent: AgentKind
+    @State private var command: String = ""
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField("🙂", text: $emoji)
-                .frame(width: 40)
-                .multilineTextAlignment(.center)
+            Text(agent.glyph).frame(width: 16)
+            Text(agent.rawValue).font(.system(size: 12, weight: .medium)).frame(width: 56, alignment: .leading)
+            TextField(agent.defaultLaunchCommand ?? "command", text: $command)
                 .textFieldStyle(.roundedBorder)
-                .onChange(of: emoji) { _, new in
-                    let clipped = String(new.prefix(2))
-                    if clipped != new { emoji = clipped }
-                    appModel.projects?.setEmoji(rootPath: project.rootPath, clipped)
-                }
+                .font(.system(size: 12, design: .monospaced))
+                .onChange(of: command) { _, new in LaunchCommands.setCommand(new, for: agent) }
+        }
+        .onAppear { command = LaunchCommands.editableCommand(for: agent) }
+    }
+}
+
+/// One project row in Settings — name/path and a remove button. (Emoji is set inline from the
+/// session card's leading dot, not here.)
+private struct ProjectRow: View {
+    let project: Project
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            SessionBadge(emoji: project.emoji, projectRoot: project.rootPath, size: 15).frame(width: 20)
             VStack(alignment: .leading, spacing: 1) {
                 Text(project.name).font(.system(size: 12, weight: .medium))
                 Text(project.rootPath).font(.system(size: 10)).foregroundStyle(.secondary)
@@ -109,6 +146,5 @@ private struct ProjectRow: View {
                 Image(systemName: "minus.circle")
             }.buttonStyle(.borderless).foregroundStyle(.secondary)
         }
-        .onAppear { emoji = project.emoji ?? "" }
     }
 }

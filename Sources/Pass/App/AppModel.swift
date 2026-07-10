@@ -85,6 +85,25 @@ final class AppModel {
         Task { await sessions?.createSession(projectDir: projectDir, agent: agent) }
     }
 
+    /// Kill a session (ends its tmux session and the agent running in it). Destructive.
+    func killSession(_ name: String) {
+        Task { await sessions?.kill(name) }
+    }
+
+    /// Set (or clear, with empty) a session's custom display name. Only changes what pass
+    /// shows — the folder and tmux session name are untouched.
+    func renameSession(_ name: String, to alias: String) {
+        sessions?.setAlias(name, alias)
+    }
+
+    /// Spin off a git worktree for a project (from a `+branch` message) and start a session in
+    /// it. Returns nil on success, or a short error message for the caller to show.
+    @discardableResult
+    func createWorktreeSession(fromProjectRoot root: String, branch: String, agent: AgentKind) async -> String? {
+        guard let sessions else { return "not ready" }
+        return await sessions.createWorktreeSession(fromProjectRoot: root, branch: branch, agent: agent)
+    }
+
     // MARK: Project registration
 
     /// Transient result of the last "Add projects…" action (shown in Settings).
@@ -141,12 +160,25 @@ final class AppModel {
     func decide(_ name: String, _ decision: ReplyInjector.Decision) {
         guard let s = sessions?.session(named: name) else { return }
         Task { _ = await ReplyInjector.shared.sendDecision(name, agent: s.agent, decision) }
+        sessions?.acknowledge(name)
+    }
+
+    /// Forward a navigation key (Up/Down/Enter) to a session's agent — lets you drive a decision
+    /// menu shown in the mirror with the arrow keys, not just number picks.
+    func sendMenuKey(_ name: String, _ key: String) {
+        Task {
+            let state = await TmuxClient.shared.paneState(name)
+            if state.inMode { await TmuxClient.shared.cancelMode(name) } // leave copy-mode first
+            await TmuxClient.shared.sendKeys(name, [key])
+        }
+        sessions?.acknowledge(name)
     }
 
     /// Pick a numbered option (permission dialog / AskUserQuestion) from the home card.
     func pickOption(_ name: String, _ number: Int) {
         guard let s = sessions?.session(named: name) else { return }
         Task { _ = await ReplyInjector.shared.pick(name, agent: s.agent, option: number) }
+        sessions?.acknowledge(name)
         sessions?.applyAttention(name: name, .working) // optimistic; hook corrects
     }
 
@@ -156,7 +188,8 @@ final class AppModel {
     func reply(to name: String, text: String) async -> ReplyInjector.Result {
         guard let s = sessions?.session(named: name) else { return .error("no session") }
         let r = await ReplyInjector.shared.sendText(name, agent: s.agent, text: text)
-        // optimistic: mark working, clear the pending item
+        // optimistic: mark working, clear the pending item + the unacknowledged highlight
+        sessions?.acknowledge(name)
         sessions?.applyAttention(name: name, .working)
         return r
     }
@@ -164,6 +197,8 @@ final class AppModel {
     /// When a session's detail is opened: clear a finished FYI, and auto-resolve a pending
     /// item the user already handled directly in a terminal ("already handled").
     func reconcileOnOpen(_ session: Session) {
+        // Opening a session's detail counts as checking it — clear the persistent needs-you border.
+        sessions?.acknowledge(session.name)
         switch session.attention {
         case .pending(let a) where a.kind == .finished:
             sessions?.applyAttention(name: session.name, .idle)

@@ -12,6 +12,12 @@ enum SessionStatePersistence {
         }
         var pending: [String: Pending] = [:]   // only .pending states are worth restoring
         var lastMessages: [String: String] = [:]
+        // Sessions with a needs-you request the user hasn't checked yet (keeps the highlighted
+        // border across restarts). Optional so older state.json files still decode.
+        var unacked: [String]?
+        // User-assigned display names per session (display-only aliases). Optional for the same
+        // backward-compat reason.
+        var aliases: [String: String]?
     }
 
     private static var fileURL: URL {

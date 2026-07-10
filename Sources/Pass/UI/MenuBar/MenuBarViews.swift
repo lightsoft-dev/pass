@@ -25,7 +25,11 @@ struct MenuBarContent: View {
         Button("Open pass") { appModel.summon() }
             .keyboardShortcut(.space, modifiers: .option)
 
-        Button("New session…") { newSession() }
+        Menu("New session") {
+            ForEach(AgentKind.launchable, id: \.self) { agent in
+                Button("\(agent.glyph) \(agent.rawValue)…") { newSession(agent: agent) }
+            }
+        }
         Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
         Toggle("Float above windows", isOn: Binding(
             get: { appModel.panelFloating },
@@ -54,22 +58,19 @@ struct MenuBarContent: View {
         }
 
         Divider()
-        Button("Settings…") { openSettings() }
+        // SettingsLink is the reliable way to open the Settings scene (the old
+        // showSettingsWindow: selector is flaky on recent macOS). SettingsView.onAppear then
+        // hides the floating panel and activates, so Settings isn't stuck behind the panel.
+        SettingsLink { Text("Settings…") }
             .keyboardShortcut(",")
         Button("Quit pass") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 
-    /// Accessory apps don't bring the Settings window to front on their own — activate first.
-    private func openSettings() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-    }
-
-    private func newSession() {
+    private func newSession(agent: AgentKind) {
         guard let dir = ProjectPicker.pickOne(
             prompt: "New session",
-            message: "Choose a project directory to run an agent in") else { return }
-        appModel.createSession(projectDir: dir)
+            message: "Choose a project directory to run \(agent.rawValue) in") else { return }
+        appModel.createSession(projectDir: dir, agent: agent)
     }
 }

@@ -20,8 +20,9 @@ enum AgentKind: String, Codable, Hashable, CaseIterable {
         }
     }
 
-    /// Command typed into a fresh session to launch the agent.
-    var launchCommand: String? {
+    /// Built-in command typed into a fresh session to launch the agent. The user can override
+    /// this per agent in Settings (see `LaunchCommands`).
+    var defaultLaunchCommand: String? {
         switch self {
         case .claude:  return "claude"
         case .codex:   return "codex"
@@ -29,6 +30,10 @@ enum AgentKind: String, Codable, Hashable, CaseIterable {
         case .shell, .generic: return nil
         }
     }
+
+    /// Agents the user can start (and customize the launch command for). shell/generic are
+    /// adopted, never launched.
+    static var launchable: [AgentKind] { [.claude, .codex, .pi] }
 
     /// Best-effort mapping from a pane's foreground command to an agent kind.
     /// (`claude.exe` is what Claude Code reports as `pane_current_command`.)
@@ -39,6 +44,19 @@ enum AgentKind: String, Codable, Hashable, CaseIterable {
         if c == "pi" { return .pi }
         if ["zsh", "bash", "fish", "sh", "-zsh", "-bash"].contains(c) { return .shell }
         return .generic
+    }
+}
+
+/// How the home feed lays out sessions. Persisted in UserDefaults under "homeMode".
+enum HomeMode: String, CaseIterable {
+    case stack // one big focused card (embedded input) + small rows for the rest
+    case list  // uniform compact rows, selected one highlighted, one input at the bottom
+
+    var label: String {
+        switch self {
+        case .stack: return "Card stack"
+        case .list:  return "Compact list"
+        }
     }
 }
 
@@ -93,13 +111,48 @@ struct Session: Identifiable, Hashable, Sendable {
     /// While the session is actively producing output, the last meaningful line on screen —
     /// so the compact card shows what it's doing right now (not "no response yet").
     var liveTail: String?
+    /// Fallback when there's no recorded `lastMessage` yet (e.g. first launch before any Stop
+    /// hook fired): the last meaningful line(s) currently on the pane, so the card shows real
+    /// content instead of "no response yet".
+    var paneTail: String?
     /// The project's user-assigned emoji (shown at the front of the card), if any.
     var emoji: String?
+    /// User-assigned display name (alias). Overrides the derived name everywhere in pass —
+    /// never touches the folder or the tmux session name.
+    var customName: String?
+    /// A needs-you request (input/decision) arrived that the user hasn't checked yet. Keeps the
+    /// highlighted border on until the user opens or acts on the session — even if the underlying
+    /// attention state later changes (e.g. the agent moved on).
+    var unacknowledged: Bool = false
+    /// Optimistically-inserted placeholder shown the instant you create a session, before tmux
+    /// and the first reconcile catch up. Cleared once reconcile picks up the real session.
+    var launching: Bool = false
 
-    /// Human display: `repo [worktree-dir] · branch`, worktree badge distinct.
+    /// The session is actively waiting on the user (a decision or input) — drives the
+    /// highlighted "needs you" border. A finished FYI does not count.
+    var needsUser: Bool {
+        if case .pending(let a) = attention { return a.kind == .decision || a.kind == .input }
+        return false
+    }
+
+    /// Human display: `repo [worktree-dir] · branch`, with the user's alias replacing only the
+    /// repo part when set — the worktree/branch suffix always stays (e.g. "결제 서버 · main").
     var displayName: String {
+        if let customName, !customName.isEmpty { return customName + gitSuffix }
+        return defaultDisplayName
+    }
+
+    /// The derived (git/path-based) name, ignoring any alias — shown as secondary context when
+    /// an alias is set, and as the rename field's placeholder.
+    var defaultDisplayName: String {
         guard let git else { return URL(fileURLWithPath: cwd).lastPathComponent }
-        var s = git.repoName
+        return git.repoName + gitSuffix
+    }
+
+    /// The " ⧉ worktree · branch" tail appended after the repo name (or the alias).
+    private var gitSuffix: String {
+        guard let git else { return "" }
+        var s = ""
         if git.isLinkedWorktree, let wt = git.worktreeDirName { s += " ⧉ \(wt)" }
         if let branch = git.branch { s += " · \(branch)" }
         else if let sha = git.detachedSha { s += " · \(sha) (detached)" }

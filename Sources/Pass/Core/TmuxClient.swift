@@ -103,14 +103,15 @@ actor TmuxClient {
     /// Create a detached session running a shell in `cwd`, tag it, then launch the agent.
     /// The agent is launched via send-keys (not as the session command) so a post-mortem
     /// shell survives when the agent exits.
-    func newSession(name: String, cwd: String, projectRoot: String, agent: AgentKind) async {
+    func newSession(name: String, cwd: String, projectRoot: String, agent: AgentKind,
+                    launchCommand: String?) async {
         await run([
             "new-session", "-d", "-s", name, "-c", cwd, "-x", "220", "-y", "50",
             "-e", "\(PassConfig.sessionEnvVar)=\(name)",
         ])
         await run(["set-option", "-t", name, PassConfig.optProjectRoot, projectRoot])
         await run(["set-option", "-t", name, PassConfig.optAgent, agent.rawValue])
-        if let cmd = agent.launchCommand {
+        if let cmd = launchCommand, !cmd.isEmpty {
             await run(["send-keys", "-t", name, cmd, "Enter"])
         }
         Log.tmux.info("created session \(name, privacy: .public) agent=\(agent.rawValue) cwd=\(cwd, privacy: .public)")

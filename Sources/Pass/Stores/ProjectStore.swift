@@ -10,11 +10,17 @@ final class ProjectStore {
 
     private let fileURL: URL
 
-    init() {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("pass", isDirectory: true)
-        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        self.fileURL = support.appendingPathComponent("projects.json")
+    /// `fileURL` is injectable so tests can point at a temp file instead of the real
+    /// projects.json. Production passes nil → the app-support location.
+    init(fileURL: URL? = nil) {
+        if let fileURL {
+            self.fileURL = fileURL
+        } else {
+            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("pass", isDirectory: true)
+            try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+            self.fileURL = support.appendingPathComponent("projects.json")
+        }
         load()
     }
 
