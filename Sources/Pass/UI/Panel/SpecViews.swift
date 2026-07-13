@@ -4,8 +4,10 @@ import SwiftUI
 /// the dev-server row on top, then the numbered specs, each with an editable title/detail,
 /// a status badge, and agent actions (implement / verify / rework).
 struct SpecsView: View {
+    /// Pin the initially shown project (entry from a session's 📄 button / ⌘D); nil = pick one.
+    var initialRoot: String? = nil
     var onBack: () -> Void
-    var onOpenSession: (String) -> Void
+    var onOpenSession: (String, String) -> Void // (session name, projectRoot it belongs to)
 
     @Environment(AppModel.self) private var appModel
     @State private var selectedRoot: String = ""
@@ -119,7 +121,7 @@ struct SpecsView: View {
                 TextField("URL — e.g. http://localhost:3000", text: devBinding(\.url))
                     .textFieldStyle(.roundedBorder).font(.system(size: 12, design: .monospaced))
                 if let live = appModel.specPreviewSession(projectRoot: selectedRoot) {
-                    Button("Open session") { onOpenSession(live.name) }.controlSize(.small)
+                    Button("Open session") { onOpenSession(live.name, selectedRoot) }.controlSize(.small)
                     Button("Stop", role: .destructive) {
                         appModel.stopSpecPreview(projectRoot: selectedRoot)
                     }.controlSize(.small)
@@ -156,7 +158,7 @@ struct SpecsView: View {
                     spec: spec,
                     expanded: expanded == spec.number,
                     onToggle: { expanded = (expanded == spec.number) ? nil : spec.number },
-                    onOpenSession: onOpenSession,
+                    onOpenSession: { [root = selectedRoot] in onOpenSession($0, root) },
                     onStatus: { status = $0 }
                 )
             }
@@ -185,8 +187,10 @@ struct SpecsView: View {
 
     private func selectInitialProject() {
         guard selectedRoot.isEmpty else { return }
-        // Debug hook (PASS_DEBUG_SPECS=<root>) pins the initial project for headless checks.
-        if let dbg = ProcessInfo.processInfo.environment["PASS_DEBUG_SPECS"], dbg.hasPrefix("/") {
+        if let initialRoot {
+            selectedRoot = initialRoot
+        } else if let dbg = ProcessInfo.processInfo.environment["PASS_DEBUG_SPECS"], dbg.hasPrefix("/") {
+            // Debug hook (PASS_DEBUG_SPECS=<root>) pins the project for headless checks.
             selectedRoot = dbg
         } else if let root = appModel.sessions?.sessions.first?.projectRoot,
                   projects.contains(where: { $0.rootPath == root }) {

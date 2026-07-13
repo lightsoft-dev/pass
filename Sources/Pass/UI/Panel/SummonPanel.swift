@@ -11,6 +11,8 @@ enum PanelNavKey {
     case toggleInput
     /// ⇧⇧ (double-tap, routed from DoubleTapHotkey) — hop to the next session waiting on you.
     case nextWaiting
+    /// ⌘D — open the selected session's project spec document.
+    case openSpecs
 }
 
 struct PanelNavEvent {
@@ -93,6 +95,11 @@ final class SummonPanel: NSPanel {
             // by default.
             if key("j", 38),
                onNavigate?(PanelNavEvent(key: .toggleInput, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘D opens the selected session's project spec document.
+            if key("d", 2),
+               onNavigate?(PanelNavEvent(key: .openSpecs, command: true, option: false)) == true {
                 return true
             }
             let cmdShift = event.modifierFlags.contains(.shift)

@@ -22,9 +22,9 @@ struct CommandView: View {
 
     enum Route: Equatable {
         case list
-        case detail(String)          // a session's full-height terminal (back → list)
-        case specs                   // the project spec documents screen
-        case specSession(String)     // a session opened FROM specs (back → specs)
+        case detail(String)                  // a session's full-height terminal (back → list)
+        case specs(String?)                  // spec documents, optionally pinned to a project
+        case specSession(String, String)     // session opened FROM specs (name, projectRoot)
     }
 
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
@@ -112,7 +112,7 @@ struct CommandView: View {
                 showQuickCommand = false // fresh summon lands in the terminal, not the bar
                 if appModel.pendingOpenSpecs {
                     appModel.pendingOpenSpecs = false // menu bar asked for the specs screen
-                    route = .specs
+                    route = .specs(selectedSession?.projectRoot) // land on the current project
                 } else {
                     route = .list
                     focusSoon()
@@ -120,7 +120,7 @@ struct CommandView: View {
             }
             .onChange(of: appModel.backToken) { _, _ in
                 switch route {
-                case .specSession: route = .specs // ⌘[ steps back one level, not to home
+                case .specSession(_, let root): route = .specs(root) // ⌘[ steps back one level
                 case .specs, .detail: route = .list; focusSoon()
                 case .list: break
                 }
@@ -166,6 +166,11 @@ struct CommandView: View {
         switch e.key {
         case .toggleInput:
             toggleQuickCommand()
+            return true
+        case .openSpecs:
+            // ⌘D — the selected session's project document.
+            guard let s = selectedSession else { return true }
+            route = .specs(s.projectRoot)
             return true
         case .up:
             if e.command { navMove(-1); return true }
@@ -238,19 +243,17 @@ struct CommandView: View {
                 // session vanished while open
                 listMode.onAppear { route = .list }
             }
-        case .specs:
+        case .specs(let root):
             SpecsView(
+                initialRoot: root,
                 onBack: { route = .list; focusSoon() },
-                onOpenSession: { route = .specSession($0) }
+                onOpenSession: { name, root in route = .specSession(name, root) }
             )
-        case .specSession(let name):
+        case .specSession(let name, let root):
             if let session = sessions.first(where: { $0.name == name }) {
-                SessionDetailView(session: session) { route = .specs }
+                SessionDetailView(session: session) { route = .specs(root) }
             } else {
-                SpecsView(
-                    onBack: { route = .list; focusSoon() },
-                    onOpenSession: { route = .specSession($0) }
-                ).onAppear { route = .specs }
+                listMode.onAppear { route = .specs(root) } // session vanished — back to the doc
             }
         }
     }
@@ -438,7 +441,8 @@ struct CommandView: View {
                         ForEach(Array(orderedSessions.enumerated()), id: \.element.id) { idx, s in
                             CompactSessionCard(session: s, selected: idx == selection,
                                                onSelect: { selection = idx },
-                                               onDelete: { pendingKill = s })
+                                               onDelete: { pendingKill = s },
+                                               onSpecs: { route = .specs(s.projectRoot) })
                                 .transition(rowTransition)
                         }
                     }
@@ -463,7 +467,8 @@ struct CommandView: View {
                                     FocusedSessionCard(
                                         session: s,
                                         terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
-                                        onDelete: { pendingKill = s }
+                                        onDelete: { pendingKill = s },
+                                        onSpecs: { route = .specs(s.projectRoot) }
                                     )
                                 } else {
                                     CompactSessionCard(session: s, onSelect: { selection = idx })
@@ -790,6 +795,7 @@ struct FocusedSessionCard: View {
     let session: Session
     var terminal: TerminalController?
     var onDelete: (() -> Void)? = nil
+    var onSpecs: (() -> Void)? = nil
 
     @State private var renaming = false
 
@@ -851,6 +857,11 @@ struct FocusedSessionCard: View {
             }
             Spacer()
             attentionBadge
+            if let onSpecs {
+                Button(action: onSpecs) { Image(systemName: "doc.text") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .font(.system(size: 11)).help("Project spec document (⌘D)")
+            }
             SessionRenameButton(session: session, show: $renaming)
             if let onDelete {
                 Button(action: onDelete) { Image(systemName: "trash") }
@@ -928,6 +939,7 @@ struct CompactSessionCard: View {
     var selected: Bool = false
     var onSelect: () -> Void = {}
     var onDelete: (() -> Void)? = nil
+    var onSpecs: (() -> Void)? = nil
 
     @State private var hovering = false
     @State private var renaming = false
@@ -947,6 +959,11 @@ struct CompactSessionCard: View {
                 // Keep the buttons mounted while the rename popover is open — otherwise moving
                 // the mouse onto the popover ends the hover and tears the popover down.
                 if hovering || renaming {
+                    if let onSpecs {
+                        Button(action: onSpecs) { Image(systemName: "doc.text") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .font(.system(size: 11)).help("Project spec document (⌘D)")
+                    }
                     SessionRenameButton(session: session, show: $renaming)
                     if let onDelete {
                         Button(action: onDelete) { Image(systemName: "trash") }
