@@ -16,3 +16,5 @@ xcuserdata/
 
 # Ephemeral spike runtime (scripts are tracked; logs are not)
 spikes/sample_hook_log.jsonl
+Config/PassShareInfo.plist
+Config/PassShare.entitlements

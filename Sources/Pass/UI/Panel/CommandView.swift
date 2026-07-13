@@ -1,19 +1,22 @@
 import SwiftUI
 
-/// Root of the floating panel — a chat-style home: a feed of every session with its last
-/// response on top, and one input pinned at the bottom. Plain text replies to the selected
-/// session; `@` jumps to a project/session; ⏎ on an empty box (or ⌘⏎) opens its terminal.
+/// Root of the floating panel — a chat-style home over every session, with the SELECTED
+/// session shown as a live terminal: a real `tmux attach` client (colors, styles, cursor),
+/// so every keystroke goes straight into the agent's TUI and all of its features work.
+/// ⌘J summons a centered message bar (`@` jump, `+branch` worktree, plain text replies);
+/// ⌘↑↓ moves between sessions; ⌘⏎ expands the session full-height.
 struct CommandView: View {
     @Environment(AppModel.self) private var appModel
     @State private var route: Route = .list
     @State private var query: String = ""
-    @State private var selection: Int = 0
+    @State private var selection: Int = 0             // home cursor (over orderedSessions)
+    @State private var jumpSelection: Int = 0         // cursor inside the @ jump results
     @State private var status: String?
-    @State private var options: [DecisionOption] = []
-    @State private var optionPrompt: String = ""  // the question text above a numbered menu
-    @State private var paneMirror: String = ""    // live tmux snapshot for the awaiting session
-    @State private var mirrorCols: Int = 92       // terminal columns that fit the mirror's width
-    @State private var pendingKill: Session?      // session awaiting a kill confirmation
+    @State private var pendingKill: Session?          // session awaiting a kill confirmation
+    @State private var showQuickCommand = false       // ⌘J quick command (hidden by default)
+    @State private var terminal: TerminalController?  // live client attached to the selected session
+    @State private var terminalTarget: String?        // which session the home terminal shows
+    @State private var pool = TerminalPool()          // recent clients stay attached → instant switching
     @FocusState private var omniboxFocused: Bool
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
 
@@ -22,11 +25,16 @@ struct CommandView: View {
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
-    private var isJumpMode: Bool { query.hasPrefix("@") }
+    /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
+    /// and is simply stripped). Only `+branch` (worktree) opts out.
+    private var isJumpMode: Bool { !query.isEmpty && !query.hasPrefix("+") }
 
-    // A jump query is `@<token> <message>`: the token (up to the first space) filters/selects a
+    // A jump query is `<token> <message>`: the token (up to the first space) filters/selects a
     // session; anything after the first space is a message to send to it. Tab completes the token.
-    private var jumpRaw: String { isJumpMode ? String(query.dropFirst()) : "" }
+    private var jumpRaw: String {
+        guard isJumpMode else { return "" }
+        return query.hasPrefix("@") ? String(query.dropFirst()) : query
+    }
     private var jumpToken: String {
         let r = jumpRaw
         return r.firstIndex(of: " ").map { String(r[..<$0]) } ?? r
@@ -39,31 +47,35 @@ struct CommandView: View {
     private var jumpMessageIsReady: Bool {
         (jumpMessage?.trimmingCharacters(in: .whitespaces).isEmpty == false)
     }
-    /// A numbered menu is genuinely on the selected session's screen (the ❯ cursor marks a real
-    /// menu, not a numbered list in prose) → arrow keys and ⏎ drive it. Keyed off the live pane,
-    /// not hook state, so it works even when a Notification hook was missed.
-    private var menuActive: Bool {
-        guard !isJumpMode, selectedSession != nil else { return false }
-        return options.contains(where: \.highlighted)
-    }
-    /// The bottom omnibox is shown for @ jump, when there's no session to attach a card input
-    /// to, and in compact-list mode (where the single input lives at the bottom).
-    private var showsBottomInput: Bool { isJumpMode || sessions.isEmpty || homeMode == .list }
+    /// The centered quick command is up: summoned with ⌘J, or forced when there's no session
+    /// yet (creating one is the only possible action). It hides after sending a message, or
+    /// with another ⌘J — Esc never dismisses it (nor the panel).
+    private var showsCommandBar: Bool { showQuickCommand || sessions.isEmpty }
+    /// The quick command currently owns the keyboard (otherwise the terminal does).
+    private var typingInBar: Bool { showsCommandBar && omniboxFocused }
 
     private var selectedSession: Session? {
-        guard items.indices.contains(selection), case .session(let s) = items[selection] else { return nil }
-        return s
+        guard orderedSessions.indices.contains(selection) else { return nil }
+        return orderedSessions[selection]
     }
 
-    private var selectedProject: Project? {
-        guard items.indices.contains(selection), case .project(let p) = items[selection] else { return nil }
-        return p
+    /// The jump result list and its own selection — kept separate from the home cursor so
+    /// filtering doesn't yank the terminal around behind the bar. With nothing typed yet, the
+    /// live sessions are offered; registered projects join once a filter narrows things down
+    /// (there are far too many to list unfiltered).
+    private var jumpItems: [PaletteItem] {
+        let needle = jumpToken.trimmingCharacters(in: .whitespaces)
+        if needle.isEmpty { return orderedSessions.map { .session($0) } }
+        return filteredItems(needle)
+    }
+    private var jumpSelectedItem: PaletteItem? {
+        jumpItems.indices.contains(jumpSelection) ? jumpItems[jumpSelection] : nil
     }
 
     /// The session order the home renders — chat-room style in every mode: sessions you need to
-    /// respond to cluster at the BOTTOM, nearest the input. The oldest-waiting one sits at the
-    /// very bottom (next to handle); newer arrivals stack above it; the rest stay up top by
-    /// recency. Handling one drops it back up top.
+    /// respond to cluster at the BOTTOM, nearest the terminal/input. The oldest-waiting one sits
+    /// at the very bottom (next to handle); newer arrivals stack above it; the rest stay up top
+    /// by recency. Handling one drops it back up top.
     private var orderedSessions: [Session] {
         let waiting = sessions.filter { $0.needsUser }.sorted { pendingSince($0) > pendingSince($1) }
         let rest = sessions.filter { !$0.needsUser }
@@ -93,6 +105,7 @@ struct CommandView: View {
             .onChange(of: appModel.focusToken) { _, _ in
                 route = .list
                 query = ""
+                showQuickCommand = false // fresh summon lands in the terminal, not the bar
                 focusSoon()
             }
             .onChange(of: appModel.backToken) { _, _ in
@@ -102,10 +115,11 @@ struct CommandView: View {
                 if let s { route = .detail(s) }
             }
             // Keep `selection` on the same session when the home list reorders (e.g. one becomes
-            // pending and drops to the bottom cluster in list mode) — so the input never silently
-            // retargets to a different session mid-reply.
+            // pending and drops to the bottom cluster) — so the terminal never silently switches
+            // to a different session mid-interaction.
             .onChange(of: orderedSessions.map(\.id)) { old, new in
-                guard !isJumpMode, old.indices.contains(selection) else { return }
+                pool.prune(keeping: Set(new)) // clients for vanished sessions
+                guard old.indices.contains(selection) else { return }
                 let name = old[selection]
                 selection = new.firstIndex(of: name) ?? min(selection, max(0, new.count - 1))
             }
@@ -116,6 +130,7 @@ struct CommandView: View {
                 presenting: pendingKill,   // the exact session is passed to the buttons — no stale capture
                 actions: { session in
                     Button("Kill \(session.displayName)", role: .destructive) {
+                        pool.drop(session.name) // its attach client dies with the session
                         appModel.killSession(session.name)
                         pendingKill = nil
                     }
@@ -128,51 +143,59 @@ struct CommandView: View {
     }
 
     /// Plain Up/Down/Return/Escape, routed from SummonPanel.performKeyEquivalent (AppKit-level
-    /// — reliable regardless of which SwiftUI control currently holds focus; SwiftUI's
-    /// `.onKeyPress` alone can miss events after a mouse click moves real first-responder
-    /// status away from what FocusState thinks is focused). Returns false to let the key fall
-    /// through — e.g. so a real terminal (route == .detail) gets its own arrow keys, or so
-    /// Escape can still close the panel.
+    /// — reliable regardless of which control currently holds focus). Returns false to let the
+    /// key fall through the responder chain — which is now the DEFAULT: the embedded terminal
+    /// is first responder, and plain keys (arrows, ⏎, Esc, Tab, digits…) belong to the TUI
+    /// running in the session. Only ⌘-chords and message-bar editing are handled here.
     private func handleNav(_ e: PanelNavEvent) -> Bool {
         guard route == .list else { return false }
         switch e.key {
-        // Key scheme: ⌘↑↓ moves between sessions; PLAIN ↑↓ drives the awaiting session's menu
-        // (falling through to the text cursor when no menu is up). Jump mode keeps plain arrows
-        // for its result list, Spotlight-style.
+        case .toggleInput:
+            toggleQuickCommand()
+            return true
         case .up:
-            if e.command || isJumpMode { navMove(-1); return true }
-            if menuActive, let s = selectedSession { appModel.sendMenuKey(s.name, "Up"); return true }
-            return false // no menu → let the text field move its cursor
+            if e.command { navMove(-1); return true }
+            if isJumpMode { moveJump(-1); return true }
+            return false // terminal (or the bar's text cursor) gets plain arrows
         case .down:
-            if e.command || isJumpMode { navMove(1); return true }
-            if menuActive, let s = selectedSession { appModel.sendMenuKey(s.name, "Down"); return true }
+            if e.command { navMove(1); return true }
+            if isJumpMode { moveJump(1); return true }
             return false
         case .tab:
             // Tab autocompletes the '@' token to the top match, then leaves a trailing space so
-            // you can keep typing a message: "@iv" → "@ivma " → "@ivma xx 작업 부탁해". Outside
-            // jump mode, swallow it so focus stays in the input (no responder-chain hop).
-            if isJumpMode { completeJump() }
-            return true
+            // you can keep typing a message: "@iv" → "@ivma " → "@ivma xx 작업 부탁해". While
+            // typing in the bar, swallow it (no responder-chain hop); otherwise the terminal
+            // gets real Tabs (TUI completion).
+            if isJumpMode { completeJump(); return true }
+            return typingInBar
+        case .nextWaiting:
+            // ⇧⇧ — hop to the next session waiting on you (cycling).
+            guard !isJumpMode else { return true }
+            return jumpToNextWaiting()
         case .returnKey:
             if isJumpMode {
-                guard items.indices.contains(selection) else { return true }
-                switch items[selection] {
+                // First word matched nothing → it wasn't a session name; send the whole text
+                // to the selected session instead.
+                if jumpItems.isEmpty { sendReplyToSelected(jumpRaw); return true }
+                guard let item = jumpSelectedItem else { return true }
+                switch item {
                 case .session(let s):
                     if e.command { route = .detail(s.name) }        // ⌘⏎ dive into the terminal
-                    else if jumpMessageIsReady { sendJumpMessage(to: s) } // "@name msg" ⏎ → send
-                    else { jumpToSession(s) }                        // "@name" ⏎ → focus in stack
+                    else if jumpMessageIsReady { sendJumpMessage(to: s) } // "name msg" ⏎ → send
+                    else { jumpToSession(s) }                        // "name" ⏎ → focus its terminal
                 case .project(let p):
                     // Agent choice lives in the menu bar (New session ▸) — rarely needed, so the
                     // fast path here always starts the default agent.
-                    appModel.createSession(projectDir: p.rootPath); query = ""  // ⏎ start it
+                    appModel.createSession(projectDir: p.rootPath) // ⏎ start it
+                    query = ""
+                    hideQuickCommand() // action done — watch the new session arrive
                 }
                 return true
             }
             if e.command { openSelectedTerminal(); return true }
-            if query.hasPrefix("+") { createWorktreeFromInput() }
-            else if !query.isEmpty { sendReplyToSelected() }
-            else if menuActive, let s = selectedSession { appModel.sendMenuKey(s.name, "Enter") } // confirm menu choice
-            else { openSelectedTerminal() }
+            guard typingInBar else { return false } // plain ⏎ goes into the terminal
+            if query.hasPrefix("+") { createWorktreeFromInput() } // stays up: shows progress/errors
+            else if !sessions.isEmpty { hideQuickCommand() } // empty ⏎ → back to the terminal
             return true
         case .delete:
             // ⌘⌫ → confirm killing the selected session.
@@ -180,8 +203,12 @@ struct CommandView: View {
             return true
         case .escape:
             if pendingKill != nil { pendingKill = nil; return true }
-            if !query.isEmpty { query = ""; return true }
-            return false // let the panel close
+            if typingInBar {
+                if !query.isEmpty { query = "" } // clear the draft; the quick command stays up
+                return true // Esc never closes the quick command (send a message or ⌘J)
+            }
+            // The terminal owns Esc (interrupting the agent). Close the panel with ⌘⌘/⌥Space.
+            return false
         }
     }
 
@@ -203,44 +230,79 @@ struct CommandView: View {
     // MARK: List mode
 
     private var listMode: some View {
-        VStack(spacing: 0) {
-            if appModel.needsHookInstall { hookBanner }
-            listBody
-            // In stack mode the input lives inside the focused card (moves with focus/click,
-            // since selection often happens by mouse). Otherwise the input sits at the bottom.
-            if showsBottomInput {
-                // Compact-list mode has no big card, so surface the selected session's numbered
-                // choices right above the input (number key / click still pick them).
-                if homeMode == .list && !isJumpMode && !paneMirror.isEmpty {
-                    Divider()
-                    VStack(alignment: .leading, spacing: 6) {
-                        PaneMirror(text: paneMirror, onWidth: { mirrorCols = colsFor(width: $0) })
-                            .frame(maxHeight: 280)
-                        Text(menuActive
-                             ? "↑↓ ⏎ drive the menu · number picks · ⌘↑↓ sessions · ⌘⏎ open"
-                             : "mirroring terminal · type to reply · ⌘⏎ to open")
-                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                if appModel.needsHookInstall { hookBanner }
+                if homeMode == .sidebar {
+                    // Rows on the LEFT, the live terminal filling the right side.
+                    HStack(spacing: 0) {
+                        listBody
+                            .frame(width: min(max(geo.size.width * 0.34, 210), 320))
+                        Divider()
+                        if selectedSession != nil {
+                            terminalPanel
+                        } else {
+                            Spacer().frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     }
-                    .padding(.horizontal, 14).padding(.top, 8)
+                } else {
+                    listBody
+                    // List mode: rows on TOP, the selected session's live terminal below,
+                    // chat-style (stack mode embeds it in the focused card instead).
+                    if homeMode == .list && selectedSession != nil {
+                        Divider()
+                        terminalPanel
+                            .frame(height: min(max(geo.size.height * 0.52, 200), 480))
+                    }
                 }
-                Divider()
-                omnibox
             }
+            // ⌘J — the shared message bar floats centered over the home (Spotlight-style).
+            // The home (and its attached terminal) stays mounted behind it.
+            .overlay {
+                if showsCommandBar {
+                    commandBarOverlay(maxWidth: geo.size.width)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: showsCommandBar)
         }
         .onAppear { focusSoon() }
-        // Scrape numbered choices for the focused/selected session while it's waiting on you —
-        // runs in both home modes (stack card + list strip both read `options`).
-        .task(id: optionPollKey) { await pollOptions() }
+        .onChange(of: selectedSession?.name) { _, _ in syncTerminalTarget() }
+        .onChange(of: selectedSession?.launching) { _, _ in syncTerminalTarget() }
+        // A needs-you request landing on the session whose live terminal is on screen is
+        // already "checked" — clear the border immediately instead of leaving it stuck.
+        .onChange(of: selectedSession?.unacknowledged) { _, unacked in
+            if unacked == true, appModel.panelVisible,
+               let s = selectedSession, s.name == terminalTarget {
+                appModel.sessions?.acknowledge(s.name)
+            }
+        }
+        .task(id: terminalKey) { await runTerminal() }
     }
 
-    private var omnibox: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 8) {
-                Image(systemName: isJumpMode ? "at.circle.fill" : "arrow.turn.down.right")
-                    .foregroundStyle(isJumpMode ? Color.accentColor : .secondary)
+    // MARK: Centered message bar (⌘J)
+
+    private func commandBarOverlay(maxWidth: CGFloat) -> some View {
+        ZStack {
+            // Dim the home behind; click outside dismisses (unless it's the only UI).
+            Color.black.opacity(0.22)
+                .contentShape(Rectangle())
+                .onTapGesture { if !sessions.isEmpty { hideQuickCommand() } }
+            commandBar
+                .frame(width: min(540, maxWidth - 48))
+                .shadow(color: .black.opacity(0.35), radius: 28, y: 10)
+        }
+    }
+
+    private var commandBar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: query.hasPrefix("+") ? "arrow.triangle.branch" : "magnifyingglass")
+                    .font(.system(size: 16))
+                    .foregroundStyle(isJumpMode || query.hasPrefix("+") ? Color.accentColor : .secondary)
                 TextField(placeholder, text: $query)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 15))
+                    .font(.system(size: 17))
                     .focused($omniboxFocused)
                     .onChange(of: query) { old, new in handleQueryChange(old: old, new: new) }
                     // Tab completes the @-token here — the field editor eats Tab before
@@ -251,29 +313,83 @@ struct CommandView: View {
                     }
                     .onAppear { refocusField() } // grab focus the instant this field mounts
             }
-            if let status {
-                Text(status).font(.system(size: 10)).foregroundStyle(.orange)
-            } else {
-                Text(hint).font(.system(size: 10)).foregroundStyle(.tertiary)
+            .padding(.horizontal, 16).padding(.vertical, 13)
+
+            Divider()
+            Group {
+                if let status {
+                    Text(status).foregroundStyle(.orange)
+                } else {
+                    Text(hint).foregroundStyle(.tertiary)
+                }
+            }
+            .font(.system(size: 10))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16).padding(.vertical, 6)
+
+            // Results live inside the bar, Spotlight-style — the live sessions when nothing
+            // is typed yet, the filtered matches once you type.
+            if !query.hasPrefix("+") {
+                Divider()
+                jumpResults
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.12)))
+    }
+
+    @ViewBuilder
+    private var jumpResults: some View {
+        if jumpItems.isEmpty {
+            Text(selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
+                 ?? "No matches — try a different name.")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.vertical, 10)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(jumpItems.enumerated()), id: \.element.id) { idx, item in
+                            PaletteRow(item: item, selected: idx == jumpSelection)
+                                .contentShape(Rectangle())
+                                .onTapGesture { jumpSelection = idx; activate(item) }
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: 280)
+                // Scroll by element id (stable) — indices shift as the filter narrows.
+                .onChange(of: jumpSelection) { _, sel in
+                    guard jumpItems.indices.contains(sel) else { return }
+                    withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(jumpItems[sel].id, anchor: .center) }
+                }
+            }
+        }
     }
 
     private var placeholder: String {
-        if isJumpMode { return "jump — Tab to complete, then type a message" }
-        if let s = selectedSession { return "reply to \(s.displayName) · ⏎ to send" }
-        return "@ to jump · type to reply"
+        "search — session name, then your message"
     }
 
     private var hint: String {
-        if isJumpMode {
-            if let p = selectedProject { return "⏎ new session in \(p.name)" }
-            if jumpMessageIsReady, let s = selectedSession { return "⏎ send to \(s.displayName)" }
-            return "Tab complete · ⏎ go to session · ⌘⏎ terminal"
+        if query.hasPrefix("+") {
+            let branch = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
+            return branch.isEmpty ? "⏎ new git worktree + session (name the branch)"
+                                  : "⏎ create worktree “\(branch)” + session"
         }
-        if selectedSession != nil { return "⏎ send reply · ⌘↑↓ sessions · ⌘⏎ terminal · @ jump · +branch" }
-        return "@ jump to a project"
+        if isJumpMode {
+            if jumpItems.isEmpty, let s = selectedSession {
+                return "no matches — ⏎ sends this to \(s.displayName)"
+            }
+            if case .project(let p)? = jumpSelectedItem { return "⏎ new session in \(p.name)" }
+            if jumpMessageIsReady, case .session(let s)? = jumpSelectedItem {
+                return "⏎ send to \(s.displayName)"
+            }
+            return "Tab complete · ⏎ go to session · keep typing to message it"
+        }
+        return "type to search · first word filters, the rest is the message · +branch"
     }
 
     @ViewBuilder
@@ -281,32 +397,13 @@ struct CommandView: View {
         if appModel.sessions?.tmuxMissing == true {
             message("exclamationmark.triangle", "tmux not found",
                     "Install tmux (brew install tmux) and reopen pass.")
-        } else if items.isEmpty {
-            message("bubble.left.and.bubble.right",
-                    isJumpMode ? "No matches" : "No sessions yet",
-                    isJumpMode ? "Try a different name." : "@ to start one, or use New session… from the menu bar.")
-        } else if isJumpMode {
-            // Jump mode: uniform filtered rows (sessions + creatable projects).
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
-                            PaletteRow(item: item, selected: idx == selection)
-                                .contentShape(Rectangle())
-                                .onTapGesture { selection = idx; activate(item) }
-                        }
-                    }
-                    .padding(8)
-                }
-                // Scroll by element id (stable) — indices shift when the list reorders.
-                .onChange(of: selection) { _, sel in
-                    guard items.indices.contains(sel) else { return }
-                    withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(items[sel].id, anchor: .center) }
-                }
-            }
-        } else if homeMode == .list {
-            // Compact list: every session is a uniform row; the selected one is highlighted and
-            // the single bottom omnibox replies to it. Arrow keys / clicks move the selection.
+        } else if orderedSessions.isEmpty {
+            message("bubble.left.and.bubble.right", "No sessions yet",
+                    "@ to start one, or use New session… from the menu bar.")
+        } else if homeMode != .stack {
+            // Compact rows (list & sidebar modes): every session is a uniform row; the selected
+            // one is highlighted and its live terminal shows beside/below. ⌘↑↓ / clicks move
+            // the selection.
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
@@ -326,10 +423,9 @@ struct CommandView: View {
                 }
             }
         } else {
-            // Home: one big focused card (full last response + its own reply input) + small
-            // rows for the rest. Arrow keys or a click move focus. Plain VStack (not Lazy) —
-            // LazyVStack fails to re-layout a row whose size changes purely from `selection`
-            // (external state), not from the row's own data changing.
+            // Home: one big focused card (the session's live terminal) + small rows for the
+            // rest. ⌘↑↓ or a click move focus. Plain VStack (not Lazy) — LazyVStack fails to
+            // re-layout a row whose size changes purely from `selection` (external state).
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
@@ -337,13 +433,8 @@ struct CommandView: View {
                             Group {
                                 if idx == selection {
                                     FocusedSessionCard(
-                                        session: s, query: $query, status: status,
-                                        options: options, optionPrompt: optionPrompt,
-                                        mirror: paneMirror,
-                                        onMirrorWidth: { mirrorCols = colsFor(width: $0) },
-                                        fieldFocus: $omniboxFocused,
-                                        onQueryChange: handleQueryChange,
-                                        onPick: { appModel.pickOption(s.name, $0) },
+                                        session: s,
+                                        terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
                                         onDelete: { pendingKill = s }
                                     )
                                 } else {
@@ -357,13 +448,6 @@ struct CommandView: View {
                     .animation(.spring(response: 0.34, dampingFraction: 0.82), value: orderedSessions.map(\.id))
                 }
                 .onChange(of: selection) { _, sel in
-                    // NOTE: do NOT clear `query` here — this fires for programmatic selection
-                    // changes too (e.g. jump mode resets selection=0), which would wipe the
-                    // "@…" filter and kick you out of search. Drafts are cleared explicitly on
-                    // stack arrow-nav instead (handleNav).
-                    // The focused card is a fresh view instance (its own TextField), so real
-                    // AppKit focus doesn't carry over — re-assert it.
-                    refocusField()
                     guard orderedSessions.indices.contains(sel) else { return }
                     withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(orderedSessions[sel].id, anchor: .center) }
                 }
@@ -382,13 +466,82 @@ struct CommandView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity).padding()
     }
 
-    // MARK: Filtered items
+    // MARK: Live terminal (home)
 
-    /// Home feed shows ALL sessions (each with its last response). `@` switches to jump/filter
-    /// mode over sessions + registered projects.
-    private var items: [PaletteItem] {
-        isJumpMode ? filteredItems(jumpToken) : orderedSessions.map { .session($0) }
+    /// Restarts the attach task when the target or panel visibility changes. Empty = no client.
+    private var terminalKey: String {
+        guard appModel.panelVisible, let t = terminalTarget else { return "" }
+        return t
     }
+
+    /// The client the home should render RIGHT NOW: the switch task's controller once it has
+    /// caught up, else the already-attached pooled client — so flipping between warmed
+    /// sessions never shows a spinner frame.
+    private var displayedTerminal: TerminalController? {
+        if let terminal, terminal.sessionName == terminalTarget { return terminal }
+        return pool.peek(terminalTarget)
+    }
+
+    /// Point the home terminal at the selected session. A launching placeholder has no tmux
+    /// session yet, so it shows a spinner instead.
+    private func syncTerminalTarget() {
+        if let s = selectedSession { terminalTarget = s.launching ? nil : s.name }
+        else { terminalTarget = nil }
+    }
+
+    /// Show the target session's live client, reusing a pooled (still-attached) one when we
+    /// have it — switching back to a recent session is instant, with no re-attach repaint.
+    /// The pool survives panel hide/show (re-attaching would make every reopen repaint every
+    /// session top-to-bottom); clients are dropped when their session dies.
+    private func runTerminal() async {
+        guard !terminalKey.isEmpty else {
+            terminal = nil
+            return
+        }
+        let name = terminalKey
+        // Warm clients for the sessions you're likely to hop to next (waiting ones first, for
+        // ⇧⇧) BEFORE touching the current one, so the LRU never evicts the session on screen.
+        // They're sized like the on-screen terminal so tmux never reflows to a phantom 80×25.
+        let refSize = displayedTerminal?.terminalView.frame.size
+        let warmable = orderedSessions.filter { $0.name != name && !$0.launching }
+        pool.warm((warmable.filter(\.needsUser) + warmable.filter { !$0.needsUser }).map(\.name),
+                  size: refSize)
+        let controller = pool.controller(for: name, size: refSize)
+        terminal = controller
+        // Its live terminal is on screen — that counts as checking the session (clears the
+        // needs-you border, reconciles stale pending state), same as opening the detail view.
+        if let s = sessions.first(where: { $0.name == name }) { appModel.reconcileOnOpen(s) }
+        if !showQuickCommand {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { controller.focus() }
+        }
+    }
+
+    /// The compact-list mode terminal strip: the selected session's live client + a key hint.
+    private var terminalPanel: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let live = displayedTerminal {
+                TerminalPaneView(controller: live)
+                    .id(live.sessionName) // new session → new NSView (updateNSView can't swap it)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.08)))
+            } else if selectedSession?.launching == true {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("starting \(selectedSession?.agent.rawValue ?? "agent")…")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            Text("keys go to the session · ⇧⇧ next waiting · ⌘J quick command · ⌘↑↓ sessions · ⌘⏎ expand · ⌘⌫ kill")
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 6)
+    }
+
+    // MARK: Filtered items
 
     private func filteredItems(_ needleRaw: String) -> [PaletteItem] {
         let needle = needleRaw.trimmingCharacters(in: .whitespaces)
@@ -408,98 +561,51 @@ struct CommandView: View {
 
     // MARK: Keyboard
 
-    private func move(_ delta: Int) {
-        guard !items.isEmpty else { return }
-        selection = max(0, min(items.count - 1, selection + delta))
+    /// ↑↓ inside the @ jump results.
+    private func moveJump(_ delta: Int) {
+        guard !jumpItems.isEmpty else { return }
+        jumpSelection = max(0, min(jumpItems.count - 1, jumpSelection + delta))
     }
 
-    /// Arrow-key navigation. In the home stack, abandon an in-progress reply draft when moving
-    /// to another card; in @ jump mode, keep the filter text (arrows move the result cursor).
+    /// ⌘↑↓ session navigation. Abandon an in-progress message draft when moving to another
+    /// session; in @ jump mode, keep the filter text (plain arrows move the result cursor).
     private func navMove(_ delta: Int) {
         if !isJumpMode { query = "" }
-        move(delta)
+        guard !orderedSessions.isEmpty else { return }
+        selection = max(0, min(orderedSessions.count - 1, selection + delta))
     }
 
-    /// The omnibox is always focused, so it swallows printable keys before onKeyPress sees an
-    /// empty query. Detect the empty→single-char transition here: a digit picks a shown option,
-    /// y/n answer a plain permission; everything else becomes reply/jump text.
+    /// ⇧⇧: cycle to the next session that needs input (downward, wrapping). Returns false
+    /// when no OTHER session is waiting.
+    private func jumpToNextWaiting() -> Bool {
+        let list = orderedSessions
+        guard !list.isEmpty else { return false }
+        for offset in 1...list.count {
+            let idx = (selection + offset) % list.count
+            if list[idx].needsUser, idx != selection {
+                selection = idx
+                return true
+            }
+        }
+        return false
+    }
+
     private func handleQueryChange(old: String, new: String) {
-        if old.isEmpty, new.count == 1, let ch = new.first, let s = selectedSession {
-            // Number key → pick the matching option shown on the card.
-            if let n = ch.wholeNumberValue, options.contains(where: { $0.number == n }) {
-                appModel.pickOption(s.name, n)
-                query = ""
-                return
-            }
-            // y/n → answer a plain permission prompt (when no explicit option list is shown).
-            if options.isEmpty, ch == "y" || ch == "n",
-               case .pending(let a) = s.attention, a.kind == .decision {
-                appModel.decide(s.name, ch == "y" ? .allowOnce : .deny)
-                query = ""
-                return
-            }
-        }
         status = nil
-        // Entering/leaving @ jump mode swaps which input is on screen (the focused card's
-        // reply field ↔ the bottom filter field). onAppear on each field grabs focus, but
-        // fire refocus here too as a backup for the transition.
-        if old.hasPrefix("@") != new.hasPrefix("@") { refocusField() }
-        if isJumpMode {
-            selection = 0 // filtering always re-selects the top match
-        } else if new.isEmpty {
-            selection = min(selection, max(0, items.count - 1))
-        }
+        if isJumpMode { jumpSelection = 0 } // filtering always re-selects the top match
     }
 
-    // MARK: Option polling (numbered choices on the focused card)
-
-    /// Restarts the poll when the focused session changes. Polls WHICHEVER session is selected —
-    /// mirror/menu detection reads the live pane, so a session that's really waiting shows its
-    /// terminal even if a Notification hook was dropped and pass's state is stale.
-    private var optionPollKey: String {
-        guard !isJumpMode, let s = selectedSession else { return "idle" }
-        return s.name
+    /// ⌘J — show/hide the quick command. Hiding it hands the keyboard back to the terminal.
+    private func toggleQuickCommand() {
+        if showQuickCommand { hideQuickCommand() }
+        else { status = nil; showQuickCommand = true; refocusField() }
     }
 
-    private func pollOptions() async {
-        guard optionPollKey != "idle", let name = selectedSession?.name else {
-            options = []; optionPrompt = ""; paneMirror = ""; return
-        }
-        // Render the TUI at exactly the width that fits the mirror (no-op while a real terminal
-        // is attached — the attached client's size wins). Re-applied whenever the panel is
-        // resized so the mirrored TUI always fills the card edge-to-edge.
-        var sizedCols = 0
-        while !Task.isCancelled {
-            if sizedCols != mirrorCols {
-                await TmuxClient.shared.resizeWindow(name, cols: mirrorCols, rows: 30)
-                sizedCols = mirrorCols
-            }
-            let pane = await TmuxClient.shared.capturePane(name, colors: false)
-            let parsed = DecisionParser.parse(pane)
-            options = parsed
-            optionPrompt = parsed.isEmpty ? "" : (DecisionParser.prompt(pane) ?? "")
-            // Mirror when the session needs the user (hook state) OR a real menu is on screen
-            // (❯-marked) — reality wins over possibly-stale hook state.
-            let waiting = sessions.first(where: { $0.name == name })?.needsUser == true
-            let menuOnScreen = parsed.contains(where: \.highlighted)
-            paneMirror = (waiting || menuOnScreen) ? mirrorText(pane) : ""
-            try? await Task.sleep(for: .milliseconds(250)) // snappy so arrow moves reflect quickly
-        }
-    }
-
-    /// How many terminal columns fit a given mirror width — drives the tmux resize so the
-    /// mirrored TUI renders exactly as wide as the card.
-    private func colsFor(width: CGFloat) -> Int {
-        max(40, min(400, Int((width - 18) / PaneMirror.charWidth)))
-    }
-
-    /// The whole visible pane (blank edges trimmed) — a live mirror of the agent's terminal
-    /// while it waits on you. The view pins to the bottom; scroll up for earlier context.
-    private func mirrorText(_ pane: String) -> String {
-        var lines = pane.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeLast() }
-        while let first = lines.first, first.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeFirst() }
-        return lines.suffix(40).joined(separator: "\n") // bound size if an attached client made it huge
+    private func hideQuickCommand() {
+        showQuickCommand = false
+        query = ""
+        omniboxFocused = false
+        terminal?.focus()
     }
 
     private func openSelectedTerminal() {
@@ -508,25 +614,24 @@ struct CommandView: View {
         route = .detail(s.name)
     }
 
-    /// Leave @ jump mode and focus the chosen session's card in the home stack.
+    /// Leave the quick command and land on the chosen session — its live terminal takes over.
     private func jumpToSession(_ s: Session) {
-        query = "" // exits jump mode
         if let idx = orderedSessions.firstIndex(where: { $0.name == s.name }) { selection = idx }
-        refocusField()
+        hideQuickCommand()
     }
 
     /// Tab: replace the '@' token with the top match's name, keep any typed message, add a
     /// trailing space so typing continues into the message.
     private func completeJump() {
-        guard let top = items.first else { return }
+        guard let top = jumpItems.first else { return }
         let token: String
         switch top {
         case .session(let s): token = jumpCompletionToken(s)
         case .project(let p): token = Slug.make(p.name)
         }
         let msg = jumpMessage ?? ""
-        query = "@" + token + " " + msg
-        selection = 0
+        query = token + " " + msg
+        jumpSelection = 0
         FieldEditorFix.cursorToEnd() // keep typing at the end of the message
     }
 
@@ -537,26 +642,36 @@ struct CommandView: View {
             : s.name
     }
 
-    /// "@name message" + ⏎ → send the message straight to that session, then land on it.
+    /// "@name message" + ⏎ → send the message straight to that session, land on it, and close
+    /// the quick command (watch the terminal react). If delivery fails, the quick command
+    /// pops back up with the warning — a silent failed send would be worse than the surprise.
     private func sendJumpMessage(to s: Session) {
         let text = (jumpMessage ?? "").trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { jumpToSession(s); return }
-        query = "" // exits jump mode
         if let idx = orderedSessions.firstIndex(where: { $0.name == s.name }) { selection = idx }
+        hideQuickCommand()
         Task {
             let r = await appModel.reply(to: s.name, text: text)
-            if case .refusedShell = r { status = "⚠ \(s.displayName): agent not running — ⌘⏎ to open terminal" }
+            if case .refusedShell = r {
+                status = "⚠ \(s.displayName): agent not running — ⌘⏎ to open terminal"
+                showQuickCommand = true
+                refocusField()
+            }
         }
-        refocusField()
     }
 
-    private func sendReplyToSelected() {
-        guard let s = selectedSession else { return }
-        let text = query
-        query = ""
+    /// ⏎ on a plain message → send and close the quick command (reopens with a warning if the
+    /// send was refused).
+    private func sendReplyToSelected(_ text: String) {
+        guard let s = selectedSession, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        hideQuickCommand()
         Task {
             let r = await appModel.reply(to: s.name, text: text)
-            if case .refusedShell = r { status = "⚠ \(s.displayName): agent not running — ⌘⏎ to open terminal" }
+            if case .refusedShell = r {
+                status = "⚠ \(s.displayName): agent not running — ⌘⏎ to open terminal"
+                showQuickCommand = true
+                refocusField()
+            }
         }
     }
 
@@ -578,18 +693,9 @@ struct CommandView: View {
     private func activate(_ item: PaletteItem) {
         switch item {
         case .session(let s):
-            omniboxFocused = false
-            route = .detail(s.name)
+            jumpToSession(s)
         case .project(let p):
             appModel.createSession(projectDir: p.rootPath); query = ""
-        }
-    }
-
-    private func newFromSelected() {
-        if case .project(let p)? = items.indices.contains(selection) ? items[selection] : nil {
-            appModel.createSession(projectDir: p.rootPath); query = ""
-        } else if let s = selectedSession {
-            appModel.createSession(projectDir: s.projectRoot); query = ""
         }
     }
 
@@ -611,6 +717,7 @@ struct CommandView: View {
 
     private func focusSoon() {
         selection = initialSelection()
+        syncTerminalTarget()
         refocusField()
     }
 
@@ -621,11 +728,11 @@ struct CommandView: View {
         return 0
     }
 
-    /// Move keyboard focus to the (possibly freshly mounted) focused card's input. Forces a
-    /// false→true transition: setting `omniboxFocused = true` when it is ALREADY true is a
-    /// no-op, so after arrowing/clicking between cards SwiftUI wouldn't move focus to the new
-    /// card's newly-mounted TextField without this reset.
+    /// Route the keyboard to whichever input is active: the message bar when it's up,
+    /// otherwise the embedded terminal. (Forces a false→true transition on the FocusState —
+    /// setting it true while already true is a no-op and focus wouldn't move.)
     private func refocusField() {
+        guard showsCommandBar else { terminal?.focus(); return }
         omniboxFocused = false
         DispatchQueue.main.async {
             omniboxFocused = true
@@ -648,41 +755,22 @@ enum FieldEditorFix {
     }
 }
 
-/// The focused session in the home stack — shown large, with its full pending ask or last
-/// response readable at a glance, PLUS its own reply/jump input pinned to the card (the input
-/// travels with focus — including mouse clicks between cards — rather than staying fixed at
-/// the window bottom). Highlighted border marks it as keyboard-focused.
+/// The focused session in the home stack — its LIVE terminal embedded in the card: a real
+/// tmux client (full colors/styles), so keystrokes go straight into the agent's TUI. The
+/// shared message bar (⌘J) handles send-without-focus; the card itself is all terminal.
 struct FocusedSessionCard: View {
     let session: Session
-    @Binding var query: String
-    let status: String?
-    var options: [DecisionOption] = []
-    var optionPrompt: String = ""
-    var mirror: String = ""
-    var onMirrorWidth: (CGFloat) -> Void = { _ in }
-    let fieldFocus: FocusState<Bool>.Binding
-    let onQueryChange: (_ old: String, _ new: String) -> Void
-    var onPick: (Int) -> Void = { _ in }
+    var terminal: TerminalController?
     var onDelete: (() -> Void)? = nil
+
+    @State private var renaming = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
-            if !mirror.isEmpty {
-                // Awaiting you → mirror the agent's actual terminal instead of a GUI. Drive it with
-                // the arrows/⏎ (or a number key); ⌘⏎ opens the real thing.
-                PaneMirror(text: mirror, onWidth: onMirrorWidth).frame(maxHeight: 320)
-                Text(options.isEmpty
-                     ? "mirroring terminal · type below to reply · ⌘⏎ to open"
-                     : "↑↓ ⏎ drive the menu · number picks · ⌘↑↓ sessions · ⌘⏎ open")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
-            } else {
-                content
-                    .frame(minHeight: 70, maxHeight: 220, alignment: .top)
-                if !options.isEmpty { OptionsView(options: options, onPick: onPick) }
-            }
-            Divider()
-            inputRow
+            terminalBody
+            Text("keys go to the session · ⇧⇧ next waiting · ⌘J quick command · ⌘↑↓ sessions · ⌘⏎ expand · ⌘⌫ kill")
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -697,50 +785,27 @@ struct FocusedSessionCard: View {
         )
     }
 
-    // While this card is visible, query never starts with '@' — typing '@' flips the whole
-    // home view to jump mode (a flat filtered list with its own bottom omnibox), unmounting
-    // this card. A leading '+' stays here though: it means "spin off a worktree" — the icon and
-    // hint switch to reflect that.
-    private var isWorktree: Bool { query.hasPrefix("+") }
-
-    private var inputRow: some View {
-        VStack(alignment: .leading, spacing: 3) {
+    @ViewBuilder
+    private var terminalBody: some View {
+        if session.launching {
             HStack(spacing: 8) {
-                Image(systemName: isWorktree ? "arrow.triangle.branch" : "arrow.turn.down.right")
-                    .foregroundStyle(isWorktree ? Color.accentColor : .secondary)
-                    .font(.system(size: 12))
-                TextField("reply · ⏎ to send", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .focused(fieldFocus)
-                    .onChange(of: query) { old, new in onQueryChange(old, new) }
-                    .onAppear {
-                        // Grab focus when this card's input mounts (e.g. arrowing to a new
-                        // card, or leaving @ jump mode). Force a false→true transition.
-                        fieldFocus.wrappedValue = false
-                        DispatchQueue.main.async {
-                            fieldFocus.wrappedValue = true
-                            FieldEditorFix.cursorToEnd()
-                        }
-                    }
+                ProgressView().controlSize(.small)
+                Text("starting \(session.agent.rawValue)…").font(.system(size: 13)).foregroundStyle(.secondary)
             }
-            Group {
-                if let status {
-                    Text(status).foregroundStyle(.orange)
-                } else if isWorktree {
-                    let branch = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
-                    Text(branch.isEmpty ? "⏎ new git worktree + session (name the branch)"
-                                        : "⏎ create worktree on branch “\(branch)” + session")
-                        .foregroundStyle(Color.accentColor)
-                } else {
-                    Text("⏎ send · ⌘↑↓ sessions · ⌘⏎ terminal · @ jump · +branch").foregroundStyle(.tertiary)
-                }
-            }
-            .font(.system(size: 10))
+            .frame(maxWidth: .infinity, minHeight: 120, alignment: .leading)
+        } else if let terminal {
+            TerminalPaneView(controller: terminal)
+                .id(terminal.sessionName) // new session → new NSView (updateNSView can't swap it)
+                .frame(maxWidth: .infinity)
+                .frame(height: 340)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.06)))
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity)
+                .frame(height: 340)
         }
     }
-
-    @State private var renaming = false
 
     private var header: some View {
         HStack(alignment: .top, spacing: 6) {
@@ -774,39 +839,9 @@ struct FocusedSessionCard: View {
         case .working: Text("● working").font(.system(size: 11)).foregroundStyle(.blue)
         case .idle: EmptyView()
         case .pending(let a):
-            Text(a.kind == .decision ? "⚡ y allow · n deny" : a.kind == .input ? "✎ needs input" : "✓ finished")
+            Text(a.kind == .decision ? "⚡ needs decision" : a.kind == .input ? "✎ needs input" : "✓ finished")
                 .font(.system(size: 11)).foregroundStyle(.orange)
         }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        if session.launching {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text("starting \(session.agent.rawValue)…").font(.system(size: 13)).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            ScrollView {
-                Text(bodyText)
-                    .font(.system(size: 13))
-                    .foregroundStyle(bodyText == placeholderText ? .tertiary : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-        }
-    }
-
-    private var placeholderText: String { "no response yet — say something below" }
-
-    private var bodyText: String {
-        if !optionPrompt.isEmpty { return optionPrompt }                      // numbered-choice question
-        if case .pending(let a) = session.attention, !a.preview.isEmpty { return a.preview }
-        if let tail = session.liveTail, !tail.isEmpty { return "… " + tail }  // streaming now
-        if let msg = session.lastMessage, !msg.isEmpty { return msg }
-        if let tail = session.paneTail, !tail.isEmpty { return tail }         // pane fallback
-        return placeholderText
     }
 
     private var waitTime: Date {
@@ -854,81 +889,6 @@ struct SessionRenameButton: View {
                 }
             }
             .padding(12)
-        }
-    }
-}
-
-/// A read-only mirror of the awaiting session's tmux pane — shows the agent's actual terminal
-/// (question + options as rendered) instead of a reconstructed GUI. Monospaced; scrolls both
-/// ways since the pane is wider than the card.
-struct PaneMirror: View {
-    let text: String
-    /// Reports the mirror's rendered width so the poller can resize the tmux window to exactly
-    /// as many columns as fit — the mirrored TUI then fills the card edge-to-edge.
-    var onWidth: ((CGFloat) -> Void)? = nil
-
-    /// Width of one monospaced cell at the mirror's font size.
-    static let charWidth: CGFloat =
-        ("M" as NSString).size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)]).width
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView([.vertical, .horizontal]) {
-                Text(text)
-                    .font(.system(size: 11, design: .monospaced))
-                    .textSelection(.enabled)
-                    .fixedSize()               // don't wrap — scroll horizontally instead
-                    .padding(8)
-                    .id("mirror")
-            }
-            // Pin to the bottom (where the prompt/menu lives); re-pin only when content actually
-            // changes, so reading scrolled-up context isn't yanked away while the pane is static.
-            .onAppear { proxy.scrollTo("mirror", anchor: .bottom) }
-            .onChange(of: text) { _, _ in proxy.scrollTo("mirror", anchor: .bottom) }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.06)))
-        .background(GeometryReader { g in
-            Color.clear
-                .onAppear { onWidth?(g.size.width) }
-                .onChange(of: g.size.width) { _, w in onWidth?(w) }
-        })
-    }
-}
-
-/// Numbered choices scraped from a pending session's pane (permission dialog / AskUserQuestion)
-/// — pick with a number key or a click, without opening the terminal. Shared by the focused
-/// card (stack mode) and the strip above the omnibox (compact-list mode).
-struct OptionsView: View {
-    let options: [DecisionOption]
-    var onPick: (Int) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(options) { opt in
-                Button { onPick(opt.number) } label: {
-                    HStack(spacing: 8) {
-                        Text("\(opt.number)")
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(opt.highlighted ? Color.accentColor : .secondary)
-                            .frame(width: 16)
-                        Text(opt.label)
-                            .font(.system(size: 12))
-                            .foregroundStyle(opt.highlighted ? .primary : .secondary)
-                            .lineLimit(2)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 8).padding(.vertical, 5)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(opt.highlighted ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.04))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-            }
-            Text("press a number to choose")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
     }
 }
@@ -1005,7 +965,7 @@ struct CompactSessionCard: View {
         } else if let tail = session.paneTail, !tail.isEmpty {
             Text(oneLine(tail)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         } else {
-            Text("no response yet").font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1)
+            Text("waiting for input").font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1)
         }
     }
 
@@ -1065,9 +1025,7 @@ struct PaletteRow: View {
                 secondLine(s)
             }
             Spacer()
-            if selected, case .pending(let a) = s.attention, a.kind == .decision {
-                Text("y allow · n deny").font(.system(size: 10)).foregroundStyle(.orange)
-            } else if s.isAttached {
+            if s.isAttached {
                 Image(systemName: "link").font(.system(size: 10)).foregroundStyle(.secondary)
             }
             Text(RelativeTime.short(waitTime(s))).font(.system(size: 11)).foregroundStyle(urgencyColor(s))
@@ -1086,7 +1044,7 @@ struct PaletteRow: View {
             Text(oneLine(tail))
                 .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
         } else {
-            Text("no response yet")
+            Text("waiting for input")
                 .font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
         }
     }

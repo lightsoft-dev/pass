@@ -52,4 +52,27 @@ final class PaneSummaryTests: XCTestCase {
         """
         XCTAssertEqual(PaneSummary.lastContentLines(pane, max: 2), "some plain shell output\nfinal line here")
     }
+
+    func testInputBoxBordersAreChromeNotContent() {
+        // A freshly-booted Claude pane: only the input box + mode line are visible. The
+        // rounded corners (╭ ╮ ╰ ╯) must not leak into the preview as "content".
+        let pane = """
+        ╭──────────────────────────────────────╮
+        │ >                                    │
+        ╰──────────────────────────────────────╯
+          ⏵⏵ bypass permissions on (shift+tab to cycle)
+        """
+        XCTAssertNil(PaneSummary.lastContentLines(pane, max: 2))
+        XCTAssertNil(PaneSummary.lastAgentMessage(pane))
+    }
+
+    func testMixedBorderAndProsePicksProse() {
+        let pane = """
+        ⏺ Done — the tests pass.
+        ╭────────────╮
+        │ >          │
+        ╰────────────╯
+        """
+        XCTAssertEqual(PaneSummary.lastContentLines(pane, max: 1), "Done — the tests pass.")
+    }
 }

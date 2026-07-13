@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let notifications = NotificationService()
     private let hookServer = HookServer()
     private var eventRouter: EventRouter?
+    private var doubleTapHotkey: DoubleTapHotkey?
+    private var shiftTapHotkey: DoubleTapHotkey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Always called on the main thread; assert it so we can touch main-actor state.
@@ -36,9 +38,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         panelController = PanelController(appModel: appModel)
         appModel.panelController = panelController
 
-        // Global hotkey → toggle the panel.
+        // Global hotkeys → toggle the panel: ⌘⌘ double-tap (primary) + ⌥Space (rebindable).
         HotkeyService.registerSummon { [weak self] in
             self?.panelController.toggle()
+        }
+        doubleTapHotkey = DoubleTapHotkey { [weak self] in
+            self?.panelController.toggle()
+        }
+        // ⇧⇧ hops to the next session waiting for input — only while the panel has the
+        // keyboard, so shift taps in other apps never move pass's selection.
+        shiftTapHotkey = DoubleTapHotkey(modifier: .shift) { [weak self] in
+            guard let self, self.panelController.isKey else { return }
+            _ = self.appModel.keyHandler?(PanelNavEvent(key: .nextWaiting, command: false, option: false))
         }
 
         // Notifications.
@@ -98,7 +109,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         self.eventRouter = router
 
         Task { @MainActor in
-            await hookServer.start(port: PassConfig.hookPort)
+            let appModel = self.appModel
+            let share = ShareHandlers(
+                targets: { await MainActor.run { ShareAPI.targets(appModel) } },
+                send: { body in await ShareAPI.send(appModel, body: body) }
+            )
+            await hookServer.start(port: PassConfig.hookPort, share: share)
             appModel.hookServerFailed = !(await hookServer.didBind)
             for await hit in hookServer.events {
                 router.route(path: hit.path, raw: hit.raw)

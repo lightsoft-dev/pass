@@ -10,6 +10,13 @@ struct ProcResult: Sendable {
 }
 
 enum Shell {
+    /// Wrap text in single quotes for a shell command line (embedded ' becomes '\''),
+    /// so arbitrary shared text can ride along as one argv entry. Newlines stay inside
+    /// the quotes (zsh/bash continue the string across lines).
+    static func singleQuoted(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     /// Run an executable with args and return captured output. Blocking; call from an
     /// actor / background task, never the main thread.
     static func run(_ executable: String, _ args: [String], cwd: String? = nil,

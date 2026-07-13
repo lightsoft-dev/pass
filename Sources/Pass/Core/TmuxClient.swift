@@ -106,7 +106,9 @@ actor TmuxClient {
     func newSession(name: String, cwd: String, projectRoot: String, agent: AgentKind,
                     launchCommand: String?) async {
         await run([
-            "new-session", "-d", "-s", name, "-c", cwd, "-x", "220", "-y", "50",
+            // 160×42 ≈ the embedded home terminal — history written before the first attach
+            // then reflows cleanly instead of arriving as 220-col lines that wrap oddly.
+            "new-session", "-d", "-s", name, "-c", cwd, "-x", "160", "-y", "42",
             "-e", "\(PassConfig.sessionEnvVar)=\(name)",
         ])
         await run(["set-option", "-t", name, PassConfig.optProjectRoot, projectRoot])
@@ -138,12 +140,22 @@ actor TmuxClient {
         return await run(args).stdout
     }
 
-    /// Resize a session's window so its TUI renders to fit the preview. Only meaningful when
-    /// no terminal is attached (an attached client's size wins). Clamped to sane bounds.
-    func resizeWindow(_ name: String, cols: Int, rows: Int) async {
-        let c = max(40, min(400, cols))
-        let r = max(10, min(200, rows))
-        await run(["resize-window", "-t", name, "-x", String(c), "-y", String(r)])
+    /// Run before a pass client attaches. Older builds called `resize-window` for the text
+    /// mirror, which pins the window to `window-size manual` — an attaching client then gets a
+    /// clipped, letterboxed view (Claude's bottom status line cut off) instead of the window
+    /// reflowing to the client's size. Revert to following the client, and hide tmux's own
+    /// status bar so the terminal reads like a plain one (Claude's status line already carries
+    /// branch/dir/mode).
+    func prepareForAttach(_ name: String) async {
+        await run(["set-option", "-w", "-t", name, "window-size", "latest"])
+        await run(["set-option", "-t", name, "status", "off"])
+        // Scrollback lives in tmux, not the embedded emulator (tmux redraws in place, so the
+        // local buffer has nothing to scroll). Mouse mode turns wheel/trackpad scrolling into
+        // tmux copy-mode scrolling — SwiftTerm forwards the events via the xterm protocol.
+        await run(["set-option", "-t", name, "mouse", "on"])
+        // Mouse-drag copy: the default MouseDragEnd1Pane binding is copy-pipe-and-cancel,
+        // which pipes the selection to `copy-command` — point it at the macOS clipboard.
+        await run(["set-option", "-s", "copy-command", "pbcopy"])
     }
 
     /// Query a pane fact via display-message.

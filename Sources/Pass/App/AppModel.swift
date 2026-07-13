@@ -31,6 +31,10 @@ final class AppModel {
     /// only fires once for a cached panel).
     var focusToken: Int = 0
 
+    /// Whether the panel is on screen. The home view attaches a live terminal to the selected
+    /// session only while visible — hiding the panel detaches it (the session keeps running).
+    var panelVisible: Bool = false
+
     /// Bumped by ⌘[ to step back from the session terminal to the inbox.
     var backToken: Int = 0
     func requestBack() { backToken &+= 1 }
@@ -154,32 +158,6 @@ final class AppModel {
         let status = ClaudeHooksInstaller.install()
         needsHookInstall = !ClaudeHooksInstaller.isInstalled()
         Log.hooks.info("hook install requested -> \(String(describing: status), privacy: .public)")
-    }
-
-    /// Answer a pending permission decision for a session.
-    func decide(_ name: String, _ decision: ReplyInjector.Decision) {
-        guard let s = sessions?.session(named: name) else { return }
-        Task { _ = await ReplyInjector.shared.sendDecision(name, agent: s.agent, decision) }
-        sessions?.acknowledge(name)
-    }
-
-    /// Forward a navigation key (Up/Down/Enter) to a session's agent — lets you drive a decision
-    /// menu shown in the mirror with the arrow keys, not just number picks.
-    func sendMenuKey(_ name: String, _ key: String) {
-        Task {
-            let state = await TmuxClient.shared.paneState(name)
-            if state.inMode { await TmuxClient.shared.cancelMode(name) } // leave copy-mode first
-            await TmuxClient.shared.sendKeys(name, [key])
-        }
-        sessions?.acknowledge(name)
-    }
-
-    /// Pick a numbered option (permission dialog / AskUserQuestion) from the home card.
-    func pickOption(_ name: String, _ number: Int) {
-        guard let s = sessions?.session(named: name) else { return }
-        Task { _ = await ReplyInjector.shared.pick(name, agent: s.agent, option: number) }
-        sessions?.acknowledge(name)
-        sessions?.applyAttention(name: name, .working) // optimistic; hook corrects
     }
 
     /// Send a text reply into a session from the home input (without opening the terminal).
