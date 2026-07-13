@@ -17,7 +17,13 @@ struct CommandView: View {
     @FocusState private var omniboxFocused: Bool
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
 
-    enum Route: Equatable { case list, detail(String) }
+    enum Route: Equatable {
+        case list
+        case features
+        case feature(projectRoot: String, id: String)
+        case featureSession(name: String, projectRoot: String, id: String)
+        case detail(String)
+    }
 
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
@@ -96,7 +102,14 @@ struct CommandView: View {
                 focusSoon()
             }
             .onChange(of: appModel.backToken) { _, _ in
-                if route != .list { route = .list; focusSoon() }
+                switch route {
+                case .feature(let root, let id), .featureSession(_, let root, let id):
+                    route = .feature(projectRoot: root, id: id)
+                case .features, .detail:
+                    route = .list; focusSoon()
+                case .list:
+                    break
+                }
             }
             .onChange(of: appModel.forceOpenSession) { _, s in
                 if let s { route = .detail(s) }
@@ -190,6 +203,36 @@ struct CommandView: View {
         switch route {
         case .list:
             listMode
+        case .features:
+            FeatureLibraryView(
+                onBack: { route = .list; focusSoon() },
+                onOpen: { root, id in route = .feature(projectRoot: root, id: id) }
+            )
+        case .feature(let projectRoot, let id):
+            if let document = appModel.features?.document(projectRoot: projectRoot, id: id) {
+                FeatureDetailView(
+                    projectRoot: projectRoot,
+                    document: document,
+                    onBack: { route = .features },
+                    onOpenSession: {
+                        route = .featureSession(name: $0, projectRoot: projectRoot, id: id)
+                    }
+                )
+            } else {
+                FeatureLibraryView(
+                    onBack: { route = .list; focusSoon() },
+                    onOpen: { root, id in route = .feature(projectRoot: root, id: id) }
+                )
+                .onAppear { appModel.features?.reload(projectRoot: projectRoot) }
+            }
+        case .featureSession(let name, let projectRoot, let id):
+            if let session = sessions.first(where: { $0.name == name }) {
+                SessionDetailView(session: session) {
+                    route = .feature(projectRoot: projectRoot, id: id)
+                }
+            } else {
+                Color.clear.onAppear { route = .feature(projectRoot: projectRoot, id: id) }
+            }
         case .detail(let name):
             if let session = sessions.first(where: { $0.name == name }) {
                 SessionDetailView(session: session) { route = .list; focusSoon() }
@@ -205,6 +248,22 @@ struct CommandView: View {
     private var listMode: some View {
         VStack(spacing: 0) {
             if appModel.needsHookInstall { hookBanner }
+            HStack {
+                Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(.secondary)
+                Text("Sessions").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button {
+                    query = ""
+                    route = .features
+                } label: {
+                    Label("Features", systemImage: "doc.text.magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Executable software feature documents")
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            Divider()
             listBody
             // In stack mode the input lives inside the focused card (moves with focus/click,
             // since selection often happens by mouse). Otherwise the input sits at the bottom.

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Observation
 
@@ -43,9 +44,14 @@ final class AppModel {
     /// Set to force the panel to open a specific session's terminal (used for testing).
     var forceOpenSession: String?
 
+    /// Local runtime sessions are intentionally not persisted into the portable feature file.
+    /// The implementation agent session is a collaboration hint; a dev-server PID/session is not.
+    private(set) var featurePreviewSessions: [String: String] = [:]
+
     // Stores (composition root). Set in configure() on the main actor.
     private(set) var projects: ProjectStore!
     private(set) var sessions: SessionStore!
+    private(set) var features: FeatureStore!
 
     weak var panelController: PanelController?
 
@@ -58,6 +64,7 @@ final class AppModel {
     func configure() {
         projects = ProjectStore()
         sessions = SessionStore(projects: projects)
+        features = FeatureStore()
         sessions.start()
         isReady = true
     }
@@ -214,5 +221,167 @@ final class AppModel {
         default:
             break
         }
+    }
+
+    // MARK: Executable feature documents
+
+    enum FeatureAgentAction {
+        case implement
+        case verify
+        case rework(feedback: String)
+    }
+
+    enum FeatureActionResult: Equatable {
+        case success(String)
+        case failure(String)
+    }
+
+    func previewSession(projectRoot: String, featureID: String) -> Session? {
+        guard let name = featurePreviewSessions[featureRuntimeKey(projectRoot, featureID)] else { return nil }
+        return sessions?.session(named: name)
+    }
+
+    /// Start the document's development command only after the user explicitly clicks Run.
+    /// Working directories are resolved by FeatureStore and cannot escape the project root.
+    func startFeaturePreview(projectRoot: String, featureID: String) async -> FeatureActionResult {
+        features.reload(projectRoot: projectRoot)
+        guard let document = features.document(projectRoot: projectRoot, id: featureID) else {
+            return .failure("Feature document not found.")
+        }
+        let command = document.development.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else { return .failure("Add a development command first.") }
+        guard let cwd = features.developmentWorkingDirectory(for: document, projectRoot: projectRoot) else {
+            return .failure("Working directory must stay inside the project.")
+        }
+
+        let key = featureRuntimeKey(projectRoot, featureID)
+        if let existing = featurePreviewSessions[key], sessions.session(named: existing) != nil {
+            return .success(existing)
+        }
+        let name = await sessions.createCommandSession(projectDir: cwd, featureID: featureID, command: command)
+        featurePreviewSessions[key] = name
+        sessions.setAlias(name, "Preview · \(document.title)")
+        return .success(name)
+    }
+
+    func stopFeaturePreview(projectRoot: String, featureID: String) {
+        let key = featureRuntimeKey(projectRoot, featureID)
+        guard let name = featurePreviewSessions.removeValue(forKey: key) else { return }
+        killSession(name)
+    }
+
+    func openFeatureURL(_ rawURL: String) -> Bool {
+        guard let url = URL(string: rawURL),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme) else { return false }
+        return NSWorkspace.shared.open(url)
+    }
+
+    func revealFeatureFile(projectRoot: String, featureID: String) {
+        let url = features.fileURL(projectRoot: projectRoot, id: featureID)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    /// Give an agent the JSON document as its contract. The same path is used for implementation,
+    /// verification and human-requested rework, and the agent must write its evidence back into
+    /// the document so status is visible without scraping prose from a terminal.
+    func runFeatureAgent(
+        projectRoot: String,
+        featureID: String,
+        action: FeatureAgentAction
+    ) async -> FeatureActionResult {
+        features.reload(projectRoot: projectRoot)
+        guard var document = features.document(projectRoot: projectRoot, id: featureID) else {
+            return .failure("Feature document not found.")
+        }
+
+        let feedback: String?
+        switch action {
+        case .implement:
+            document.status = .implementing
+            feedback = nil
+        case .verify:
+            document.status = .verifying
+            feedback = nil
+        case .rework(let text):
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return .failure("Describe what behaved incorrectly.") }
+            document.status = .implementing
+            document.reviews.append(FeatureReview(feedback: trimmed))
+            feedback = trimmed
+        }
+
+        var agent = document.implementation.preferredAgent
+        if !AgentKind.launchable.contains(agent) { agent = .claude }
+        let sessionName: String
+        if let existing = document.implementation.agentSession,
+           let live = sessions.session(named: existing), live.agent != .shell {
+            sessionName = existing
+            agent = live.agent
+        } else {
+            sessionName = await sessions.createSession(projectDir: projectRoot, agent: agent)
+        }
+        document.implementation.agentSession = sessionName
+
+        do {
+            try features.save(document, projectRoot: projectRoot)
+        } catch {
+            return .failure("Could not update feature status: \(error.localizedDescription)")
+        }
+
+        let prompt = featureAgentPrompt(document: document, projectRoot: projectRoot,
+                                        action: action, feedback: feedback)
+        // A freshly-created tmux pane briefly reports the login shell while the agent starts.
+        // Retry only that safe refusal; any other delivery result is final.
+        for _ in 0..<20 {
+            let result = await ReplyInjector.shared.sendText(sessionName, agent: agent, text: prompt)
+            switch result {
+            case .delivered:
+                sessions.applyAttention(name: sessionName, .working)
+                return .success(sessionName)
+            case .refusedShell:
+                try? await Task.sleep(for: .milliseconds(250))
+            case .error(let message):
+                return .failure(message)
+            }
+        }
+        return .failure("The agent did not become ready. Open the session and check its launch command.")
+    }
+
+    private func featureRuntimeKey(_ projectRoot: String, _ featureID: String) -> String {
+        projectRoot + "\u{1f}" + featureID
+    }
+
+    private func featureAgentPrompt(document: FeatureDocument, projectRoot: String,
+                                    action: FeatureAgentAction, feedback: String?) -> String {
+        let relativePath = ".pass/features/\(document.id).json"
+        let intent: String
+        switch action {
+        case .implement:
+            intent = "Implement this feature completely."
+        case .verify:
+            intent = "Inspect the current implementation and verify every acceptance criterion. Fix only issues required by the document."
+        case .rework:
+            intent = "The human review found incorrect behavior. Reproduce it and revise the implementation."
+        }
+
+        var lines = [
+            "Pass feature task: \(intent)",
+            "Project root: \(projectRoot)",
+            "Contract file: \(relativePath)",
+            "",
+            "Read the JSON contract before changing code. Work only inside this project and preserve the document id/schema.",
+            "Implement the requirements, then verify every acceptance criterion and run the development.testCommand when present.",
+            "Before finishing, update the same JSON file atomically:",
+            "- set status to needsReview when the work is ready for a human, or blocked if you cannot proceed",
+            "- write a concise implementation.summary",
+            "- list every changed project-relative path in implementation.files",
+            "- replace implementation.checks with one passed/failed/pending evidence record per criterion or command",
+            "- never set status to verified; only the human reviewer may do that",
+        ]
+        if let feedback {
+            lines += ["", "Human review feedback (treat as required reproduction evidence):", feedback]
+        }
+        return lines.joined(separator: "\n")
     }
 }

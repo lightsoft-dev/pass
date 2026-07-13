@@ -30,6 +30,11 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
   attachable from any terminal. Worktrees group under their main repo but show a `⧉` badge.
 - **Projects** — register a single repo, a parent folder (scanned for repos), or several at once
   (menu / Settings); live sessions' projects are remembered automatically.
+- **Executable feature documents** — keep software feature contracts in
+  `<project>/.pass/features/*.json`, launch their local development server, follow a human test
+  guide, ask a local agent to implement or verify the contract, and send failed human-review
+  feedback back for rework. Agent summaries, changed files, checks, review history, and lifecycle
+  status stay in JSON so they can be committed or synced later.
 - **Notifications** for permission / input / finished, with the menu-bar badge as a reliable
   always-on fallback.
 - **Settings** (⌘,): rebind the hotkey, launch-at-login, floating toggle, project list, install
@@ -70,6 +75,21 @@ Claude Code (in tmux)  ──hooks(HTTP)──►  HookServer (127.0.0.1:49817)
   `/hook/<agent>`, `@pass_agent`, and per-agent glyphs are already wired for Codex/pi in M5).
 - **tmux + git are the database** — pass persists only a small project MRU list; everything else
   (cwd, branch, worktree, agent, activity) is derived live.
+- **Feature JSON is the contract** — the app and local agents read and update the same repository
+  files. A generated `.pass/feature.schema.json` supports validation; project-relative paths keep
+  documents portable, and local development commands run only after an explicit click.
+
+## Executable feature workflow
+
+1. Open **pass › Features**, choose a project, and create or edit a feature.
+2. Add requirements, observable acceptance criteria, a development command/URL, and a short human
+   test guide. The feature is saved as a reviewable JSON file in the project.
+3. Choose **Implement** or **Verify**. pass starts (or reuses) a local agent session and gives the
+   JSON file as its contract. The agent writes its summary, changed paths, check evidence, and
+   `needsReview`/`blocked` status back into that file.
+4. Choose **Start server**, open the local URL, and follow the guide. If behavior is wrong, enter
+   feedback under **Human review** and request changes; pass records it and sends it to the agent.
+5. Only a person can choose **Mark verified**.
 
 ## Design docs & findings
 
