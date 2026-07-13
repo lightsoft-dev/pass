@@ -77,6 +77,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { appModel.forceOpenSession = s }
             }
         }
+        // PASS_DEBUG_SPECS=<project root> — open the panel straight onto the specs screen
+        // (SpecsView preselects the given root). Headless verification of the spec document UI.
+        if let root = ProcessInfo.processInfo.environment["PASS_DEBUG_SPECS"], !root.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [appModel] in
+                appModel.showSpecs()
+            }
+        }
 
         appModel.isReady = true
         Log.app.info("pass launched (accessory, hook port \(PassConfig.hookPort))")

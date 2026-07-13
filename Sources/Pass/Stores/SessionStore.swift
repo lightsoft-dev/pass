@@ -235,6 +235,26 @@ final class SessionStore {
         return name
     }
 
+    /// Start a project tool (normally the spec document's dev server) in a visible, durable
+    /// tmux session. Unlike agent sessions, the document-provided command is launched directly
+    /// and the session is tagged `.shell`, so pass never mistakes it for an agent that accepts
+    /// replies (ReplyInjector refuses shells).
+    @discardableResult
+    func createCommandSession(projectDir: String, slug: String, command: String) async -> String {
+        let git = await resolveGit(projectDir)
+        let projectRoot = git?.projectRoot ?? projectDir
+        let repo = git?.repoName ?? URL(fileURLWithPath: projectRoot).lastPathComponent
+        let base = "\(PassConfig.sessionPrefix)\(Slug.make(repo))--\(Slug.make(slug))"
+        let name = await uniqueName(base)
+
+        upsertLaunching(name: name, projectRoot: projectRoot, cwd: projectDir, agent: .shell, git: git)
+        await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
+                              agent: .shell, launchCommand: command)
+        projects.remember(rootPath: projectRoot)
+        await reconcile()
+        return name
+    }
+
     /// Insert or refresh an optimistic launching placeholder in the live list.
     private func upsertLaunching(name: String, projectRoot: String, cwd: String, agent: AgentKind, git: GitIdentity?) {
         var s = Session(name: name, projectRoot: projectRoot, cwd: cwd, agent: agent, git: git,

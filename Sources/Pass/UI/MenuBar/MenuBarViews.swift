@@ -30,6 +30,7 @@ struct MenuBarContent: View {
                 Button("\(agent.glyph) \(agent.rawValue)…") { newSession(agent: agent) }
             }
         }
+        Button("Feature specs…") { appModel.showSpecs() }
         Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
         Toggle("Float above windows", isOn: Binding(
             get: { appModel.panelFloating },

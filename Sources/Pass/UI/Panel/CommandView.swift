@@ -20,7 +20,12 @@ struct CommandView: View {
     @FocusState private var omniboxFocused: Bool
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
 
-    enum Route: Equatable { case list, detail(String) }
+    enum Route: Equatable {
+        case list
+        case detail(String)          // a session's full-height terminal (back → list)
+        case specs                   // the project spec documents screen
+        case specSession(String)     // a session opened FROM specs (back → specs)
+    }
 
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
@@ -103,13 +108,22 @@ struct CommandView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.08)))
             .onChange(of: appModel.focusToken) { _, _ in
-                route = .list
                 query = ""
                 showQuickCommand = false // fresh summon lands in the terminal, not the bar
-                focusSoon()
+                if appModel.pendingOpenSpecs {
+                    appModel.pendingOpenSpecs = false // menu bar asked for the specs screen
+                    route = .specs
+                } else {
+                    route = .list
+                    focusSoon()
+                }
             }
             .onChange(of: appModel.backToken) { _, _ in
-                if route != .list { route = .list; focusSoon() }
+                switch route {
+                case .specSession: route = .specs // ⌘[ steps back one level, not to home
+                case .specs, .detail: route = .list; focusSoon()
+                case .list: break
+                }
             }
             .onChange(of: appModel.forceOpenSession) { _, s in
                 if let s { route = .detail(s) }
@@ -223,6 +237,20 @@ struct CommandView: View {
             } else {
                 // session vanished while open
                 listMode.onAppear { route = .list }
+            }
+        case .specs:
+            SpecsView(
+                onBack: { route = .list; focusSoon() },
+                onOpenSession: { route = .specSession($0) }
+            )
+        case .specSession(let name):
+            if let session = sessions.first(where: { $0.name == name }) {
+                SessionDetailView(session: session) { route = .specs }
+            } else {
+                SpecsView(
+                    onBack: { route = .list; focusSoon() },
+                    onOpenSession: { route = .specSession($0) }
+                ).onAppear { route = .specs }
             }
         }
     }
