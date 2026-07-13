@@ -31,6 +31,9 @@ struct CommandView: View {
         case detail(String)                  // a session's full-height terminal (back → list)
         case specs(String?)                  // spec documents, optionally pinned to a project
         case specSession(String, String)     // session opened FROM specs (name, projectRoot)
+        case features
+        case feature(projectRoot: String, id: String)
+        case featureSession(name: String, projectRoot: String, id: String)
     }
 
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
@@ -151,8 +154,12 @@ struct CommandView: View {
             .onChange(of: appModel.backToken) { _, _ in
                 switch route {
                 case .specSession(_, let root): route = .specs(root) // ⌘[ steps back one level
-                case .specs, .detail: route = .list; focusSoon()
-                case .list: break
+                case .feature(let root, let id), .featureSession(_, let root, let id):
+                    route = .feature(projectRoot: root, id: id)
+                case .specs, .features, .detail:
+                    route = .list; focusSoon()
+                case .list:
+                    break
                 }
             }
             .onChange(of: appModel.forceOpenSession) { _, s in
@@ -327,9 +334,10 @@ struct CommandView: View {
     /// The session whose workspace (terminal │ browser) is on screen — browser keys target it.
     private var workspaceSessionName: String? {
         switch route {
-        case .detail(let name), .specSession(let name, _): return name
+        case .detail(let name), .specSession(let name, _), .featureSession(let name, _, _):
+            return name
         case .list: return selectedSession?.name
-        case .specs: return nil
+        case .specs, .features, .feature: return nil
         }
     }
 
@@ -337,11 +345,11 @@ struct CommandView: View {
     /// actually on screen; the home targets its selected card; specs have no session context.
     private var extensionContextSession: Session? {
         switch route {
-        case .detail(let name), .specSession(let name, _):
+        case .detail(let name), .specSession(let name, _), .featureSession(let name, _, _):
             return sessions.first { $0.name == name }
         case .list:
             return selectedSession
-        case .specs:
+        case .specs, .features, .feature:
             return nil
         }
     }
@@ -351,6 +359,36 @@ struct CommandView: View {
         switch route {
         case .list:
             listMode
+        case .features:
+            FeatureLibraryView(
+                onBack: { route = .list; focusSoon() },
+                onOpen: { root, id in route = .feature(projectRoot: root, id: id) }
+            )
+        case .feature(let projectRoot, let id):
+            if let document = appModel.features?.document(projectRoot: projectRoot, id: id) {
+                FeatureDetailView(
+                    projectRoot: projectRoot,
+                    document: document,
+                    onBack: { route = .features },
+                    onOpenSession: {
+                        route = .featureSession(name: $0, projectRoot: projectRoot, id: id)
+                    }
+                )
+            } else {
+                FeatureLibraryView(
+                    onBack: { route = .list; focusSoon() },
+                    onOpen: { root, id in route = .feature(projectRoot: root, id: id) }
+                )
+                .onAppear { appModel.features?.reload(projectRoot: projectRoot) }
+            }
+        case .featureSession(let name, let projectRoot, let id):
+            if let session = sessions.first(where: { $0.name == name }) {
+                SessionDetailView(session: session) {
+                    route = .feature(projectRoot: projectRoot, id: id)
+                }
+            } else {
+                Color.clear.onAppear { route = .feature(projectRoot: projectRoot, id: id) }
+            }
         case .detail(let name):
             if let session = sessions.first(where: { $0.name == name }) {
                 SessionDetailView(session: session) { route = .list; focusSoon() }
@@ -379,6 +417,22 @@ struct CommandView: View {
         GeometryReader { geo in
             VStack(spacing: 0) {
                 if appModel.needsHookInstall { hookBanner }
+                HStack {
+                    Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(.secondary)
+                    Text("Sessions").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Button {
+                        query = ""
+                        route = .features
+                    } label: {
+                        Label("Features", systemImage: "doc.text.magnifyingglass")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Executable software feature documents")
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                Divider()
                 if homeMode == .sidebar {
                     // Rows on the LEFT, the live terminal filling the right side.
                     HStack(spacing: 0) {
