@@ -18,6 +18,10 @@ enum SessionStatePersistence {
         // User-assigned display names per session (display-only aliases). Optional for the same
         // backward-compat reason.
         var aliases: [String: String]?
+        // Each session's embedded-browser URL (BrowserStore) — restored on relaunch so the
+        // split comes back showing the same page. Optional for backward compat. Owned by
+        // BrowserStore; SessionStore load-modify-saves so it never clobbers this field.
+        var browserURLs: [String: String]?
     }
 
     private static var fileURL: URL {

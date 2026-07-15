@@ -21,6 +21,7 @@ struct SessionDetailView: View {
         .task(id: session.name) {
             let controller = TerminalController(session: session.name)
             terminal = controller
+            appModel.focusedSessionName = session.name // this workspace is on screen
             await controller.start()
             appModel.reconcileOnOpen(session)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { controller.focus() }
@@ -66,6 +67,7 @@ struct SessionDetailView: View {
         HStack(spacing: 12) {
             Text("keys go to the session").foregroundStyle(.tertiary)
             Spacer()
+            Text("⌘B  browser").foregroundStyle(.tertiary)
             Text("⌘[ or ⌘W  back to list").foregroundStyle(.secondary)
             Text("⌘⏎  open in Ghostty").foregroundStyle(.tertiary)
         }
@@ -76,8 +78,11 @@ struct SessionDetailView: View {
     @ViewBuilder
     private var terminalBody: some View {
         if let terminal {
-            TerminalPaneView(controller: terminal)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            SessionWorkspaceView(session: session) {
+                TerminalPaneView(controller: terminal)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }

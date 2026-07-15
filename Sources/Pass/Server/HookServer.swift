@@ -14,6 +14,15 @@ struct ShareHandlers: Sendable {
     var send: @Sendable (Data) async -> Data
 }
 
+/// Handlers backing the passcli control endpoints (wired by AppDelegate to CLIAPI).
+struct CLIHandlers: Sendable {
+    var open: @Sendable (Data) async -> Data
+    var close: @Sendable (Data) async -> Data
+    var tabs: @Sendable () async -> Data
+    var screenshot: @Sendable (Data) async -> Data
+    var read: @Sendable (Data) async -> Data
+}
+
 /// Loopback HTTP server that receives agent hook POSTs. Binds 127.0.0.1 only (no firewall
 /// prompt, no LAN exposure). Publishes hits on `events`; the main actor consumes and routes.
 /// Also serves the OS share extension (`/share/*`) — same port, same loopback-only rule.
@@ -27,7 +36,7 @@ actor HookServer {
         (events, continuation) = AsyncStream.makeStream(of: HookHit.self)
     }
 
-    func start(port: UInt16, share: ShareHandlers? = nil) async {
+    func start(port: UInt16, share: ShareHandlers? = nil, cli: CLIHandlers? = nil) async {
         guard let address = try? sockaddr_in.inet(ip4: "127.0.0.1", port: port) else {
             Log.hooks.error("could not build loopback address"); return
         }
@@ -54,6 +63,29 @@ actor HookServer {
             await server.appendRoute("POST /share/send") { request in
                 let body = (try? await request.bodyData) ?? Data()
                 return HTTPResponse(statusCode: .ok, headers: json, body: await share.send(body))
+            }
+        }
+        // passcli control plane — request/response (unlike /hook/*, results ride in the body).
+        if let cli {
+            let json = [HTTPHeader("Content-Type"): "application/json"]
+            await server.appendRoute("POST /cli/browser/open") { request in
+                let body = (try? await request.bodyData) ?? Data()
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.open(body))
+            }
+            await server.appendRoute("POST /cli/browser/close") { request in
+                let body = (try? await request.bodyData) ?? Data()
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.close(body))
+            }
+            await server.appendRoute("GET /cli/browser/tabs") { _ in
+                HTTPResponse(statusCode: .ok, headers: json, body: await cli.tabs())
+            }
+            await server.appendRoute("POST /cli/browser/screenshot") { request in
+                let body = (try? await request.bodyData) ?? Data()
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.screenshot(body))
+            }
+            await server.appendRoute("POST /cli/browser/read") { request in
+                let body = (try? await request.bodyData) ?? Data()
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.read(body))
             }
         }
 

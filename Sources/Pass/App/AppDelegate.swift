@@ -65,6 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             appModel.installHooks()
         }
 
+        // passcli: keep the stable symlink (~/.pass/bin/passcli) pointing at THIS bundle's
+        // helper — sessions and the advertise hook reference the symlink, so the app can move
+        // (or run from a build dir) without breaking them.
+        CLIInstaller.refreshSymlink()
+
         // Hook server + event routing.
         startHookPipeline()
 
@@ -82,6 +87,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if let root = ProcessInfo.processInfo.environment["PASS_DEBUG_SPECS"], !root.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [appModel] in
                 appModel.showSpecs()
+            }
+        }
+        // PASS_DEBUG_BROWSER=<session>|<url> — drive the CLI open path on launch (headless
+        // verification of the workspace split without needing passcli).
+        if let spec = ProcessInfo.processInfo.environment["PASS_DEBUG_BROWSER"],
+           let bar = spec.firstIndex(of: "|") {
+            let session = String(spec[..<bar])
+            let raw = String(spec[spec.index(after: bar)...])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [appModel] in
+                guard case .success(let url) = URLNormalizer.normalize(raw) else { return }
+                appModel.openBrowserFromCLI(session: session, url: url, background: false)
             }
         }
 
@@ -121,7 +137,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 targets: { await MainActor.run { ShareAPI.targets(appModel) } },
                 send: { body in await ShareAPI.send(appModel, body: body) }
             )
-            await hookServer.start(port: PassConfig.hookPort, share: share)
+            let cli = CLIHandlers(
+                open: { body in await CLIAPI.open(appModel, body: body) },
+                close: { body in await MainActor.run { CLIAPI.close(appModel, body: body) } },
+                tabs: { await MainActor.run { CLIAPI.tabs(appModel) } },
+                screenshot: { body in await CLIAPI.screenshot(appModel, body: body) },
+                read: { body in await CLIAPI.read(appModel, body: body) }
+            )
+            await hookServer.start(port: PassConfig.hookPort, share: share, cli: cli)
             appModel.hookServerFailed = !(await hookServer.didBind)
             for await hit in hookServer.events {
                 router.route(path: hit.path, raw: hit.raw)

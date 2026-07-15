@@ -17,6 +17,9 @@ packages:
     # The default renderer is plenty for our attached-tmux terminal.
     url: https://github.com/migueldeicaza/SwiftTerm
     exactVersion: "1.11.2"
+  ArgumentParser:
+    url: https://github.com/apple/swift-argument-parser
+    from: 1.3.0
 
 targets:
   Pass:
@@ -35,6 +38,11 @@ targets:
         product: FlyingSocks
       - package: SwiftTerm
       - target: PassShare
+      # Build ordering only — passcli is copied into Contents/MacOS by the script below
+      # (a tool target can't be linked or framework-embedded).
+      - target: PassCli
+        link: false
+        embed: false
     info:
       path: Config/Info.plist
       properties:
@@ -60,6 +68,17 @@ targets:
         ENABLE_APP_SANDBOX: "NO"
         ENABLE_HARDENED_RUNTIME: "NO"
         SWIFT_VERSION: "5.0"
+    # passcli rides inside the app at Contents/MacOS/passcli (already signed by its own
+    # target; script phases run before the app's code-sign step, so the seal covers it).
+    # S6.3 validates this embed+signing combo on-device.
+    postBuildScripts:
+      - name: Embed passcli
+        script: |
+          cp -f "${BUILT_PRODUCTS_DIR}/passcli" "${TARGET_BUILD_DIR}/${EXECUTABLE_FOLDER_PATH}/passcli"
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/passcli
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/passcli
 
   # OS share sheet target: share text/URL/images from any app → "Pass" → add a note, pick a
   # session (or a project for a new one) → the payload lands in that agent as a message.
@@ -102,6 +121,28 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass.share
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: H66C2M66DC
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        ENABLE_HARDENED_RUNTIME: "NO"
+        SWIFT_VERSION: "5.0"
+        SKIP_INSTALL: "YES"
+
+  # Agent-facing CLI (BROWSER.md Part B). Built as a plain tool, embedded into Pass.app by
+  # the app target's "Embed passcli" script; ~/.pass/bin/passcli symlinks to it at runtime.
+  PassCli:
+    type: tool
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - Sources/PassCli
+    dependencies:
+      - package: ArgumentParser
+    settings:
+      base:
+        PRODUCT_NAME: passcli
+        PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass.cli
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: H66C2M66DC

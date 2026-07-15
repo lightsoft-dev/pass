@@ -162,6 +162,20 @@ struct Session: Identifiable, Hashable, Sendable {
     }
 }
 
+/// A page open in pass's embedded browser. Tabs are DATA (cheap, several may exist);
+/// the heavy WKWebViews live in a small LRU pool keyed by tab id (WebViewPool) — same
+/// principle as TerminalPool. v1: every tab belongs to a session; one active tab each.
+struct BrowserTab: Identifiable, Hashable, Sendable {
+    let id: UUID
+    var sessionName: String     // owning session (v1: required)
+    var url: URL                // last commanded/navigated URL (mirrored by the pool)
+    var title: String?          // WKWebView.title mirror
+    var lastVisited: Date
+    /// Transient navigation state mirrored from the webview (drives the ◀ ▶ buttons).
+    var canGoBack: Bool = false
+    var canGoForward: Bool = false
+}
+
 /// A registered project (MRU list persisted to projects.json). Identity = root path;
 /// name is just the directory name.
 struct Project: Identifiable, Codable, Hashable, Sendable {

@@ -8,6 +8,8 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var appModel
     @State private var launchAtLogin = LoginItemService.isEnabled
     @State private var floating = true
+    @State private var cliLinked = false
+    @State private var advertiseOn = false
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
 
@@ -88,6 +90,35 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section("Embedded browser · passcli") {
+                LabeledContent("Agent CLI") {
+                    Text(PassConfig.cliSymlinkPath)
+                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.head)
+                }
+                LabeledContent("Status") {
+                    Text(cliLinked ? "Linked" : "Not linked")
+                        .foregroundStyle(cliLinked ? .green : .orange)
+                }
+                if !cliLinked {
+                    Button("Link CLI") {
+                        CLIInstaller.refreshSymlink()
+                        cliLinked = CLIInstaller.isLinked
+                    }
+                }
+                Toggle("Tell agents about passcli (SessionStart hook)", isOn: $advertiseOn)
+                    .onChange(of: advertiseOn) { _, on in
+                        if on { ClaudeHooksInstaller.installAdvertise() }
+                        else { ClaudeHooksInstaller.removeAdvertise() }
+                        advertiseOn = ClaudeHooksInstaller.isAdvertiseInstalled()
+                    }
+                Text("Agents open pages beside their terminal (passcli browser open) and can read them back (screenshot/read). Note: whatever the embedded browser shows is readable by that session's agent.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Clear browser website data") {
+                    Task { await WebViewPool.clearWebsiteData() }
+                }
+            }
+
             Section("Notifications") {
                 LabeledContent("Status") {
                     Text(appModel.notificationsBlocked ? "Blocked" : "On")
@@ -110,6 +141,8 @@ struct SettingsView: View {
         .frame(width: 420, height: 520)
         .onAppear {
             floating = appModel.panelFloating
+            cliLinked = CLIInstaller.isLinked
+            advertiseOn = ClaudeHooksInstaller.isAdvertiseInstalled()
             // The summon panel floats above normal windows, so it would sit on top of Settings.
             // Hide it and pull the app forward so Settings is actually visible/focused.
             appModel.hidePanel()

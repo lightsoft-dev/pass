@@ -110,6 +110,9 @@ actor TmuxClient {
             // then reflows cleanly instead of arriving as 220-col lines that wrap oddly.
             "new-session", "-d", "-s", name, "-c", cwd, "-x", "160", "-y", "42",
             "-e", "\(PassConfig.sessionEnvVar)=\(name)",
+            // Stable passcli path — agents call "$PASS_CLI" (rc files rebuild PATH but never
+            // unset foreign env vars, so this survives where a PATH prepend wouldn't).
+            "-e", "\(PassConfig.cliEnvVar)=\(PassConfig.cliSymlinkPath)",
         ])
         await run(["set-option", "-t", name, PassConfig.optProjectRoot, projectRoot])
         await run(["set-option", "-t", name, PassConfig.optAgent, agent.rawValue])
@@ -124,11 +127,14 @@ actor TmuxClient {
         Log.tmux.info("killed session \(name, privacy: .public)")
     }
 
-    /// Write pass metadata onto an adopted session (created outside pass).
+    /// Write pass metadata onto an adopted session (created outside pass). set-environment
+    /// only reaches NEW processes — passcli's tmux display-message fallback covers agents
+    /// that started before adoption (BROWSER.md §5.3).
     func adoptTag(name: String, projectRoot: String, agent: AgentKind) async {
         await run(["set-option", "-t", name, PassConfig.optProjectRoot, projectRoot])
         await run(["set-option", "-t", name, PassConfig.optAgent, agent.rawValue])
         await run(["set-environment", "-t", name, PassConfig.sessionEnvVar, name])
+        await run(["set-environment", "-t", name, PassConfig.cliEnvVar, PassConfig.cliSymlinkPath])
     }
 
     // MARK: Preview & injection primitives (used by ReplyInjector in M2)

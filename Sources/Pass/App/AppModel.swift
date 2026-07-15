@@ -54,10 +54,20 @@ final class AppModel {
     /// a local tmux session name has no business inside the portable, committable document.
     private(set) var specPreviewSessions: [String: String] = [:]
 
+    /// Bumped to move keyboard focus into the visible browser's address field (⌘L).
+    var browserFocusToken: Int = 0
+
+    /// The session whose workspace (terminal │ browser) is on screen right now — the home
+    /// selection or the open detail view. A CLI browser open targeting it may show
+    /// immediately; any other target only gets the 🌐 badge (never steal the selection).
+    var focusedSessionName: String?
+
     // Stores (composition root). Set in configure() on the main actor.
     private(set) var projects: ProjectStore!
     private(set) var sessions: SessionStore!
     private(set) var specs: SpecStore!
+    private(set) var browser: BrowserStore!
+    private(set) var webViews: WebViewPool!
 
     weak var panelController: PanelController?
 
@@ -71,6 +81,14 @@ final class AppModel {
         projects = ProjectStore()
         sessions = SessionStore(projects: projects)
         specs = SpecStore()
+        browser = BrowserStore()
+        webViews = WebViewPool()
+        webViews.store = browser
+        // Tabs are data (BrowserStore); webviews are the pool — keep them in lockstep.
+        browser.onTabOpened = { [weak self] tab in self?.webViews?.load(tab) }
+        browser.onTabClosed = { [weak self] id in self?.webViews?.drop(id) }
+        // Session died → its tab/webview go with it (same lifecycle as the terminal pool).
+        sessions.onReconciled = { [weak self] live in self?.browser?.pruneSessions(alive: live) }
         sessions.start()
         isReady = true
     }
@@ -121,6 +139,50 @@ final class AppModel {
     func createWorktreeSession(fromProjectRoot root: String, branch: String, agent: AgentKind) async -> String? {
         guard let sessions else { return "not ready" }
         return await sessions.createWorktreeSession(fromProjectRoot: root, branch: branch, agent: agent)
+    }
+
+    // MARK: Embedded browser (M6 — BROWSER.md)
+
+    /// ⌘B — toggle the session's browser split. With no tab yet, open a blank one and put
+    /// the keyboard in its address field (creating is the only sensible meaning of ⌘B then).
+    func toggleBrowser(for session: String) {
+        guard let browser else { return }
+        if browser.tab(for: session) == nil {
+            browser.open(url: URL(string: "about:blank")!, session: session)
+            browserFocusToken &+= 1
+        } else {
+            browser.toggleHidden(session: session)
+        }
+    }
+
+    /// ⌘L — make sure the split is visible, then move focus into its address field.
+    func focusBrowserAddress(for session: String) {
+        guard let browser else { return }
+        if browser.tab(for: session) == nil {
+            browser.open(url: URL(string: "about:blank")!, session: session)
+        } else if browser.visibleTab(for: session) == nil {
+            browser.toggleHidden(session: session) // un-hide
+        }
+        browserFocusToken &+= 1
+    }
+
+    /// A CLI `browser open` landed — open the tab and surface per BROWSER.md §4.4:
+    /// hidden panel → summon it preselecting the target (non-activating, so the user's editor
+    /// keeps focus); target already on screen → it just shows; any other case → 🌐 badge only.
+    func openBrowserFromCLI(session: String, url: URL, background: Bool) {
+        guard let browser else { return }
+        if background {
+            browser.open(url: url, session: session, markUnseen: true)
+            return
+        }
+        if !panelVisible {
+            browser.open(url: url, session: session)
+            panelController?.show(preselecting: session)
+        } else if focusedSessionName == session {
+            browser.open(url: url, session: session)
+        } else {
+            browser.open(url: url, session: session, markUnseen: true)
+        }
     }
 
     // MARK: Project registration
@@ -341,6 +403,8 @@ final class AppModel {
     func reconcileOnOpen(_ session: Session) {
         // Opening a session's detail counts as checking it — clear the persistent needs-you border.
         sessions?.acknowledge(session.name)
+        // Its workspace is on screen — an agent-opened page counts as seen (🌐 badge off).
+        browser?.markSeen(session.name)
         switch session.attention {
         case .pending(let a) where a.kind == .finished:
             sessions?.applyAttention(name: session.name, .idle)
