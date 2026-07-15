@@ -11,7 +11,7 @@ BUNDLE_ID := dev.lightsoft.pass
 # Pipe through xcbeautify if available, else raw.
 BEAUTIFY := $(shell command -v xcbeautify >/dev/null 2>&1 && echo "| xcbeautify" || echo "")
 
-.PHONY: gen build run stop test logs clean regen open
+.PHONY: gen build run stop test logs clean regen open install
 
 gen:
 	xcodegen generate
@@ -30,9 +30,15 @@ run: stop build
 	@echo "launching $(BIN)"
 	$(BIN)
 
-# Launch detached via the bundle (like Finder would) — for notification/GUI-env testing.
-open: stop build
-	open "$(APP_PATH)"
+# Sync the fresh build into /Applications — the copy Spotlight/Dock launches. Without this,
+# a stale /Applications bundle shadows the dev build (old UI, sessions "missing").
+install: build
+	rsync -a --delete "$(APP_PATH)/" "/Applications/$(APP_NAME).app/"
+
+# Launch detached via the bundle (like Finder would). Installs to /Applications first so the
+# running app and the one Spotlight launches are always the SAME build.
+open: stop install
+	open "/Applications/$(APP_NAME).app"
 
 stop:
 	@pkill -x $(APP_NAME) 2>/dev/null || true

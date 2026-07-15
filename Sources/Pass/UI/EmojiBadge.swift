@@ -43,63 +43,63 @@ struct EmojiBadgeButton: View {
     }
 }
 
-/// Slack-style emoji search: type a word (rocket, fire, cat…), pick from the grid. ⏎ picks the
-/// first match; the current emoji is highlighted; Remove clears it.
+/// The SYSTEM emoji picker, not a bundled list: a tiny input field the macOS character
+/// palette types into. The palette (the ⌃⌘Space picker — full catalog, search, skin tones,
+/// recents) opens automatically; the first emoji that lands in the field is assigned.
 private struct EmojiPickerPopover: View {
     let current: String
     let onPick: (String?) -> Void
     let onClose: () -> Void
 
-    @State private var query: String = ""
+    @State private var input: String = ""
     @FocusState private var focused: Bool
 
-    private var results: [String] { EmojiCatalog.search(query) }
-    private let columns = Array(repeating: GridItem(.fixed(30), spacing: 4), count: 7)
-
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.secondary)
-                TextField("Search emoji — rocket, fire, cat…", text: $query)
-                    .textFieldStyle(.plain).font(.system(size: 13))
-                    .focused($focused)
-                    .onSubmit { if let first = results.first { commit(first) } }
-            }
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(Color.primary.opacity(0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-
-            if results.isEmpty {
-                VStack(spacing: 4) {
-                    Text("No matches").font(.system(size: 12)).foregroundStyle(.secondary)
-                    Text("or press ⌃⌘Space for the system picker")
-                        .font(.system(size: 10)).foregroundStyle(.tertiary)
-                }
-                .frame(height: 200)
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 4) {
-                        ForEach(results, id: \.self) { emoji in
-                            Button { commit(emoji) } label: {
-                                Text(emoji).font(.system(size: 20)).frame(width: 30, height: 30)
-                                    .background(emoji == current ? Color.accentColor.opacity(0.25) : .clear)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                            }
-                            .buttonStyle(.plain)
-                        }
+        VStack(spacing: 10) {
+            TextField(current.isEmpty ? "🙂" : current, text: $input)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 20))
+                .multilineTextAlignment(.center)
+                .frame(width: 110)
+                .focused($focused)
+                .onChange(of: input) { _, new in
+                    if let emoji = new.first(where: \.isEmojiLike) {
+                        onPick(String(emoji))
+                        onClose()
+                    } else if !new.isEmpty {
+                        input = "" // non-emoji keystrokes — keep the field clean
                     }
-                    .padding(2)
                 }
-                .frame(height: 200)
+            Text("pick from the system palette, or type one")
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+            HStack(spacing: 8) {
+                Button("Open palette") { openPalette() }.controlSize(.small)
+                Button("Remove", role: .destructive) { onPick(nil); onClose() }
+                    .controlSize(.small)
             }
-
-            Button("Remove emoji", role: .destructive) { onPick(nil); onClose() }
-                .controlSize(.small)
         }
-        .padding(12)
-        .frame(width: 274)
-        .onAppear { focused = true }
+        .padding(14)
+        .onAppear {
+            focused = true
+            // Summon the palette once the field really holds first-responder status —
+            // the palette inserts into whatever is focused at that moment.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { openPalette() }
+        }
     }
 
-    private func commit(_ emoji: String) { onPick(emoji); onClose() }
+    private func openPalette() {
+        NSApp.activate(ignoringOtherApps: true) // accessory app: palette needs us active
+        NSApp.orderFrontCharacterPalette(nil)
+    }
+}
+
+private extension Character {
+    /// A grapheme that renders as emoji — excludes plain digits/#/* (technically Emoji=Yes)
+    /// so stray typing doesn't get assigned. Covers ZWJ families, flags, and ️-variants.
+    var isEmojiLike: Bool {
+        guard let first = unicodeScalars.first else { return false }
+        return unicodeScalars.contains { $0.properties.isEmojiPresentation }
+            || unicodeScalars.contains { $0.value == 0xFE0F } // text symbol + emoji variation
+            || (first.properties.isEmoji && first.value >= 0x1F000)
+    }
 }

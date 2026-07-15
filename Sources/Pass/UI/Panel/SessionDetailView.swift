@@ -21,6 +21,7 @@ struct SessionDetailView: View {
         .task(id: session.name) {
             let controller = TerminalController(session: session.name)
             terminal = controller
+            await controller.start()
             appModel.reconcileOnOpen(session)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { controller.focus() }
             defer { controller.detach(); terminal = nil }

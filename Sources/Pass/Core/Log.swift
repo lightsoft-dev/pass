@@ -11,4 +11,5 @@ enum Log {
     static let inbox = Logger(subsystem: subsystem, category: "inbox")
     static let inject = Logger(subsystem: subsystem, category: "inject")
     static let ui = Logger(subsystem: subsystem, category: "ui")
+    static let ext = Logger(subsystem: subsystem, category: "extensions")
 }

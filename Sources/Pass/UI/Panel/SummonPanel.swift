@@ -7,6 +7,16 @@ import AppKit
 /// the first responder ever sees it, so this works no matter what has focus.
 enum PanelNavKey {
     case up, down, returnKey, escape, tab, delete
+    /// ⌘P — toggle the centered quick command (the home terminal owns plain keys by default).
+    case toggleInput
+    /// ⇧⇧ (double-tap, routed from DoubleTapHotkey) — hop to the next session waiting on you.
+    case nextWaiting
+    /// ⌘D — open the selected session's project spec document.
+    case openSpecs
+    /// ⌘N — quick command in new-session mode (pick a project, ⏎ starts a session).
+    case newSession
+    /// ⌘T — quick command prefilled with a worktree branch for the selected session.
+    case newWorktree
 }
 
 struct PanelNavEvent {
@@ -63,32 +73,66 @@ final class SummonPanel: NSPanel {
     /// this is what makes copy/paste work inside the panel's text fields.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command) {
+            // Letter shortcuts must ALSO match by physical key code: with a non-Latin input
+            // source active (한글 등), charactersIgnoringModifiers reports the mapped character
+            // ("ㅓ" for the J key), so a pure character comparison never fires.
+            let ch = event.charactersIgnoringModifiers?.lowercased()
+            let code = event.keyCode
+            func key(_ letter: String, _ kc: UInt16) -> Bool { ch == letter || code == kc }
+
             // ⌘[ or ⌘W step back to the list (the embedded terminal owns Esc, so we can't
             // use it here). ⌘W is intercepted so it never closes the whole panel window.
-            if event.charactersIgnoringModifiers == "[" || event.charactersIgnoringModifiers == "w" {
+            if key("[", 33) || key("w", 13) {
                 onGoBack?()
                 return true
             }
             // ⌘⇧F toggles floating vs normal window.
-            if event.modifierFlags.contains(.shift),
-               event.charactersIgnoringModifiers?.lowercased() == "f" {
+            if event.modifierFlags.contains(.shift), key("f", 3) {
                 onToggleFloat?()
                 return true
             }
             // ⌘⌫ asks to kill the selected session (the view confirms first).
-            if event.keyCode == 51, onNavigate?(PanelNavEvent(key: .delete, command: true, option: false)) == true {
+            if code == 51, onNavigate?(PanelNavEvent(key: .delete, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘J / ⌘K — vim-style session movement (down / up), same as ⌘↓ / ⌘↑.
+            if key("j", 38),
+               onNavigate?(PanelNavEvent(key: .down, command: true, option: false)) == true {
+                return true
+            }
+            if key("k", 40),
+               onNavigate?(PanelNavEvent(key: .up, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘P toggles the centered quick command — typing goes into the embedded terminal
+            // by default.
+            if key("p", 35),
+               onNavigate?(PanelNavEvent(key: .toggleInput, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘D opens the selected session's project spec document.
+            if key("d", 2),
+               onNavigate?(PanelNavEvent(key: .openSpecs, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘N — new session (quick command in project-pick mode).
+            if key("n", 45),
+               onNavigate?(PanelNavEvent(key: .newSession, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘T — new worktree session off the selected session (branch name prefilled).
+            if key("t", 17),
+               onNavigate?(PanelNavEvent(key: .newWorktree, command: true, option: false)) == true {
                 return true
             }
             let cmdShift = event.modifierFlags.contains(.shift)
-            let selector: Selector?
-            switch event.charactersIgnoringModifiers {
-            case "x": selector = #selector(NSText.cut(_:))
-            case "c": selector = #selector(NSText.copy(_:))
-            case "v": selector = #selector(NSText.paste(_:))
-            case "a": selector = #selector(NSResponder.selectAll(_:))
-            case "z": selector = cmdShift ? Selector(("redo:")) : Selector(("undo:"))
-            default:  selector = nil
-            }
+            var selector: Selector?
+            if key("x", 7) { selector = #selector(NSText.cut(_:)) }
+            else if key("c", 8) { selector = #selector(NSText.copy(_:)) }
+            else if key("v", 9) { selector = #selector(NSText.paste(_:)) }
+            else if key("a", 0) { selector = #selector(NSResponder.selectAll(_:)) }
+            else if key("z", 6) { selector = cmdShift ? Selector(("redo:")) : Selector(("undo:")) }
+            else { selector = nil }
             if let selector, NSApp.sendAction(selector, to: nil, from: self) {
                 return true
             }
@@ -113,7 +157,8 @@ final class SummonPanel: NSPanel {
         return super.performKeyEquivalent(with: event)
     }
 
-    /// Esc → let the controller decide (walk the nav stack up, then dismiss).
+    /// Esc that nothing handled. The controller leaves this nil — Esc never dismisses the
+    /// panel (it interrupts the agent in the embedded terminal instead).
     override func cancelOperation(_ sender: Any?) {
         onCancel?()
     }

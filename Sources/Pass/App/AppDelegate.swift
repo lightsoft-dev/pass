@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let notifications = NotificationService()
     private let hookServer = HookServer()
     private var eventRouter: EventRouter?
+    private var doubleTapHotkey: DoubleTapHotkey?
+    private var shiftTapHotkey: DoubleTapHotkey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Always called on the main thread; assert it so we can touch main-actor state.
@@ -36,9 +38,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         panelController = PanelController(appModel: appModel)
         appModel.panelController = panelController
 
-        // Global hotkey → toggle the panel.
+        // Global hotkeys → toggle the panel: ⌘⌘ double-tap (primary) + ⌥Space (rebindable).
         HotkeyService.registerSummon { [weak self] in
             self?.panelController.toggle()
+        }
+        doubleTapHotkey = DoubleTapHotkey { [weak self] in
+            self?.panelController.toggle()
+        }
+        // ⇧⇧ hops to the next session waiting for input — only while the panel has the
+        // keyboard, so shift taps in other apps never move pass's selection.
+        shiftTapHotkey = DoubleTapHotkey(modifier: .shift) { [weak self] in
+            guard let self, self.panelController.isKey else { return }
+            _ = self.appModel.keyHandler?(PanelNavEvent(key: .nextWaiting, command: false, option: false))
         }
 
         // Notifications.
@@ -66,6 +77,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { appModel.forceOpenSession = s }
             }
         }
+        // PASS_DEBUG_SPECS=<project root> — open the panel straight onto the specs screen
+        // (SpecsView preselects the given root). Headless verification of the spec document UI.
+        if let root = ProcessInfo.processInfo.environment["PASS_DEBUG_SPECS"], !root.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [appModel] in
+                appModel.showSpecs()
+            }
+        }
 
         appModel.isReady = true
         Log.app.info("pass launched (accessory, hook port \(PassConfig.hookPort))")
@@ -74,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @MainActor
     private func startHookPipeline() {
         let notifications = self.notifications
+        let appModel = self.appModel
         let router = EventRouter(
             sessions: appModel.sessions,
             onAttention: { name, display, att in
@@ -86,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
                 Task { await notifications.notify(session: name, kind: att.kind.rawValue,
                                                   title: display, body: body, sound: sound) }
+                appModel.extensionRuntime?.attentionPending(sessionName: name, attention: att)
             },
             onResolved: { name in
                 notifications.clear(session: name, kinds: [
@@ -93,12 +113,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     Attention.Kind.input.rawValue,
                     Attention.Kind.finished.rawValue,
                 ])
+                appModel.extensionRuntime?.attentionResolved(sessionName: name)
             }
         )
         self.eventRouter = router
 
         Task { @MainActor in
-            await hookServer.start(port: PassConfig.hookPort)
+            let appModel = self.appModel
+            let share = ShareHandlers(
+                targets: { await MainActor.run { ShareAPI.targets(appModel) } },
+                send: { body in await ShareAPI.send(appModel, body: body) }
+            )
+            await hookServer.start(port: PassConfig.hookPort, share: share)
             appModel.hookServerFailed = !(await hookServer.didBind)
             for await hit in hookServer.events {
                 router.route(path: hit.path, raw: hit.raw)

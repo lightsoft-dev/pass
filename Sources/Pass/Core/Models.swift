@@ -49,13 +49,15 @@ enum AgentKind: String, Codable, Hashable, CaseIterable {
 
 /// How the home feed lays out sessions. Persisted in UserDefaults under "homeMode".
 enum HomeMode: String, CaseIterable {
-    case stack // one big focused card (embedded input) + small rows for the rest
-    case list  // uniform compact rows, selected one highlighted, one input at the bottom
+    case stack   // one big focused card (embedded terminal) + small rows for the rest
+    case list    // compact rows on TOP, the selected session's terminal below
+    case sidebar // compact rows on the LEFT, the terminal filling the right side
 
     var label: String {
         switch self {
-        case .stack: return "Card stack"
-        case .list:  return "Compact list"
+        case .stack:   return "Card stack"
+        case .list:    return "List · top"
+        case .sidebar: return "List · left"
         }
     }
 }

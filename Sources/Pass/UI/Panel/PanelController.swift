@@ -20,7 +20,9 @@ final class PanelController {
         let root = CommandView()
             .environment(appModel)
         panel.contentView = NSHostingView(rootView: root)
-        panel.onCancel = { [weak self] in self?.hide() }
+        // Esc never closes the panel — it belongs to the embedded terminal (interrupting the
+        // agent) and to in-view editing. Dismiss with ⌘⌘ / ⌥Space instead.
+        panel.onCancel = nil
         panel.onGoBack = { [weak self] in self?.appModel.requestBack() }
         panel.onToggleFloat = { [weak self] in self?.toggleFloating() }
         panel.onNavigate = { [weak self] event in self?.appModel.keyHandler?(event) ?? false }
@@ -86,8 +88,23 @@ final class PanelController {
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    /// The panel currently owns the keyboard (it's the key window). Gate for panel-scoped
+    /// modifier gestures like ⇧⇧ so they don't fire while typing in other apps.
+    var isKey: Bool { panel?.isKeyWindow ?? false }
+
     func toggle() {
-        if isVisible { hide() } else { show(preselecting: nil) }
+        if !isVisible { show(preselecting: nil); return }
+        // Visible but not focused (buried behind other windows in normal mode, or the user is
+        // in another app) → the hotkey means "get me to pass": raise it instead of hiding.
+        if panel?.isKeyWindow == true { hide() } else { raise() }
+    }
+
+    /// Bring the already-visible panel to the front and give it the keyboard — WITHOUT
+    /// repositioning or resetting its view state (unlike show).
+    private func raise() {
+        guard let panel else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
     }
 
     func show(preselecting session: String?) {
@@ -103,10 +120,12 @@ final class PanelController {
         if isFloating { centerOnActiveScreen(panel) } else { positionNormalWindow(panel) }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        appModel.panelVisible = true  // home attaches its live terminal only while visible
         appModel.focusToken &+= 1 // tell the omnibox to (re)take focus on every show
     }
 
     func hide() {
+        appModel.panelVisible = false // detaches the home terminal (the session keeps running)
         panel?.orderOut(nil)
     }
 
