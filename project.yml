@@ -70,6 +70,10 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - Sources/PassShare
+      # The share sheet needs the icon INSIDE the appex — the container-app fallback is
+      # unreliable on macOS (generic icon otherwise).
+      - path: Resources/AppIcon.icns
+        buildPhase: resources
     entitlements:
       # App extensions MUST be sandboxed — pluginkit silently refuses to register an
       # unsandboxed .appex. network.client lets it reach the app's loopback server; the
@@ -85,6 +89,7 @@ targets:
       properties:
         CFBundleName: Pass
         CFBundleDisplayName: Pass
+        CFBundleIconFile: AppIcon
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: PassShare.ShareViewController
