@@ -364,11 +364,26 @@ final class TerminalController {
     let sessionName: String
     private(set) var alive = true
 
+    private var themeObserver: (any NSObjectProtocol)?
+
     init(session: String) {
         sessionName = session
         IMETerminalView.installEventBridges() // once: wheel → tmux scrollback, ⌘click → URL
         terminalView = IMETerminalView(frame: .zero) // adds IME composition preview (한글 등)
         terminalView.processDelegate = self // learn when the attach client dies
+        TerminalTheme.current.apply(to: terminalView)
+        themeObserver = NotificationCenter.default.addObserver(
+            forName: .passTerminalThemeChanged, object: nil, queue: .main
+        ) { [weak terminalView] _ in
+            MainActor.assumeIsolated {
+                guard let terminalView else { return }
+                TerminalTheme.current.apply(to: terminalView)
+            }
+        }
+    }
+
+    deinit {
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
     }
 
     /// Prepare the session (unpin manual sizing, hide tmux's status bar), THEN attach —

@@ -592,13 +592,13 @@ struct CommandView: View {
 
     /// The compact-list mode terminal strip: the selected session's live client + a key hint.
     private var terminalPanel: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        // Edge-to-edge: the terminal fills its whole section (no rounded frame, no margins) —
+        // only a hairline key-hint strip sits under it.
+        VStack(alignment: .leading, spacing: 0) {
             if let live = displayedTerminal {
                 TerminalPaneView(controller: live)
                     .id(live.sessionName) // new session → new NSView (updateNSView can't swap it)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.08)))
             } else if selectedSession?.launching == true {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -609,10 +609,11 @@ struct CommandView: View {
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘↑↓ sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Divider()
+            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .padding(.horizontal, 8).padding(.vertical, 3)
         }
-        .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 6)
     }
 
     // MARK: Filtered items
@@ -853,11 +854,12 @@ struct FocusedSessionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
-            terminalBody
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘↑↓ sessions · ⌘⏎ expand · ⌘⌫ kill")
+                .padding(.horizontal, 12).padding(.top, 10)
+            terminalBody // full-bleed: the terminal spans the card edge-to-edge
+            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .padding(.horizontal, 12).padding(.bottom, 8)
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.primary.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -879,14 +881,13 @@ struct FocusedSessionCard: View {
                 ProgressView().controlSize(.small)
                 Text("starting \(session.agent.rawValue)…").font(.system(size: 13)).foregroundStyle(.secondary)
             }
+            .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 120, alignment: .leading)
         } else if let terminal {
             TerminalPaneView(controller: terminal)
                 .id(terminal.sessionName) // new session → new NSView (updateNSView can't swap it)
                 .frame(maxWidth: .infinity)
                 .frame(height: 340)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.06)))
         } else {
             ProgressView()
                 .frame(maxWidth: .infinity)

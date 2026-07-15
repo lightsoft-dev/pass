@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var launchAtLogin = LoginItemService.isEnabled
     @State private var floating = true
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
+    @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
 
     var body: some View {
         Form {
@@ -25,6 +26,15 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
                 Text("Card stack: the focused session shown large with its own input, others small. Compact list: uniform rows with one input at the bottom.")
                     .font(.caption).foregroundStyle(.secondary)
+                Picker("Terminal theme", selection: $terminalThemeRaw) {
+                    ForEach(TerminalTheme.allCases, id: \.rawValue) { theme in
+                        Text(theme.label).tag(theme.rawValue)
+                    }
+                }
+                .onChange(of: terminalThemeRaw) { _, _ in
+                    // Every live terminal (home pool + detail) restyles immediately.
+                    NotificationCenter.default.post(name: .passTerminalThemeChanged, object: nil)
+                }
             }
 
             Section("Projects") {
