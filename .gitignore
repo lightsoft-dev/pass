@@ -18,3 +18,6 @@ xcuserdata/
 spikes/sample_hook_log.jsonl
 Config/PassShareInfo.plist
 Config/PassShare.entitlements
+
+# Claude Code local state (worktrees, local settings)
+.claude/
