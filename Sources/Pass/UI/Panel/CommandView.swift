@@ -248,7 +248,7 @@ struct CommandView: View {
             }
             if e.command { openSelectedTerminal(); return true }
             guard typingInBar else { return false } // plain ⏎ goes into the terminal
-            if query.hasPrefix("+") { createWorktreeFromInput() } // stays up: shows progress/errors
+            if query.hasPrefix("+") { createWorktreeFromInput() } // confirms + closes (errors reopen)
             else if !sessions.isEmpty { hideQuickCommand() } // empty ⏎ → back to the terminal
             return true
         case .delete:
@@ -666,6 +666,11 @@ struct CommandView: View {
 
     private func handleQueryChange(old: String, new: String) {
         status = nil
+        // Worktree (branch) names can't contain spaces — typing one becomes '-' as you type.
+        if new.hasPrefix("+"), new.contains(" ") {
+            query = new.replacingOccurrences(of: " ", with: "-")
+            return
+        }
         if isJumpMode { jumpSelection = 0 } // filtering always re-selects the top match
     }
 
@@ -750,18 +755,22 @@ struct CommandView: View {
         }
     }
 
-    /// A `+branch` message spins off a git worktree of the focused session's project and starts
-    /// a new session in it (same agent). The rest of the text is the branch name.
+    /// A `+branch` entry spins off a git worktree of the focused session's project and starts
+    /// a new session in it (same agent). ⏎ confirms and CLOSES the quick command — the new
+    /// session card appears in the home; a failure reopens the bar with the error.
     private func createWorktreeFromInput() {
         guard let s = selectedSession else { return }
         let branch = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
         guard !branch.isEmpty else { return }
         let root = s.git?.projectRoot ?? s.projectRoot
-        query = ""
-        status = "⧉ creating worktree \(branch)…"
+        hideQuickCommand()
         Task {
             let err = await appModel.createWorktreeSession(fromProjectRoot: root, branch: branch, agent: s.agent)
-            status = err.map { "⚠ worktree: \($0)" }  // nil → clears the status on success
+            if let err {
+                status = "⚠ worktree: \(err)"
+                showQuickCommand = true // a silent failure would be worse than the surprise
+                refocusField()
+            }
         }
     }
 
