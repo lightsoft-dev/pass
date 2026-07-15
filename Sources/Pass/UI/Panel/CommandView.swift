@@ -56,7 +56,7 @@ struct CommandView: View {
     }
     /// The centered quick command is up: summoned with ⌘P, or forced when there's no session
     /// yet (creating one is the only possible action). It hides after sending a message, or
-    /// with another ⌘P — Esc never dismisses it (nor the panel).
+    /// with another ⌘P, or with Esc (the panel itself never closes on Esc).
     private var showsCommandBar: Bool { showQuickCommand || sessions.isEmpty }
     /// The quick command currently owns the keyboard (otherwise the terminal does).
     private var typingInBar: Bool { showsCommandBar && omniboxFocused }
@@ -259,8 +259,8 @@ struct CommandView: View {
         case .escape:
             if pendingKill != nil { pendingKill = nil; return true }
             if typingInBar {
-                if !query.isEmpty { query = "" } // clear the draft; the quick command stays up
-                return true // Esc never closes the quick command (send a message or ⌘P)
+                if !sessions.isEmpty { hideQuickCommand() } // Esc closes the ⌘P bar
+                return true
             }
             // The terminal owns Esc (interrupting the agent). Close the panel with ⌘⌘/⌥Space.
             return false
@@ -445,7 +445,7 @@ struct CommandView: View {
     private var hint: String {
         if newSessionMode {
             if case .project(let p)? = jumpSelectedItem { return "⏎ new session in \(p.name)" }
-            return "type a project name · ⏎ start a session · Esc clear"
+            return "type a project name · ⏎ start a session · Esc close"
         }
         if query.hasPrefix("+") {
             let branch = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
