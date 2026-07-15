@@ -58,6 +58,8 @@ final class AppModel {
     private(set) var projects: ProjectStore!
     private(set) var sessions: SessionStore!
     private(set) var specs: SpecStore!
+    private(set) var extensions: ExtensionStore!
+    private(set) var extensionRuntime: ExtensionRuntime!
 
     weak var panelController: PanelController?
 
@@ -71,6 +73,12 @@ final class AppModel {
         projects = ProjectStore()
         sessions = SessionStore(projects: projects)
         specs = SpecStore()
+        extensions = ExtensionStore()
+        extensionRuntime = ExtensionRuntime(store: extensions, appModel: self)
+        sessions.onSessionsChanged = { [weak self] created, ended in
+            self?.extensionRuntime?.sessionsCreated(created)
+            self?.extensionRuntime?.sessionsEnded(ended)
+        }
         sessions.start()
         isReady = true
     }

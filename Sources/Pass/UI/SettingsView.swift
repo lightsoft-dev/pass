@@ -65,6 +65,55 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section("Extensions") {
+                let store = appModel.extensions
+                let loaded = store?.loaded ?? []
+                let errors = store?.loadErrors ?? []
+                if loaded.isEmpty && errors.isEmpty {
+                    Text("No extensions yet — one folder per extension in ~/.pass/extensions (manifest schema: docs/EXTENSIONS.md).")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(loaded) { ext in
+                    ExtensionRow(ext: ext)
+                }
+                ForEach(errors) { err in
+                    Label("\(err.folder): \(err.message)", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                ForEach(store?.bundledInstallable ?? [], id: \.self) { id in
+                    HStack {
+                        Text("\(id) (bundled example)").font(.system(size: 12))
+                        Spacer()
+                        Button("Install") { try? store?.installBundled(id: id) }
+                            .controlSize(.small)
+                    }
+                }
+                HStack {
+                    Button("Reload") { store?.reload() }
+                    Button("Open folder…") {
+                        if let dir = store?.revealDirectory() { NSWorkspace.shared.open(dir) }
+                    }
+                }
+                Text("Extensions run scripts with your user permissions — enable only what you trust. Commands appear in the quick command as >name.")
+                    .font(.caption).foregroundStyle(.secondary)
+                let log = appModel.extensionRuntime?.recentLog ?? []
+                if !log.isEmpty {
+                    DisclosureGroup("Recent activity (\(log.count))") {
+                        ForEach(log.prefix(8)) { entry in
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("\(entry.ok ? "✓" : "✕") \(entry.extensionId) — \(entry.summary)")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(entry.ok ? Color.secondary : .orange)
+                                if let detail = entry.detail {
+                                    Text(detail).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(2)
+                                }
+                            }
+                        }
+                    }
+                    .font(.caption)
+                }
+            }
+
             Section("General") {
                 Toggle("Launch pass at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
@@ -134,6 +183,48 @@ private struct AgentCommandRow: View {
                 .onChange(of: command) { _, new in LaunchCommands.setCommand(new, for: agent) }
         }
         .onAppear { command = LaunchCommands.editableCommand(for: agent) }
+    }
+}
+
+/// One extension row — name/version/description, its declared permissions, and the enable
+/// toggle. A broken manifest shows its problems instead and can't be enabled (the runtime
+/// only ever executes enabled AND valid extensions).
+private struct ExtensionRow: View {
+    let ext: ExtensionStore.Loaded
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "puzzlepiece.extension")
+                .foregroundStyle(.secondary).frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(ext.manifest.name).font(.system(size: 12, weight: .medium))
+                    if let v = ext.manifest.version {
+                        Text(v).font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+                }
+                if let desc = ext.manifest.description, !desc.isEmpty {
+                    Text(desc).font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                if let perms = ext.manifest.permissions, !perms.isEmpty {
+                    Text("permissions: " + perms.sorted().joined(separator: ", "))
+                        .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                }
+                ForEach(ext.problems, id: \.self) { p in
+                    Text("⚠ \(p)").font(.system(size: 10)).foregroundStyle(.orange)
+                }
+            }
+            Spacer()
+            // Binding straight into the store — a @State mirror goes stale when SwiftUI
+            // reuses this row for a different extension after a Reload reorders the list.
+            Toggle("", isOn: Binding(
+                get: { appModel.extensions?.isEnabled(ext.id) ?? false },
+                set: { appModel.extensions?.setEnabled(ext.id, $0) }
+            ))
+            .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+            .disabled(!ext.isValid)
+        }
     }
 }
 

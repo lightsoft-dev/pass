@@ -34,6 +34,16 @@ final class SessionStore {
     /// User-assigned display names per session (display-only; folder/tmux names untouched).
     private(set) var aliasByName: [String: String] = [:]
 
+    /// Extension-runtime tap: sessions that appeared / vanished, reported once per reconcile.
+    var onSessionsChanged: (@MainActor (_ created: [Session], _ ended: [String]) -> Void)?
+    /// Names seen by the previous reconcile. nil until the first pass — adopting sessions
+    /// that were already running at launch must not fire "created" events.
+    private var knownNames: Set<String>?
+    /// Command sessions whose project must never enter the MRU (extension report sessions).
+    /// The name-based tag is authoritative — the ~/.pass path heuristic alone can be escaped
+    /// when git hoists the projectRoot (e.g. a dotfiles setup where $HOME itself is a repo).
+    private var ephemeralSessions: Set<String> = []
+
     private let tmux: TmuxClient
     private let projects: ProjectStore
     private var pollTask: Task<Void, Never>?
@@ -83,6 +93,9 @@ final class SessionStore {
 
     func reconcile() async {
         let raw = await tmux.listSessions()
+        // Snapshot BEFORE the pruning below drops dead ephemerals — the created/ended diff at
+        // the end must still know a just-vanished report session was ephemeral.
+        let ephemeralSnapshot = ephemeralSessions
 
         var next: [Session] = []
         for r in raw {
@@ -99,8 +112,11 @@ final class SessionStore {
             if isManaged && r.projectRootOption == nil && !r.cwd.isEmpty {
                 await tmux.adoptTag(name: r.name, projectRoot: projectRoot, agent: agent)
             }
-            // Any live session's project is worth remembering (shows up in @ afterwards).
-            if isManaged, projectRoot != r.name {
+            // Any live session's project is worth remembering (shows up in @ afterwards) —
+            // except ephemeral command sessions and pass's own state directory (extension
+            // report sessions run under ~/.pass, which is never a workspace).
+            if isManaged, projectRoot != r.name,
+               !ephemeralSessions.contains(r.name), !Self.isInternalRoot(projectRoot) {
                 projects.rememberIfNew(rootPath: projectRoot)
             }
 
@@ -152,7 +168,27 @@ final class SessionStore {
             lastMessageByName = lastMessageByName.filter { liveNames.contains($0.key) }
             unacked = unacked.intersection(liveNames)
             aliasByName = aliasByName.filter { liveNames.contains($0.key) }
+            ephemeralSessions = ephemeralSessions.intersection(liveNames)
             if before != (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count) { scheduleSave() }
+        }
+
+        // Extension events: which sessions appeared / vanished this pass. The FIRST pass is a
+        // baseline — even when empty, so the first session after a quiet launch still reports
+        // as created (adopting sessions already running at launch is what must stay silent).
+        // Afterwards, an empty listing may be a transient tmux failure (same rule as the
+        // pruning above), so a kill that empties the list is reported from kill() instead.
+        // Ephemeral report sessions are excluded entirely: a `session.created` rule with a
+        // terminal action would otherwise re-trigger on its own report session, forever.
+        if let known = knownNames {
+            if !next.isEmpty {
+                let names = Set(next.map(\.name)).subtracting(ephemeralSnapshot)
+                let created = next.filter { !known.contains($0.name) && !ephemeralSnapshot.contains($0.name) }
+                let ended = known.subtracting(names).sorted()
+                if !created.isEmpty || !ended.isEmpty { onSessionsChanged?(created, ended) }
+                knownNames = names
+            }
+        } else {
+            knownNames = Set(next.map(\.name)).subtracting(ephemeralSnapshot)
         }
 
         // Sort: needs-you first, then most-recent activity.
@@ -242,18 +278,22 @@ final class SessionStore {
     /// tmux session. Unlike agent sessions, the document-provided command is launched directly
     /// and the session is tagged `.shell`, so pass never mistakes it for an agent that accepts
     /// replies (ReplyInjector refuses shells).
+    /// `rememberProject: false` for sessions whose cwd is not a workspace (e.g. an extension's
+    /// report script) — they must not pollute the project MRU.
     @discardableResult
-    func createCommandSession(projectDir: String, slug: String, command: String) async -> String {
+    func createCommandSession(projectDir: String, slug: String, command: String,
+                              rememberProject: Bool = true) async -> String {
         let git = await resolveGit(projectDir)
         let projectRoot = git?.projectRoot ?? projectDir
         let repo = git?.repoName ?? URL(fileURLWithPath: projectRoot).lastPathComponent
         let base = "\(PassConfig.sessionPrefix)\(Slug.make(repo))--\(Slug.make(slug))"
         let name = await uniqueName(base)
 
+        if !rememberProject { ephemeralSessions.insert(name) } // before reconcile can see it
         upsertLaunching(name: name, projectRoot: projectRoot, cwd: projectDir, agent: .shell, git: git)
         await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
                               agent: .shell, launchCommand: command)
-        projects.remember(rootPath: projectRoot)
+        if rememberProject { projects.remember(rootPath: projectRoot) }
         await reconcile()
         return name
     }
@@ -307,6 +347,9 @@ final class SessionStore {
         attentionByName[name] = nil
         unacked.remove(name)
         aliasByName.removeValue(forKey: name)
+        // Report the end explicitly: if this was the LAST session, reconcile sees an empty
+        // listing and (deliberately, transient-failure rule) stays silent.
+        if knownNames?.remove(name) != nil { onSessionsChanged?([], [name]) }
         await tmux.killSession(name)
         await reconcile()
     }
@@ -405,6 +448,12 @@ final class SessionStore {
 
     func session(named name: String) -> Session? {
         sessions.first { $0.name == name }
+    }
+
+    /// pass's own state directory (`~/.pass/…`) is never a project/workspace.
+    static func isInternalRoot(_ root: String) -> Bool {
+        let state = PassConfig.stateDirectory.path
+        return root == state || root.hasPrefix(state + "/")
     }
 
     private func resort() {

@@ -34,6 +34,11 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
   always-on fallback.
 - **Settings** (⌘,): rebind the hotkey, launch-at-login, floating toggle, project list, install
   hooks, notification status.
+- **Extensions (v1)** — add your own features as manifest+script extensions in
+  `~/.pass/extensions`: `>commands` in the quick command (⌘P) and event rules
+  (attention/session → script/notify/sendText/openURL), with per-capability permissions and
+  an enable-after-review flow. Ships with an **agent-usage** example (`>usage` — Claude Code
+  token usage by day/model/project). Design & schema: `docs/EXTENSIONS.md`.
 
 ## Build & run
 

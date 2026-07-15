@@ -28,6 +28,11 @@ targets:
       # AppIcon.icns (generated from AppIcon-source.png via sips/iconutil — see BUILD.md)
       - path: Resources
         buildPhase: resources
+      # Bundled example extensions — installable from Settings › Extensions. Folder reference
+      # so scripts keep their executable bit and land as Resources/Extensions/<id>/.
+      - path: Extensions
+        buildPhase: resources
+        type: folder
     dependencies:
       - package: KeyboardShortcuts
       - package: FlyingFox
