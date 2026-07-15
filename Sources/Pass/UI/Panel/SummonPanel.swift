@@ -13,6 +13,10 @@ enum PanelNavKey {
     case nextWaiting
     /// ⌘D — open the selected session's project spec document.
     case openSpecs
+    /// ⌘N — quick command in new-session mode (pick a project, ⏎ starts a session).
+    case newSession
+    /// ⌘T — quick command prefilled with a worktree branch for the selected session.
+    case newWorktree
 }
 
 struct PanelNavEvent {
@@ -100,6 +104,16 @@ final class SummonPanel: NSPanel {
             // ⌘D opens the selected session's project spec document.
             if key("d", 2),
                onNavigate?(PanelNavEvent(key: .openSpecs, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘N — new session (quick command in project-pick mode).
+            if key("n", 45),
+               onNavigate?(PanelNavEvent(key: .newSession, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘T — new worktree session off the selected session (branch name prefilled).
+            if key("t", 17),
+               onNavigate?(PanelNavEvent(key: .newWorktree, command: true, option: false)) == true {
                 return true
             }
             let cmdShift = event.modifierFlags.contains(.shift)

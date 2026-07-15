@@ -14,6 +14,7 @@ struct CommandView: View {
     @State private var status: String?
     @State private var pendingKill: Session?          // session awaiting a kill confirmation
     @State private var showQuickCommand = false       // ⌘J quick command (hidden by default)
+    @State private var newSessionMode = false         // ⌘N: results are PROJECTS, ⏎ starts a session
     @State private var terminal: TerminalController?  // live client attached to the selected session
     @State private var terminalTarget: String?        // which session the home terminal shows
     @State private var pool = TerminalPool()          // recent clients stay attached → instant switching
@@ -70,6 +71,12 @@ struct CommandView: View {
     /// (there are far too many to list unfiltered).
     private var jumpItems: [PaletteItem] {
         let needle = jumpToken.trimmingCharacters(in: .whitespaces)
+        // ⌘N mode: the list is PROJECTS to start a session in (all of them until you type).
+        if newSessionMode {
+            return projects
+                .filter { needle.isEmpty || Fuzzy.matches(needle, $0.name) }
+                .map { .project($0) }
+        }
         if needle.isEmpty { return orderedSessions.map { .session($0) } }
         return filteredItems(needle)
     }
@@ -110,6 +117,7 @@ struct CommandView: View {
             .onChange(of: appModel.focusToken) { _, _ in
                 query = ""
                 showQuickCommand = false // fresh summon lands in the terminal, not the bar
+                newSessionMode = false
                 if appModel.pendingOpenSpecs {
                     appModel.pendingOpenSpecs = false // menu bar asked for the specs screen
                     route = .specs(selectedSession?.projectRoot) // land on the current project
@@ -172,13 +180,33 @@ struct CommandView: View {
             guard let s = selectedSession else { return true }
             route = .specs(s.projectRoot)
             return true
+        case .newSession:
+            // ⌘N — pick a project, ⏎ starts a session in it.
+            status = nil
+            query = ""
+            newSessionMode = true
+            showQuickCommand = true
+            jumpSelection = 0
+            refocusField()
+            return true
+        case .newWorktree:
+            // ⌘T — worktree session off the selected session, branch name prefilled: just ⏎.
+            guard let s = selectedSession else { return true }
+            let root = s.git?.projectRoot ?? s.projectRoot
+            let existing = sessions.filter { $0.projectRoot == root && $0.git?.isLinkedWorktree == true }.count
+            status = nil
+            newSessionMode = false
+            showQuickCommand = true
+            query = "+wt-\(existing + 1)"
+            refocusField()
+            return true
         case .up:
             if e.command { navMove(-1); return true }
-            if isJumpMode { moveJump(-1); return true }
+            if isJumpMode || (newSessionMode && typingInBar) { moveJump(-1); return true }
             return false // terminal (or the bar's text cursor) gets plain arrows
         case .down:
             if e.command { navMove(1); return true }
-            if isJumpMode { moveJump(1); return true }
+            if isJumpMode || (newSessionMode && typingInBar) { moveJump(1); return true }
             return false
         case .tab:
             // Tab autocompletes the '@' token to the top match, then leaves a trailing space so
@@ -192,6 +220,13 @@ struct CommandView: View {
             guard !isJumpMode else { return true }
             return jumpToNextWaiting()
         case .returnKey:
+            if newSessionMode {
+                if case .project(let p)? = jumpSelectedItem {
+                    appModel.createSession(projectDir: p.rootPath)
+                    hideQuickCommand()
+                }
+                return true
+            }
             if isJumpMode {
                 // First word matched nothing → it wasn't a session name; send the whole text
                 // to the selected session instead.
@@ -328,9 +363,11 @@ struct CommandView: View {
     private var commandBar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: query.hasPrefix("+") ? "arrow.triangle.branch" : "magnifyingglass")
+                Image(systemName: newSessionMode ? "plus.circle"
+                        : query.hasPrefix("+") ? "arrow.triangle.branch" : "magnifyingglass")
                     .font(.system(size: 16))
-                    .foregroundStyle(isJumpMode || query.hasPrefix("+") ? Color.accentColor : .secondary)
+                    .foregroundStyle(newSessionMode || isJumpMode || query.hasPrefix("+")
+                                     ? Color.accentColor : .secondary)
                 TextField(placeholder, text: $query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 17))
@@ -401,10 +438,14 @@ struct CommandView: View {
     }
 
     private var placeholder: String {
-        "search — session name, then your message"
+        newSessionMode ? "new session — project name" : "search — session name, then your message"
     }
 
     private var hint: String {
+        if newSessionMode {
+            if case .project(let p)? = jumpSelectedItem { return "⏎ new session in \(p.name)" }
+            return "type a project name · ⏎ start a session · Esc clear"
+        }
         if query.hasPrefix("+") {
             let branch = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
             return branch.isEmpty ? "⏎ new git worktree + session (name the branch)"
@@ -636,6 +677,7 @@ struct CommandView: View {
 
     private func hideQuickCommand() {
         showQuickCommand = false
+        newSessionMode = false
         query = ""
         omniboxFocused = false
         terminal?.focus()
