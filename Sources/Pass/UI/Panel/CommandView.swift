@@ -20,6 +20,7 @@ struct CommandView: View {
     @State private var pool = TerminalPool()          // recent clients stay attached → instant switching
     @FocusState private var omniboxFocused: Bool
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
+    @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
 
     enum Route: Equatable {
         case list
@@ -592,13 +593,15 @@ struct CommandView: View {
 
     /// The compact-list mode terminal strip: the selected session's live client + a key hint.
     private var terminalPanel: some View {
-        // Edge-to-edge: the terminal fills its whole section (no rounded frame, no margins) —
-        // only a hairline key-hint strip sits under it.
+        // Edge-to-edge: the terminal's BACKGROUND fills the whole section; the text is inset
+        // by same-color padding so it can breathe. A hairline key-hint strip sits under it.
         VStack(alignment: .leading, spacing: 0) {
             if let live = displayedTerminal {
                 TerminalPaneView(controller: live)
                     .id(live.sessionName) // new session → new NSView (updateNSView can't swap it)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
+                    .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
             } else if selectedSession?.launching == true {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -850,6 +853,7 @@ struct FocusedSessionCard: View {
     var onSpecs: (() -> Void)? = nil
 
     @State private var renaming = false
+    @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -884,8 +888,12 @@ struct FocusedSessionCard: View {
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 120, alignment: .leading)
         } else if let terminal {
+            // Full-bleed background, inset text: the same-color padding keeps the terminal
+            // reading as edge-to-edge while the content breathes.
             TerminalPaneView(controller: terminal)
                 .id(terminal.sessionName) // new session → new NSView (updateNSView can't swap it)
+                .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
+                .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
                 .frame(maxWidth: .infinity)
                 .frame(height: 340)
         } else {

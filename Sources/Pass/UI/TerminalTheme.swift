@@ -31,6 +31,11 @@ enum TerminalTheme: String, CaseIterable {
         }
     }
 
+    /// The theme's background as an AppKit color — used by the SwiftUI wrapper to paint a
+    /// same-color inset around the terminal (text breathes, but the "terminal" still reads
+    /// as filling its whole section).
+    var nsBackground: NSColor { Self.ns(background) }
+
     @MainActor
     func apply(to view: TerminalView) {
         view.installColors(ansi.map(Self.term))
