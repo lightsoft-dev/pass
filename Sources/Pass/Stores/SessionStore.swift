@@ -127,7 +127,10 @@ final class SessionStore {
                 } else {
                     session.liveTail = PaneSummary.lastContentLine(await tmux.capturePane(r.name, colors: false))
                 }
-            } else if session.lastMessage == nil {
+            } else if session.lastMessage == nil || session.needsUser {
+                // Waiting sessions refresh from the transcript too: the newest assistant text
+                // is usually the QUESTION being asked — far more useful on the card than a
+                // generic "Claude needs your input" hook preview or a stale last message.
                 if let text = await lastAssistantText(cwd: r.cwd) {
                     session.paneTail = text
                 } else {

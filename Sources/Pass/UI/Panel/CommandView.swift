@@ -1051,8 +1051,11 @@ struct CompactSessionCard: View {
                 ProgressView().controlSize(.mini).scaleEffect(0.7)
                 Text("starting \(session.agent.rawValue)…").font(.system(size: 10)).foregroundStyle(.secondary)
             }
-        } else if case .pending(let a) = session.attention {
+        } else if case .pending(let a) = session.attention, !isGenericPreview(a.preview) {
             Text(oneLine(a.preview)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+        } else if case .pending = session.attention, let tail = session.paneTail, !tail.isEmpty {
+            // Generic "needs your input" → show the actual question from the transcript.
+            Text(oneLine(tail)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         } else if let tail = session.liveTail, !tail.isEmpty {
             // Streaming right now — show what it's doing (dimmed + a spinner glyph).
             HStack(spacing: 4) {
@@ -1133,8 +1136,11 @@ struct PaletteRow: View {
 
     @ViewBuilder
     private func secondLine(_ s: Session) -> some View {
-        if case .pending(let a) = s.attention {
+        if case .pending(let a) = s.attention, !isGenericPreview(a.preview) {
             Text(oneLine(a.preview))
+                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+        } else if case .pending = s.attention, let tail = s.paneTail, !tail.isEmpty {
+            Text(oneLine(tail))
                 .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
         } else if let msg = s.lastMessage, !msg.isEmpty {
             Text(oneLine(msg))
@@ -1174,6 +1180,14 @@ struct PaletteRow: View {
             Text("new session").font(.system(size: 11)).foregroundStyle(.tertiary)
         }
     }
+}
+
+/// Hook previews like "Claude needs your input" carry no information — cards fall through to
+/// the transcript's actual last message instead.
+func isGenericPreview(_ s: String) -> Bool {
+    let t = s.trimmingCharacters(in: .whitespaces).lowercased()
+    return t.isEmpty || t.contains("needs your input") || t.contains("waiting for your input")
+        || t.contains("agent needs input")
 }
 
 enum RelativeTime {
