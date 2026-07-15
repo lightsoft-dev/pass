@@ -862,11 +862,13 @@ struct FocusedSessionCard: View {
         .background(Color.primary.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            // Focused → accent border. An unchecked needs-you request → a stronger orange one
-            // takes over and stays until the user opens or acts on the session.
+            // Focused → accent border. A session still WAITING on you → a stronger orange one
+            // that stays until the input is actually answered (merely selecting/passing over
+            // the session doesn't clear it).
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(session.unacknowledged ? Color.orange : Color.accentColor.opacity(0.6),
-                              lineWidth: session.unacknowledged ? 2 : 1.5)
+                .strokeBorder(session.needsUser || session.unacknowledged
+                              ? Color.orange : Color.accentColor.opacity(0.6),
+                              lineWidth: session.needsUser || session.unacknowledged ? 2 : 1.5)
         )
     }
 
@@ -1032,12 +1034,13 @@ struct CompactSessionCard: View {
         .background(selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.03))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
-            // Unchecked needs-you request → orange border (even collapsed), until the user checks
-            // it; else the selected row gets an accent border so you can see which the input targets.
+            // Waiting on you → orange border that stays until the input is answered (passing
+            // over the row doesn't clear it); else the selected row gets an accent border so
+            // you can see which session the keyboard targets.
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(session.unacknowledged ? Color.orange : Color.accentColor,
-                              lineWidth: session.unacknowledged ? 1.5 : 1)
-                .opacity(session.unacknowledged ? 1 : (selected ? 1 : 0))
+                .strokeBorder(session.needsUser || session.unacknowledged ? Color.orange : Color.accentColor,
+                              lineWidth: session.needsUser || session.unacknowledged ? 1.5 : 1)
+                .opacity(session.needsUser || session.unacknowledged ? 1 : (selected ? 1 : 0))
         )
     }
 
