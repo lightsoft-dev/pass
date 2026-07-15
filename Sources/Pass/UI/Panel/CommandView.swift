@@ -3,7 +3,7 @@ import SwiftUI
 /// Root of the floating panel — a chat-style home over every session, with the SELECTED
 /// session shown as a live terminal: a real `tmux attach` client (colors, styles, cursor),
 /// so every keystroke goes straight into the agent's TUI and all of its features work.
-/// ⌘J summons a centered message bar (`@` jump, `+branch` worktree, plain text replies);
+/// ⌘P summons the quick command (`@` jump, `+branch` worktree, plain text replies);
 /// ⌘↑↓ moves between sessions; ⌘⏎ expands the session full-height.
 struct CommandView: View {
     @Environment(AppModel.self) private var appModel
@@ -13,7 +13,7 @@ struct CommandView: View {
     @State private var jumpSelection: Int = 0         // cursor inside the @ jump results
     @State private var status: String?
     @State private var pendingKill: Session?          // session awaiting a kill confirmation
-    @State private var showQuickCommand = false       // ⌘J quick command (hidden by default)
+    @State private var showQuickCommand = false       // ⌘P quick command (hidden by default)
     @State private var newSessionMode = false         // ⌘N: results are PROJECTS, ⏎ starts a session
     @State private var terminal: TerminalController?  // live client attached to the selected session
     @State private var terminalTarget: String?        // which session the home terminal shows
@@ -53,9 +53,9 @@ struct CommandView: View {
     private var jumpMessageIsReady: Bool {
         (jumpMessage?.trimmingCharacters(in: .whitespaces).isEmpty == false)
     }
-    /// The centered quick command is up: summoned with ⌘J, or forced when there's no session
+    /// The centered quick command is up: summoned with ⌘P, or forced when there's no session
     /// yet (creating one is the only possible action). It hides after sending a message, or
-    /// with another ⌘J — Esc never dismisses it (nor the panel).
+    /// with another ⌘P — Esc never dismisses it (nor the panel).
     private var showsCommandBar: Bool { showQuickCommand || sessions.isEmpty }
     /// The quick command currently owns the keyboard (otherwise the terminal does).
     private var typingInBar: Bool { showsCommandBar && omniboxFocused }
@@ -259,7 +259,7 @@ struct CommandView: View {
             if pendingKill != nil { pendingKill = nil; return true }
             if typingInBar {
                 if !query.isEmpty { query = "" } // clear the draft; the quick command stays up
-                return true // Esc never closes the quick command (send a message or ⌘J)
+                return true // Esc never closes the quick command (send a message or ⌘P)
             }
             // The terminal owns Esc (interrupting the agent). Close the panel with ⌘⌘/⌥Space.
             return false
@@ -322,7 +322,7 @@ struct CommandView: View {
                     }
                 }
             }
-            // ⌘J — the shared message bar floats centered over the home (Spotlight-style).
+            // ⌘P — the quick command floats centered over the home (Spotlight-style).
             // The home (and its attached terminal) stays mounted behind it.
             .overlay {
                 if showsCommandBar {
@@ -346,7 +346,7 @@ struct CommandView: View {
         .task(id: terminalKey) { await runTerminal() }
     }
 
-    // MARK: Centered message bar (⌘J)
+    // MARK: Centered quick command (⌘P)
 
     private func commandBarOverlay(maxWidth: CGFloat) -> some View {
         ZStack {
@@ -609,7 +609,7 @@ struct CommandView: View {
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘J quick command · ⌘↑↓ sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘↑↓ sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 6)
@@ -669,7 +669,7 @@ struct CommandView: View {
         if isJumpMode { jumpSelection = 0 } // filtering always re-selects the top match
     }
 
-    /// ⌘J — show/hide the quick command. Hiding it hands the keyboard back to the terminal.
+    /// ⌘P — show/hide the quick command. Hiding it hands the keyboard back to the terminal.
     private func toggleQuickCommand() {
         if showQuickCommand { hideQuickCommand() }
         else { status = nil; showQuickCommand = true; refocusField() }
@@ -832,7 +832,7 @@ enum FieldEditorFix {
 
 /// The focused session in the home stack — its LIVE terminal embedded in the card: a real
 /// tmux client (full colors/styles), so keystrokes go straight into the agent's TUI. The
-/// shared message bar (⌘J) handles send-without-focus; the card itself is all terminal.
+/// quick command (⌘P) handles send-without-focus; the card itself is all terminal.
 struct FocusedSessionCard: View {
     let session: Session
     var terminal: TerminalController?
@@ -845,7 +845,7 @@ struct FocusedSessionCard: View {
         VStack(alignment: .leading, spacing: 8) {
             header
             terminalBody
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘J quick command · ⌘↑↓ sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘↑↓ sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
         .padding(12)

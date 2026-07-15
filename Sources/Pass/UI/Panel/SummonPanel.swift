@@ -7,7 +7,7 @@ import AppKit
 /// the first responder ever sees it, so this works no matter what has focus.
 enum PanelNavKey {
     case up, down, returnKey, escape, tab, delete
-    /// ⌘J — toggle the centered message bar (the home terminal owns plain keys by default).
+    /// ⌘P — toggle the centered quick command (the home terminal owns plain keys by default).
     case toggleInput
     /// ⇧⇧ (double-tap, routed from DoubleTapHotkey) — hop to the next session waiting on you.
     case nextWaiting
@@ -95,9 +95,18 @@ final class SummonPanel: NSPanel {
             if code == 51, onNavigate?(PanelNavEvent(key: .delete, command: true, option: false)) == true {
                 return true
             }
-            // ⌘J toggles the centered message bar — typing goes into the embedded terminal
-            // by default.
+            // ⌘J / ⌘K — vim-style session movement (down / up), same as ⌘↓ / ⌘↑.
             if key("j", 38),
+               onNavigate?(PanelNavEvent(key: .down, command: true, option: false)) == true {
+                return true
+            }
+            if key("k", 40),
+               onNavigate?(PanelNavEvent(key: .up, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘P toggles the centered quick command — typing goes into the embedded terminal
+            // by default.
+            if key("p", 35),
                onNavigate?(PanelNavEvent(key: .toggleInput, command: true, option: false)) == true {
                 return true
             }
