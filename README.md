@@ -77,3 +77,6 @@ Claude Code (in tmux)  ──hooks(HTTP)──►  HookServer (127.0.0.1:49817)
   environment (the S0 spikes that de-risked the architecture before any Swift was written).
 - `BUILD.md` — build/signing setup and platform gotchas (notification signing, non-activating
   panel `collectionBehavior`, tmux `-F` control-byte escaping, accessory-app edit shortcuts).
+- `docs/BROWSER.md` — design (M6, pre-implementation): the embedded browser pane
+  (terminal │ WKWebView split) and the `passctl` CLI that lets agents open pages in it
+  (`passctl browser open <url>`), plus the S6 spikes to validate before building.
