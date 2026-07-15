@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var launchAtLogin = LoginItemService.isEnabled
     @State private var floating = true
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
+    @AppStorage("backupOptimizeGit") private var backupOptimizeGit = true
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
 
     var body: some View {
@@ -54,6 +55,20 @@ struct SettingsView: View {
                     }
                 }
                 Text("Tip: click the dot at the front of a session card to give its project an emoji.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Backup") {
+                Toggle("Optimize git repos (store remote URL only)", isOn: $backupOptimizeGit)
+                HStack(spacing: 8) {
+                    Button("Export backup…") { appModel.exportAllProjects(optimizeGit: backupOptimizeGit) }
+                        .disabled(appModel.isExporting || (appModel.projects?.projects.isEmpty ?? true))
+                    if appModel.isExporting { ProgressView().controlSize(.small) }
+                    if let msg = appModel.lastExportMessage {
+                        Text(msg).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text("Bundles every registered project + settings into one .tar.gz you can move to another Mac. Build artifacts (node_modules, .build, …) are excluded. With optimize on, git repos that have a remote are stored as URL + commit instead of copied.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

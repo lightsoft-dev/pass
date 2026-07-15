@@ -177,6 +177,59 @@ final class AppModel {
         }
     }
 
+    // MARK: Backup / export
+
+    /// Transient result of the last export (shown in Settings): a short summary on success, or the
+    /// error message on failure. Twin of `lastProjectAddMessage`.
+    var lastExportMessage: String?
+
+    /// True while an export runs — drives a spinner in Settings.
+    var isExporting: Bool = false
+
+    /// Export all registered projects (+ Pass settings) into a single .tar.gz the user picks.
+    /// Heavy work runs off the main thread; result/error surface via `lastExportMessage`.
+    func exportAllProjects(optimizeGit: Bool) {
+        let all = projects?.projects ?? []
+        guard !all.isEmpty else { lastExportMessage = "No projects to back up yet."; return }
+        guard let dest = ProjectPicker.saveBackupPanel(defaultName: "pass-backup-\(Self.timestamp()).tar.gz") else { return }
+
+        isExporting = true
+        lastExportMessage = nil
+        let options = ProjectExportService.Options(optimizeGitRepos: optimizeGit)
+        Task { @MainActor in
+            let result = await Self.runExport(projects: all, options: options, to: dest)
+            isExporting = false
+            switch result {
+            case .success(let s):
+                lastExportMessage = "Backed up \(s.total) project\(s.total == 1 ? "" : "s") · \(s.linkedByURL) linked, \(s.archived) archived · \(Self.humanBytes(s.bytes))"
+                Log.app.info("export ok: \(s.total) projects, \(s.bytes) bytes -> \(dest.path, privacy: .public)")
+            case .failure(let f):
+                lastExportMessage = "Export failed: \(f.message)"
+                Log.app.error("export failed: \(f.message, privacy: .public)")
+            }
+        }
+    }
+
+    /// Run the blocking export on a background queue.
+    private static func runExport(projects: [Project], options: ProjectExportService.Options,
+                                  to dest: URL) async -> Result<ProjectExportService.Summary, ProjectExportService.Failure> {
+        await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: ProjectExportService.export(projects: projects, options: options, to: dest))
+            }
+        }
+    }
+
+    private static func timestamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd-HHmm"
+        return f.string(from: Date())
+    }
+
+    private static func humanBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
     func installHooks() {
         let status = ClaudeHooksInstaller.install()
         needsHookInstall = !ClaudeHooksInstaller.isInstalled()

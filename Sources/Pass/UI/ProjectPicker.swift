@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// Directory picker for registering projects. Allows multiple selection so the user can pick
 /// several project folders, or a single parent folder to scan.
@@ -26,5 +27,18 @@ enum ProjectPicker {
         panel.message = message
         NSApp.activate(ignoringOtherApps: true)
         return panel.runModal() == .OK ? panel.url?.path : nil
+    }
+
+    /// Choose where to write a backup archive. Returns the destination URL, or nil if cancelled.
+    @MainActor
+    static func saveBackupPanel(defaultName: String) -> URL? {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = defaultName
+        panel.allowedContentTypes = [.gzip]
+        panel.canCreateDirectories = true
+        panel.prompt = "Export"
+        panel.message = "Choose where to save the Pass backup"
+        NSApp.activate(ignoringOtherApps: true)
+        return panel.runModal() == .OK ? panel.url : nil
     }
 }
