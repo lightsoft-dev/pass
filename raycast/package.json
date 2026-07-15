@@ -1,0 +1,106 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "pass",
+  "title": "Pass",
+  "description": "Mission control for Claude Code sessions running in tmux. List, reply to, and create pass sessions straight from Raycast.",
+  "icon": "extension-icon.png",
+  "author": "zimin_byun",
+  "platforms": ["macOS"],
+  "categories": ["Applications", "Developer Tools", "Productivity"],
+  "license": "MIT",
+  "preferences": [
+    {
+      "name": "terminalApp",
+      "title": "Attach Terminal",
+      "description": "Which terminal to open when attaching to a tmux session.",
+      "type": "dropdown",
+      "required": false,
+      "default": "ghostty",
+      "data": [
+        { "title": "Ghostty (fallback to Terminal)", "value": "ghostty" },
+        { "title": "Terminal.app", "value": "terminal" }
+      ]
+    },
+    {
+      "name": "claudeCommand",
+      "title": "Claude Launch Command",
+      "description": "Command typed into a fresh session when the agent is Claude.",
+      "type": "textfield",
+      "required": false,
+      "default": "claude"
+    },
+    {
+      "name": "codexCommand",
+      "title": "Codex Launch Command",
+      "description": "Command typed into a fresh session when the agent is Codex.",
+      "type": "textfield",
+      "required": false,
+      "default": "codex"
+    },
+    {
+      "name": "piCommand",
+      "title": "pi Launch Command",
+      "description": "Command typed into a fresh session when the agent is pi.",
+      "type": "textfield",
+      "required": false,
+      "default": "pi"
+    }
+  ],
+  "commands": [
+    {
+      "name": "list-sessions",
+      "title": "List Sessions",
+      "subtitle": "Pass",
+      "description": "Browse every pass session with its last response and attention state. Reply, answer prompts, attach, or kill.",
+      "mode": "view"
+    },
+    {
+      "name": "reply",
+      "title": "Reply to Session",
+      "subtitle": "Pass",
+      "description": "Pick a running pass session and inject a reply into its agent.",
+      "mode": "view"
+    },
+    {
+      "name": "send-message",
+      "title": "Send Message to Session",
+      "subtitle": "Pass",
+      "description": "Send text and/or a file's contents to a pass session's agent.",
+      "mode": "view"
+    },
+    {
+      "name": "new-session",
+      "title": "New Session",
+      "subtitle": "Pass",
+      "description": "Create a new pass tmux session for a project and launch an agent.",
+      "mode": "view"
+    },
+    {
+      "name": "attention",
+      "title": "Pass Attention",
+      "subtitle": "Pass",
+      "description": "Menu-bar count of pass sessions that need your answer right now.",
+      "mode": "menu-bar",
+      "interval": "15s"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.104.22",
+    "@raycast/utils": "^1.17.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.4",
+    "@types/node": "22.19.17",
+    "@types/react": "19.0.10",
+    "eslint": "^9.22.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.2"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
