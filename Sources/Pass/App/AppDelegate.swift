@@ -108,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @MainActor
     private func startHookPipeline() {
         let notifications = self.notifications
+        let appModel = self.appModel
         let router = EventRouter(
             sessions: appModel.sessions,
             onAttention: { name, display, att in
@@ -120,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
                 Task { await notifications.notify(session: name, kind: att.kind.rawValue,
                                                   title: display, body: body, sound: sound) }
+                appModel.extensionRuntime?.attentionPending(sessionName: name, attention: att)
             },
             onResolved: { name in
                 notifications.clear(session: name, kinds: [
@@ -127,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     Attention.Kind.input.rawValue,
                     Attention.Kind.finished.rawValue,
                 ])
+                appModel.extensionRuntime?.attentionResolved(sessionName: name)
             }
         )
         self.eventRouter = router

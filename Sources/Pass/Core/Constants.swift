@@ -11,6 +11,14 @@ enum PassConfig {
     /// tmux session name prefix. All pass-managed sessions are `pass-<slug>`.
     static let sessionPrefix = "pass-"
 
+    /// pass's own state directory (`~/.pass`). Extensions live under it; nothing inside it is
+    /// ever a project/workspace. The single spelling — SessionStore and ExtensionStore both
+    /// derive from here so the "never remember ~/.pass" guard can't drift from the layout.
+    static var stateDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pass", isDirectory: true)
+    }
+
     /// tmux custom options used to persist project/agent binding across app restarts.
     static let optProjectRoot = "@pass_project_root"
     static let optAgent = "@pass_agent"

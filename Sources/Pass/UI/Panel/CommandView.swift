@@ -3,8 +3,8 @@ import SwiftUI
 /// Root of the floating panel — a chat-style home over every session, with the SELECTED
 /// session shown as a live terminal: a real `tmux attach` client (colors, styles, cursor),
 /// so every keystroke goes straight into the agent's TUI and all of its features work.
-/// ⌘P summons the quick command (`@` jump, `+branch` worktree, plain text replies);
-/// ⌘↑↓ moves between sessions; ⌘⏎ expands the session full-height.
+/// ⌘P summons the quick command (`@` jump, `+branch` worktree, `>command` extensions,
+/// plain text replies); ⌘↑↓ moves between sessions; ⌘⏎ expands the session full-height.
 struct CommandView: View {
     @Environment(AppModel.self) private var appModel
     @State private var route: Route = .list
@@ -33,8 +33,13 @@ struct CommandView: View {
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
     /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
-    /// and is simply stripped). Only `+branch` (worktree) opts out.
-    private var isJumpMode: Bool { !query.isEmpty && !query.hasPrefix("+") }
+    /// and is simply stripped). Only `+branch` (worktree) and `>command` (extensions) opt out.
+    private var isJumpMode: Bool { !query.isEmpty && !query.hasPrefix("+") && !query.hasPrefix(">") }
+    /// `>` prefix (VS Code's command convention) — the results are extension commands; ⏎ runs
+    /// the selected one. NOT `/`: slash-prefixed text must keep flowing to the agent session
+    /// (`/compact`, `/clear`, or any message starting with a path).
+    /// (⌘N new-session mode keeps its project list even if the filter starts with '>'.)
+    private var isCommandMode: Bool { query.hasPrefix(">") && !newSessionMode }
 
     // A jump query is `<token> <message>`: the token (up to the first space) filters/selects a
     // session; anything after the first space is a message to send to it. Tab completes the token.
@@ -71,6 +76,13 @@ struct CommandView: View {
     /// live sessions are offered; registered projects join once a filter narrows things down
     /// (there are far too many to list unfiltered).
     private var jumpItems: [PaletteItem] {
+        // `>` mode: extension commands (from enabled, valid extensions only).
+        if isCommandMode {
+            let needle = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
+            return (appModel.extensions?.paletteCommands ?? [])
+                .filter { needle.isEmpty || Fuzzy.matches(needle, $0.command.id) || Fuzzy.matches(needle, $0.command.title) }
+                .map { .command($0) }
+        }
         let needle = jumpToken.trimmingCharacters(in: .whitespaces)
         // ⌘N mode: the list is PROJECTS to start a session in (all of them until you type).
         if newSessionMode {
@@ -135,7 +147,9 @@ struct CommandView: View {
                 }
             }
             .onChange(of: appModel.forceOpenSession) { _, s in
-                if let s { route = .detail(s) }
+                // Consume the request so the SAME session can be force-opened again later
+                // (onChange only fires on a value change).
+                if let s { route = .detail(s); appModel.forceOpenSession = nil }
             }
             // Keep `selection` on the same session when the home list reorders (e.g. one becomes
             // pending and drops to the bottom cluster) — so the terminal never silently switches
@@ -222,24 +236,29 @@ struct CommandView: View {
             return true
         case .up:
             if e.command { navMove(-1); return true }
-            if isJumpMode || (newSessionMode && typingInBar) { moveJump(-1); return true }
+            if isJumpMode || isCommandMode || (newSessionMode && typingInBar) { moveJump(-1); return true }
             return false // terminal (or the bar's text cursor) gets plain arrows
         case .down:
             if e.command { navMove(1); return true }
-            if isJumpMode || (newSessionMode && typingInBar) { moveJump(1); return true }
+            if isJumpMode || isCommandMode || (newSessionMode && typingInBar) { moveJump(1); return true }
             return false
         case .tab:
             // Tab autocompletes the '@' token to the top match, then leaves a trailing space so
             // you can keep typing a message: "@iv" → "@ivma " → "@ivma xx 작업 부탁해". While
             // typing in the bar, swallow it (no responder-chain hop); otherwise the terminal
             // gets real Tabs (TUI completion).
-            if isJumpMode { completeJump(); return true }
+            if isJumpMode || isCommandMode { completeJump(); return true }
             return typingInBar
         case .nextWaiting:
-            // ⇧⇧ — hop to the next session waiting on you (cycling).
-            guard !isJumpMode else { return true }
+            // ⇧⇧ — hop to the next session waiting on you (cycling). Inert while typing a
+            // query — moving the selection would silently retarget a session-context command.
+            guard !isJumpMode, !isCommandMode else { return true }
             return jumpToNextWaiting()
         case .returnKey:
+            if isCommandMode {
+                if case .command(let c)? = jumpSelectedItem { runExtensionCommand(c) }
+                return true
+            }
             if newSessionMode {
                 if case .project(let p)? = jumpSelectedItem {
                     appModel.createSession(projectDir: p.rootPath)
@@ -263,6 +282,8 @@ struct CommandView: View {
                     appModel.createSession(projectDir: p.rootPath) // ⏎ start it
                     query = ""
                     hideQuickCommand() // action done — watch the new session arrive
+                case .command(let c):
+                    runExtensionCommand(c) // commands only appear in `>` mode, but stay exhaustive
                 }
                 return true
             }
@@ -395,9 +416,10 @@ struct CommandView: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: newSessionMode ? "plus.circle"
-                        : query.hasPrefix("+") ? "arrow.triangle.branch" : "magnifyingglass")
+                        : query.hasPrefix("+") ? "arrow.triangle.branch"
+                        : isCommandMode ? "puzzlepiece.extension" : "magnifyingglass")
                     .font(.system(size: 16))
-                    .foregroundStyle(newSessionMode || isJumpMode || query.hasPrefix("+")
+                    .foregroundStyle(newSessionMode || isJumpMode || isCommandMode || query.hasPrefix("+")
                                      ? Color.accentColor : .secondary)
                 TextField(placeholder, text: $query)
                     .textFieldStyle(.plain)
@@ -407,7 +429,7 @@ struct CommandView: View {
                     // Tab completes the @-token here — the field editor eats Tab before
                     // performKeyEquivalent sees it, so intercept it at the SwiftUI layer.
                     .onKeyPress(.tab) {
-                        if isJumpMode { completeJump(); return .handled }
+                        if isJumpMode || isCommandMode { completeJump(); return .handled }
                         return .ignored
                     }
                     .onAppear { refocusField() } // grab focus the instant this field mounts
@@ -441,7 +463,9 @@ struct CommandView: View {
     @ViewBuilder
     private var jumpResults: some View {
         if jumpItems.isEmpty {
-            Text(selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
+            Text(isCommandMode
+                 ? "No extension commands — install & enable extensions in Settings."
+                 : selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
                  ?? "No matches — try a different name.")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -482,6 +506,15 @@ struct CommandView: View {
             return branch.isEmpty ? "⏎ new git worktree + session (name the branch)"
                                   : "⏎ create worktree “\(branch)” + session"
         }
+        if isCommandMode {
+            if case .command(let c)? = jumpSelectedItem {
+                // Everything but "global" runs against the selected session (runtime rule).
+                let target = c.command.contextKind == "global" ? ""
+                    : (selectedSession.map { " on \($0.displayName)" } ?? " — select a session first")
+                return "⏎ run \(c.token)\(target) · \(c.extensionName)"
+            }
+            return "extension commands · ⏎ run · Esc close"
+        }
         if isJumpMode {
             if jumpItems.isEmpty, let s = selectedSession {
                 return "no matches — ⏎ sends this to \(s.displayName)"
@@ -492,7 +525,7 @@ struct CommandView: View {
             }
             return "Tab complete · ⏎ go to session · keep typing to message it"
         }
-        return "type to search · first word filters, the rest is the message · +branch"
+        return "type to search · first word filters, the rest is the message · +branch · >command"
     }
 
     @ViewBuilder
@@ -686,9 +719,9 @@ struct CommandView: View {
     }
 
     /// ⌘↑↓ session navigation. Abandon an in-progress message draft when moving to another
-    /// session; in @ jump mode, keep the filter text (plain arrows move the result cursor).
+    /// session; in @ jump / > command mode, keep the filter text (plain arrows move the cursor).
     private func navMove(_ delta: Int) {
-        if !isJumpMode { query = "" }
+        if !isJumpMode && !isCommandMode { query = "" }
         guard !orderedSessions.isEmpty else { return }
         selection = max(0, min(orderedSessions.count - 1, selection + delta))
     }
@@ -715,7 +748,7 @@ struct CommandView: View {
             query = new.replacingOccurrences(of: " ", with: "-")
             return
         }
-        if isJumpMode { jumpSelection = 0 } // filtering always re-selects the top match
+        if isJumpMode || isCommandMode { jumpSelection = 0 } // filtering always re-selects the top match
     }
 
     /// ⌘P — show/hide the quick command. Hiding it hands the keyboard back to the terminal.
@@ -752,6 +785,7 @@ struct CommandView: View {
         switch top {
         case .session(let s): token = jumpCompletionToken(s)
         case .project(let p): token = Slug.make(p.name)
+        case .command(let c): token = c.token
         }
         let msg = jumpMessage ?? ""
         query = token + " " + msg
@@ -824,6 +858,22 @@ struct CommandView: View {
             jumpToSession(s)
         case .project(let p):
             appModel.createSession(projectDir: p.rootPath); query = ""
+        case .command(let c):
+            runExtensionCommand(c)
+        }
+    }
+
+    /// Run an extension's `/command` against the selected session. The bar closes on success
+    /// (a terminal-mode command opens its report session); a failure reopens it with the error.
+    private func runExtensionCommand(_ c: ExtensionStore.PaletteCommand) {
+        let session = selectedSession
+        hideQuickCommand()
+        Task {
+            if let err = await appModel.extensionRuntime?.run(c, session: session) {
+                status = "⚠ \(c.token): \(err)"
+                showQuickCommand = true
+                refocusField()
+            }
         }
     }
 
@@ -1155,11 +1205,13 @@ struct CompactSessionCard: View {
 enum PaletteItem: Identifiable {
     case session(Session)
     case project(Project)
+    case command(ExtensionStore.PaletteCommand)
 
     var id: String {
         switch self {
         case .session(let s): return "s:" + s.name
         case .project(let p): return "p:" + p.rootPath
+        case .command(let c): return "c:" + c.id
         }
     }
 }
@@ -1173,6 +1225,7 @@ struct PaletteRow: View {
             switch item {
             case .session(let s): sessionRow(s)
             case .project(let p): projectRow(p)
+            case .command(let c): commandRow(c)
             }
         }
         .padding(.horizontal, 8)
@@ -1241,6 +1294,19 @@ struct PaletteRow: View {
             Text(p.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
             Spacer()
             Text("new session").font(.system(size: 11)).foregroundStyle(.tertiary)
+        }
+    }
+
+    private func commandRow(_ c: ExtensionStore.PaletteCommand) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "puzzlepiece.extension")
+                .font(.system(size: 12)).frame(width: 16).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(c.token).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                Text(c.command.title).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Text(c.extensionName).font(.system(size: 11)).foregroundStyle(.tertiary)
         }
     }
 }

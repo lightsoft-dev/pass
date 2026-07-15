@@ -5,14 +5,15 @@ import Foundation
 @MainActor
 final class EventRouter {
     private let sessions: SessionStore
-    /// Called when a session enters/updates a needs-you (or finished) state.
-    private let onAttention: (_ name: String, _ display: String, _ attention: Attention) -> Void
+    /// Called when a session enters/updates a needs-you (or finished) state. @MainActor so the
+    /// wiring in AppDelegate can touch main-actor state (extension runtime) directly.
+    private let onAttention: @MainActor (_ name: String, _ display: String, _ attention: Attention) -> Void
     /// Called when a session no longer needs the user (started/ended) — clear its notifications.
-    private let onResolved: (_ name: String) -> Void
+    private let onResolved: @MainActor (_ name: String) -> Void
 
     init(sessions: SessionStore,
-         onAttention: @escaping (String, String, Attention) -> Void,
-         onResolved: @escaping (String) -> Void) {
+         onAttention: @escaping @MainActor (String, String, Attention) -> Void,
+         onResolved: @escaping @MainActor (String) -> Void) {
         self.sessions = sessions
         self.onAttention = onAttention
         self.onResolved = onResolved
