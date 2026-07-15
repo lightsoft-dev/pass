@@ -1,0 +1,24 @@
+{
+  "apiVersion": 1,
+  "id": "agent-usage",
+  "name": "Agent Usage",
+  "version": "0.1.0",
+  "description": "Claude Code 토큰 사용량 리포트 — ⌘P에서 >usage (최근 7일, 일자·모델·프로젝트별)",
+  "permissions": ["run:script", "session:create"],
+  "contributes": {
+    "commands": [
+      {
+        "id": "usage",
+        "title": "Agent 사용량 보기 (최근 7일)",
+        "context": "global",
+        "run": { "script": "usage.sh", "terminal": true }
+      },
+      {
+        "id": "usage-month",
+        "title": "Agent 사용량 보기 (최근 30일)",
+        "context": "global",
+        "run": { "script": "usage.sh", "args": ["30"], "terminal": true }
+      }
+    ]
+  }
+}
