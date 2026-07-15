@@ -26,6 +26,25 @@ enum PassConfig {
     /// Env var injected at session create so hooks can self-identify (X-Pass-Session header).
     static let sessionEnvVar = "PASS_SESSION"
 
+    /// Env var injected at session create pointing at the passcli binary (stable symlink) —
+    /// shell rc files rebuild PATH (macOS path_helper), but they never unset foreign vars,
+    /// so agents can always call `"$PASS_CLI" browser open …` (BROWSER.md §5.2).
+    static let cliEnvVar = "PASS_CLI"
+
+    /// Stable location of the passcli symlink, refreshed on every app launch so it survives
+    /// the app moving (or running from a build directory). Also the path the SessionStart
+    /// advertise hook uses.
+    static var cliBinDir: String { NSHomeDirectory() + "/.pass/bin" }
+    static var cliSymlinkPath: String { cliBinDir + "/passcli" }
+
+    /// Where `passcli browser screenshot` writes when no output path is given.
+    static var screenshotsDir: String { NSHomeDirectory() + "/.pass/screenshots" }
+
+    /// /cli/* request limits (loopback-only, but bound anyway — BROWSER.md §6).
+    static let cliMaxBodyBytes = 64 * 1024
+    static let cliMaxURLBytes = 8 * 1024
+    static let cliMaxReadBytes = 512 * 1024
+
     /// Reconcile poll interval (session list truth).
     static let reconcileInterval: TimeInterval = 2.0
 

@@ -185,6 +185,25 @@ struct CommandView: View {
     /// is first responder, and plain keys (arrows, ⏎, Esc, Tab, digits…) belong to the TUI
     /// running in the session. Only ⌘-chords and message-bar editing are handled here.
     private func handleNav(_ e: PanelNavEvent) -> Bool {
+        // Browser keys (⌘B/⌘L/⌘⇧B) work wherever a session workspace is on screen —
+        // the home terminal AND the detail view — so they're routed before the list guard.
+        switch e.key {
+        case .toggleBrowser:
+            guard let name = workspaceSessionName else { return true }
+            appModel.toggleBrowser(for: name)
+            return true
+        case .focusAddress:
+            guard let name = workspaceSessionName else { return true }
+            appModel.focusBrowserAddress(for: name)
+            return true
+        case .expandBrowser:
+            guard let name = workspaceSessionName,
+                  appModel.browser?.visibleTab(for: name) != nil else { return true }
+            appModel.browser?.expanded.toggle()
+            return true
+        default:
+            break
+        }
         guard route == .list else { return false }
         switch e.key {
         case .toggleInput:
@@ -285,6 +304,17 @@ struct CommandView: View {
             }
             // The terminal owns Esc (interrupting the agent). Close the panel with ⌘⌘/⌥Space.
             return false
+        case .toggleBrowser, .focusAddress, .expandBrowser:
+            return true // handled above, before the route guard
+        }
+    }
+
+    /// The session whose workspace (terminal │ browser) is on screen — browser keys target it.
+    private var workspaceSessionName: String? {
+        switch route {
+        case .detail(let name), .specSession(let name, _): return name
+        case .list: return selectedSession?.name
+        case .specs: return nil
         }
     }
 
@@ -517,7 +547,8 @@ struct CommandView: View {
                             CompactSessionCard(session: s, selected: idx == selection,
                                                onSelect: { selection = idx },
                                                onDelete: { pendingKill = s },
-                                               onSpecs: { route = .specs(s.projectRoot) })
+                                               onSpecs: { route = .specs(s.projectRoot) },
+                                               browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
                                 .transition(rowTransition)
                         }
                     }
@@ -546,7 +577,8 @@ struct CommandView: View {
                                         onSpecs: { route = .specs(s.projectRoot) }
                                     )
                                 } else {
-                                    CompactSessionCard(session: s, onSelect: { selection = idx })
+                                    CompactSessionCard(session: s, onSelect: { selection = idx },
+                                                       browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
                                 }
                             }
                             .transition(rowTransition)
@@ -604,9 +636,13 @@ struct CommandView: View {
     private func runTerminal() async {
         guard !terminalKey.isEmpty else {
             terminal = nil
+            appModel.focusedSessionName = nil // no workspace on screen
             return
         }
         let name = terminalKey
+        // The session whose workspace is on screen — a CLI browser open targeting it may
+        // show immediately; any other session only gets the 🌐 badge (never steal focus).
+        appModel.focusedSessionName = name
         // Warm clients for the sessions you're likely to hop to next (waiting ones first, for
         // ⇧⇧) BEFORE touching the current one, so the LRU never evicts the session on screen.
         // They're sized like the on-screen terminal so tmux never reflows to a phantom 80×25.
@@ -629,12 +665,16 @@ struct CommandView: View {
         // Edge-to-edge: the terminal's BACKGROUND fills the whole section; the text is inset
         // by same-color padding so it can breathe. A hairline key-hint strip sits under it.
         VStack(alignment: .leading, spacing: 0) {
-            if let live = displayedTerminal {
-                TerminalPaneView(controller: live)
-                    .id(live.sessionName) // new session → new NSView (updateNSView can't swap it)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
-                    .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
+            if let live = displayedTerminal, let s = selectedSession {
+                // Workspace = terminal │ (optional) browser split for the selected session.
+                SessionWorkspaceView(session: s) {
+                    TerminalPaneView(controller: live)
+                        .id(live.sessionName) // new session → new NSView (updateNSView can't swap it)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
+                        .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if selectedSession?.launching == true {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -646,7 +686,7 @@ struct CommandView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Divider()
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 8).padding(.vertical, 3)
         }
@@ -859,9 +899,13 @@ struct CommandView: View {
         refocusField()
     }
 
-    /// Where the cursor lands when the panel opens: on the waiting session nearest the input
-    /// (bottom of the queue) so you can act on it immediately, else the top.
+    /// Where the cursor lands when the panel opens: an explicitly requested session first
+    /// (notification click, CLI browser open — `pendingPreselect`, consumed here), else the
+    /// waiting session nearest the input (bottom of the queue), else the top.
     private func initialSelection() -> Int {
+        let target = appModel.pendingPreselect
+        appModel.pendingPreselect = nil
+        if let target, let i = orderedSessions.firstIndex(where: { $0.name == target }) { return i }
         if let i = orderedSessions.lastIndex(where: { $0.needsUser }) { return i }
         return 0
     }
@@ -910,7 +954,7 @@ struct FocusedSessionCard: View {
             header
                 .padding(.horizontal, 12).padding(.top, 10)
             terminalBody // full-bleed: the terminal spans the card edge-to-edge
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 12).padding(.bottom, 8)
         }
@@ -939,13 +983,17 @@ struct FocusedSessionCard: View {
             .frame(maxWidth: .infinity, minHeight: 120, alignment: .leading)
         } else if let terminal {
             // Full-bleed background, inset text: the same-color padding keeps the terminal
-            // reading as edge-to-edge while the content breathes.
-            TerminalPaneView(controller: terminal)
-                .id(terminal.sessionName) // new session → new NSView (updateNSView can't swap it)
-                .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
-                .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
-                .frame(maxWidth: .infinity)
-                .frame(height: 340)
+            // reading as edge-to-edge while the content breathes. The workspace wrapper adds
+            // the browser split when this session has a visible tab.
+            SessionWorkspaceView(session: session) {
+                TerminalPaneView(controller: terminal)
+                    .id(terminal.sessionName) // new session → new NSView (updateNSView can't swap it)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
+                    .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 340)
         } else {
             ProgressView()
                 .frame(maxWidth: .infinity)
@@ -1052,6 +1100,8 @@ struct CompactSessionCard: View {
     var onSelect: () -> Void = {}
     var onDelete: (() -> Void)? = nil
     var onSpecs: (() -> Void)? = nil
+    /// An agent opened/updated this session's browser page and the user hasn't seen it yet.
+    var browserUnseen: Bool = false
 
     @State private var hovering = false
     @State private var renaming = false
@@ -1082,6 +1132,10 @@ struct CompactSessionCard: View {
                             .buttonStyle(.plain).foregroundStyle(.secondary)
                             .font(.system(size: 11)).help("Kill session (⌘⌫)")
                     }
+                }
+                if browserUnseen {
+                    Image(systemName: "globe").font(.system(size: 10)).foregroundStyle(.blue)
+                        .help("Agent opened a page — select the session to view it")
                 }
                 Text(RelativeTime.short(waitTime)).font(.system(size: 10)).foregroundStyle(urgencyColor)
             }

@@ -17,6 +17,12 @@ enum PanelNavKey {
     case newSession
     /// ⌘T — quick command prefilled with a worktree branch for the selected session.
     case newWorktree
+    /// ⌘B — toggle the current session's browser split (opens a blank tab if none).
+    case toggleBrowser
+    /// ⌘L — focus the browser's address field (shows the split first if needed).
+    case focusAddress
+    /// ⌘⇧B — expand the browser over the whole workspace / back to the split.
+    case expandBrowser
 }
 
 struct PanelNavEvent {
@@ -123,6 +129,21 @@ final class SummonPanel: NSPanel {
             // ⌘T — new worktree session off the selected session (branch name prefilled).
             if key("t", 17),
                onNavigate?(PanelNavEvent(key: .newWorktree, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘⇧B expands the browser; plain ⌘B toggles the split — shift checked first
+            // because the plain match would also fire with shift held.
+            if event.modifierFlags.contains(.shift), key("b", 11),
+               onNavigate?(PanelNavEvent(key: .expandBrowser, command: true, option: false)) == true {
+                return true
+            }
+            if key("b", 11),
+               onNavigate?(PanelNavEvent(key: .toggleBrowser, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘L — browser address field (browser keys work on home and in the detail view).
+            if key("l", 37),
+               onNavigate?(PanelNavEvent(key: .focusAddress, command: true, option: false)) == true {
                 return true
             }
             let cmdShift = event.modifierFlags.contains(.shift)

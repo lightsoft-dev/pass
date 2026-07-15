@@ -34,6 +34,11 @@ final class SessionStore {
     /// User-assigned display names per session (display-only; folder/tmux names untouched).
     private(set) var aliasByName: [String: String] = [:]
 
+    /// Called after every non-empty reconcile with the live session names — lets AppModel
+    /// prune session-scoped state held by other stores (browser tabs/webviews) without this
+    /// store knowing about them. Guarded on non-empty for the same transient-tmux-failure
+    /// reason as the state pruning below.
+    var onReconciled: ((Set<String>) -> Void)?
     /// Extension-runtime tap: sessions that appeared / vanished, reported once per reconcile.
     var onSessionsChanged: (@MainActor (_ created: [Session], _ ended: [String]) -> Void)?
     /// Names seen by the previous reconcile. nil until the first pass — adopting sessions
@@ -170,6 +175,7 @@ final class SessionStore {
             aliasByName = aliasByName.filter { liveNames.contains($0.key) }
             ephemeralSessions = ephemeralSessions.intersection(liveNames)
             if before != (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count) { scheduleSave() }
+            onReconciled?(liveNames)
         }
 
         // Extension events: which sessions appeared / vanished this pass. The FIRST pass is a
@@ -426,8 +432,13 @@ final class SessionStore {
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, self != nil else { return }
-            var snap = SessionStatePersistence.Snapshot(pending: [:], lastMessages: last,
-                                                        unacked: Array(unack), aliases: aliases)
+            // Load-modify-save: this store owns pending/lastMessages/unacked/aliases; fields
+            // owned by other stores (browserURLs) must survive our writes.
+            var snap = SessionStatePersistence.load()
+            snap.pending = [:]
+            snap.lastMessages = last
+            snap.unacked = Array(unack)
+            snap.aliases = aliases
             for (name, state) in attn {
                 if case .pending(let a) = state {
                     snap.pending[name] = .init(kind: a.kind.rawValue, receivedAt: a.receivedAt, preview: a.preview)
