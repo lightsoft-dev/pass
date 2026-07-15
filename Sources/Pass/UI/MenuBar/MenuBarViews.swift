@@ -20,6 +20,7 @@ struct MenuBarLabel: View {
 /// The menu-bar dropdown. Keyboard users route through the panel; this is a mouse courtesy.
 struct MenuBarContent: View {
     @Environment(AppModel.self) private var appModel
+    @AppStorage("backupOptimizeGit") private var backupOptimizeGit = true
 
     var body: some View {
         Button("Open pass") { appModel.summon() }
@@ -31,6 +32,8 @@ struct MenuBarContent: View {
             }
         }
         Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
+        Button("Back up all projects…") { appModel.exportAllProjects(optimizeGit: backupOptimizeGit) }
+            .disabled(appModel.isExporting)
         Toggle("Float above windows", isOn: Binding(
             get: { appModel.panelFloating },
             set: { appModel.setPanelFloating($0) })
