@@ -25,6 +25,9 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - Sources/Pass
+      # AppIcon.icns (generated from AppIcon-source.png via sips/iconutil — see BUILD.md)
+      - path: Resources
+        buildPhase: resources
     dependencies:
       - package: KeyboardShortcuts
       - package: FlyingFox
@@ -37,6 +40,7 @@ targets:
       properties:
         CFBundleName: Pass
         CFBundleDisplayName: Pass
+        CFBundleIconFile: AppIcon
         LSUIElement: true
         LSMinimumSystemVersion: "14.0"
         NSAppleEventsUsageDescription: "Pass opens tmux sessions in your terminal (Ghostty or Terminal) when you choose to attach."
