@@ -25,17 +25,22 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - Sources/Pass
+      # AppIcon.icns (generated from AppIcon-source.png via sips/iconutil — see BUILD.md)
+      - path: Resources
+        buildPhase: resources
     dependencies:
       - package: KeyboardShortcuts
       - package: FlyingFox
       - package: FlyingFox
         product: FlyingSocks
       - package: SwiftTerm
+      - target: PassShare
     info:
       path: Config/Info.plist
       properties:
         CFBundleName: Pass
         CFBundleDisplayName: Pass
+        CFBundleIconFile: AppIcon
         LSUIElement: true
         LSMinimumSystemVersion: "14.0"
         NSAppleEventsUsageDescription: "Pass opens tmux sessions in your terminal (Ghostty or Terminal) when you choose to attach."
@@ -55,6 +60,55 @@ targets:
         ENABLE_APP_SANDBOX: "NO"
         ENABLE_HARDENED_RUNTIME: "NO"
         SWIFT_VERSION: "5.0"
+
+  # OS share sheet target: share text/URL/images from any app → "Pass" → add a note, pick a
+  # session (or a project for a new one) → the payload lands in that agent as a message.
+  # Talks to the running app over the loopback hook server (port 49817).
+  PassShare:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - Sources/PassShare
+      # The share sheet needs the icon INSIDE the appex — the container-app fallback is
+      # unreliable on macOS (generic icon otherwise).
+      - path: Resources/AppIcon.icns
+        buildPhase: resources
+    entitlements:
+      # App extensions MUST be sandboxed — pluginkit silently refuses to register an
+      # unsandboxed .appex. network.client lets it reach the app's loopback server; the
+      # shared-file inbox lands in the extension's container (absolute paths still readable
+      # by the unsandboxed app/agents).
+      path: Config/PassShare.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-only: true
+    info:
+      path: Config/PassShareInfo.plist
+      properties:
+        CFBundleName: Pass
+        CFBundleDisplayName: Pass
+        CFBundleIconFile: AppIcon
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: PassShare.ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsImageWithMaxCount: 8
+              NSExtensionActivationSupportsFileWithMaxCount: 8
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass.share
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: H66C2M66DC
+        PROVISIONING_PROFILE_SPECIFIER: ""
+        ENABLE_HARDENED_RUNTIME: "NO"
+        SWIFT_VERSION: "5.0"
+        SKIP_INSTALL: "YES"
 
   PassTests:
     type: bundle.unit-test

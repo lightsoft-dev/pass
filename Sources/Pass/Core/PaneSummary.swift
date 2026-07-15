@@ -75,16 +75,25 @@ enum PaneSummary {
 
     /// TUI decoration that isn't the agent's actual output.
     private static func isChrome(_ t: String) -> Bool {
-        // Horizontal rules (─, ╌, -) of any length.
-        if t.allSatisfy({ $0 == "─" || $0 == "╌" || $0 == "-" || $0 == "═" }) { return true }
-        // Input box prompt line.
-        if t.hasPrefix("❯") { return true }
+        // Once box-drawing (─ │ ╭ ╮ ╰ ╯ …), prompt glyphs, and whitespace are removed, a
+        // decoration line has (almost) nothing left — catches full input-box borders, not
+        // just pure ─ runs.
+        if t.unicodeScalars.filter({ !isDecoration($0) }).count < 2 { return true }
         // Status bar: "branch | /path | Context: N% used", "← for agents", slash hints.
         if t.contains(" | ") && (t.contains("Context") || t.contains("used")) { return true }
-        if t.hasPrefix("←") || t.hasPrefix("↑") { return true }
+        if t.hasPrefix("←") || t.hasPrefix("↑") || t.hasPrefix("⏵") { return true }
         if t.hasPrefix("/") && t.count <= 8 { return true }        // "/rc", "/effort"
         if t.contains("for agents") || t.contains("to edit in") { return true }
+        if t.contains("shift+tab to cycle") { return true }        // mode line under the input box
         return false
+    }
+
+    /// Characters that draw the TUI rather than say anything: the box-drawing block, the
+    /// prompt/ellipsis glyphs, and whitespace.
+    private static func isDecoration(_ u: Unicode.Scalar) -> Bool {
+        if (0x2500...0x257F).contains(u.value) { return true } // ─ │ ┌ ╭ ╮ ╰ ╯ ═ ╌ …
+        if u == "❯" || u == ">" || u == "-" || u == "…" || u == "·" { return true }
+        return CharacterSet.whitespaces.contains(u)
     }
 
     private static func collapse(_ t: String) -> String {

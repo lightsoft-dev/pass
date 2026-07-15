@@ -8,8 +8,15 @@ struct HookHit: Sendable {
     let raw: RawHookEvent
 }
 
+/// Handlers backing the share-extension endpoints (wired by AppDelegate to ShareAPI).
+struct ShareHandlers: Sendable {
+    var targets: @Sendable () async -> Data
+    var send: @Sendable (Data) async -> Data
+}
+
 /// Loopback HTTP server that receives agent hook POSTs. Binds 127.0.0.1 only (no firewall
 /// prompt, no LAN exposure). Publishes hits on `events`; the main actor consumes and routes.
+/// Also serves the OS share extension (`/share/*`) — same port, same loopback-only rule.
 actor HookServer {
     let events: AsyncStream<HookHit>
     private let continuation: AsyncStream<HookHit>.Continuation
@@ -20,7 +27,7 @@ actor HookServer {
         (events, continuation) = AsyncStream.makeStream(of: HookHit.self)
     }
 
-    func start(port: UInt16) async {
+    func start(port: UInt16, share: ShareHandlers? = nil) async {
         guard let address = try? sockaddr_in.inet(ip4: "127.0.0.1", port: port) else {
             Log.hooks.error("could not build loopback address"); return
         }
@@ -38,6 +45,16 @@ actor HookServer {
                 cont.yield(HookHit(path: path, raw: RawHookEvent(json: json, header: header)))
             }
             return HTTPResponse(statusCode: .ok) // always 200, empty — never make the agent wait
+        }
+        if let share {
+            let json = [HTTPHeader("Content-Type"): "application/json"]
+            await server.appendRoute("GET /share/targets") { _ in
+                HTTPResponse(statusCode: .ok, headers: json, body: await share.targets())
+            }
+            await server.appendRoute("POST /share/send") { request in
+                let body = (try? await request.bodyData) ?? Data()
+                return HTTPResponse(statusCode: .ok, headers: json, body: await share.send(body))
+            }
         }
 
         runTask = Task {

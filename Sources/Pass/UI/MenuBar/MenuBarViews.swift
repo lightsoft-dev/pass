@@ -9,10 +9,10 @@ struct MenuBarLabel: View {
         if appModel.setupProblem != nil {
             Image(systemName: "exclamationmark.triangle.fill")
         } else if appModel.pendingCount > 0 {
-            // Glyph + count. SF Symbols has filled number badges up to 50.
-            Label("\(appModel.pendingCount)", systemImage: "tray.full.fill")
+            // App-icon glyph + pending count.
+            Label { Text("\(appModel.pendingCount)") } icon: { Image(nsImage: MenuBarIcon.image) }
         } else {
-            Image(systemName: "tray")
+            Image(nsImage: MenuBarIcon.image)
         }
     }
 }
@@ -30,6 +30,7 @@ struct MenuBarContent: View {
                 Button("\(agent.glyph) \(agent.rawValue)…") { newSession(agent: agent) }
             }
         }
+        Button("Feature specs…") { appModel.showSpecs() }
         Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
         Toggle("Float above windows", isOn: Binding(
             get: { appModel.panelFloating },

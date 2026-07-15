@@ -127,7 +127,10 @@ final class SessionStore {
                 } else {
                     session.liveTail = PaneSummary.lastContentLine(await tmux.capturePane(r.name, colors: false))
                 }
-            } else if session.lastMessage == nil {
+            } else if session.lastMessage == nil || session.needsUser {
+                // Waiting sessions refresh from the transcript too: the newest assistant text
+                // is usually the QUESTION being asked — far more useful on the card than a
+                // generic "Claude needs your input" hook preview or a stale last message.
                 if let text = await lastAssistantText(cwd: r.cwd) {
                     session.paneTail = text
                 } else {
@@ -138,14 +141,19 @@ final class SessionStore {
             next.append(session)
         }
 
-        // Drop attention / last messages for sessions that no longer exist.
-        let liveNames = Set(next.map(\.name))
-        let before = (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count)
-        attentionByName = attentionByName.filter { liveNames.contains($0.key) }
-        lastMessageByName = lastMessageByName.filter { liveNames.contains($0.key) }
-        unacked = unacked.intersection(liveNames)
-        aliasByName = aliasByName.filter { liveNames.contains($0.key) }
-        if before != (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count) { scheduleSave() }
+        // Drop attention / last messages for sessions that no longer exist — but NEVER on an
+        // empty listing: a transient tmux failure (server starting up, socket briefly gone,
+        // stale build mid-launch) is indistinguishable from "no sessions" and used to wipe
+        // every persisted alias/message/pending state in one save.
+        if !next.isEmpty {
+            let liveNames = Set(next.map(\.name))
+            let before = (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count)
+            attentionByName = attentionByName.filter { liveNames.contains($0.key) }
+            lastMessageByName = lastMessageByName.filter { liveNames.contains($0.key) }
+            unacked = unacked.intersection(liveNames)
+            aliasByName = aliasByName.filter { liveNames.contains($0.key) }
+            if before != (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count) { scheduleSave() }
+        }
 
         // Sort: needs-you first, then most-recent activity.
         sessions = next.sorted { a, b in
@@ -194,8 +202,11 @@ final class SessionStore {
     /// Create a new pass session for a project directory running the given agent. Inserts an
     /// optimistic "launching" placeholder card immediately (so there's instant feedback instead
     /// of waiting on tmux + a full reconcile), then swaps in the real session.
+    /// `initialPrompt` (e.g. shared content from the OS share sheet) is passed to the agent as
+    /// its CLI argument so it starts working on it right away.
     @discardableResult
-    func createSession(projectDir: String, agent: AgentKind = .claude) async -> String {
+    func createSession(projectDir: String, agent: AgentKind = .claude,
+                       initialPrompt: String? = nil) async -> String {
         // 1. Instant placeholder — a card appears the moment you hit create.
         let dirRepo = URL(fileURLWithPath: projectDir).lastPathComponent
         let provisional = Slug.sessionName(repo: dirRepo, branch: nil)
@@ -208,8 +219,14 @@ final class SessionStore {
         var name = Slug.sessionName(repo: repo, branch: branch)
         name = await uniqueName(name)
         let projectRoot = git?.projectRoot ?? projectDir
+        var launch = LaunchCommands.command(for: agent)
+        if let base = launch,
+           let prompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !prompt.isEmpty {
+            launch = base + " " + Shell.singleQuoted(prompt) // e.g. claude '<shared content>'
+        }
         await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
-                              agent: agent, launchCommand: LaunchCommands.command(for: agent))
+                              agent: agent, launchCommand: launch)
         projects.remember(rootPath: projectRoot)
 
         // 3. Swap the provisional card for the real one (name may differ once git/uniqueness resolve).
@@ -217,6 +234,26 @@ final class SessionStore {
         upsertLaunching(name: name, projectRoot: projectRoot, cwd: projectDir, agent: agent, git: git)
 
         // 4. Finalize from tmux (clears `launching`, fills attention).
+        await reconcile()
+        return name
+    }
+
+    /// Start a project tool (normally the spec document's dev server) in a visible, durable
+    /// tmux session. Unlike agent sessions, the document-provided command is launched directly
+    /// and the session is tagged `.shell`, so pass never mistakes it for an agent that accepts
+    /// replies (ReplyInjector refuses shells).
+    @discardableResult
+    func createCommandSession(projectDir: String, slug: String, command: String) async -> String {
+        let git = await resolveGit(projectDir)
+        let projectRoot = git?.projectRoot ?? projectDir
+        let repo = git?.repoName ?? URL(fileURLWithPath: projectRoot).lastPathComponent
+        let base = "\(PassConfig.sessionPrefix)\(Slug.make(repo))--\(Slug.make(slug))"
+        let name = await uniqueName(base)
+
+        upsertLaunching(name: name, projectRoot: projectRoot, cwd: projectDir, agent: .shell, git: git)
+        await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
+                              agent: .shell, launchCommand: command)
+        projects.remember(rootPath: projectRoot)
         await reconcile()
         return name
     }
