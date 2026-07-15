@@ -1,0 +1,7 @@
+# pnpm 11 reads project settings here (moved out of package.json / .npmrc).
+# - nodeLinker: hoisted → Raycast's `ray` toolchain expects a flat, npm-like node_modules layout;
+#   pnpm's default symlinked store trips up peer-dependency resolution (react, eslint config).
+# - allowBuilds: esbuild → esbuild's install script links the native binary that `ray build` uses.
+nodeLinker: hoisted
+allowBuilds:
+  esbuild: true
