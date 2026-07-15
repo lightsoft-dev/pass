@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pass — Mission control for Claude Code</title>
+<meta name="description" content="Pass is a keyboard-driven macOS menu-bar panel for every Claude Code session across your projects. Agents run on their own; only the sessions that need you surface. tmux-backed, one hotkey away.">
+<meta name="theme-color" content="#0b0a08">
+<meta property="og:title" content="Pass — Mission control for Claude Code">
+<meta property="og:description" content="Run ten agents. Answer the one that needs you. A tmux-backed macOS menu-bar mission control for Claude Code sessions.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0a08'/%3E%3Cpath d='M22 18h14a10 10 0 0 1 0 20h-6v8h-8z' fill='%23ffb000'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+/* ————————————————————————————————— tokens */
+:root{
+  --bg:#0b0a08;
+  --bg-raised:#100e0a;
+  --panel:#14110b;
+  --panel-edge:#282216;
+  --line:#242017;
+  --ink:#ece7d9;
+  --ink-dim:#a29a86;
+  --ink-faint:#5f5847;
+  --amber:#ffb000;
+  --amber-hot:#ffcf4d;
+  --amber-dim:rgba(255,176,0,.14);
+  --green:#3ddc84;
+  --red:#ff5f56;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --display:"Archivo Black","Arial Black",sans-serif;
+  --bar-h:42px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{overflow-x:clip}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+::selection{background:var(--amber);color:#0b0a08}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--mono);
+  font-size:15px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+/* dot-grid field */
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background-image:radial-gradient(rgba(236,231,217,.05) 1px,transparent 1px);
+  background-size:26px 26px;
+  mask-image:radial-gradient(ellipse 90% 70% at 50% 0%,#000 0%,transparent 75%);
+  -webkit-mask-image:radial-gradient(ellipse 90% 70% at 50% 0%,#000 0%,transparent 75%);
+}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:2px}
+.wrap{max-width:1200px;margin:0 auto;padding:0 clamp(20px,4vw,48px);position:relative;z-index:1}
+section{scroll-margin-top:calc(var(--bar-h) + 24px)}
+
+/* ————————————————————————————————— tmux status bars (header / footer) */
+.bar{
+  position:fixed;top:0;left:0;right:0;z-index:50;height:var(--bar-h);
+  display:flex;align-items:center;gap:18px;
+  padding:0 clamp(14px,2.5vw,28px);
+  font-size:12.5px;letter-spacing:.02em;
+  background:rgba(11,10,8,.86);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);
+  white-space:nowrap;
+}
+.bar .sess{
+  background:var(--amber);color:#0b0a08;font-weight:700;
+  padding:2px 9px;border-radius:3px;text-decoration:none;
+}
+.bar nav{display:flex;gap:14px;overflow:hidden}
+.bar nav a{color:var(--ink-faint);text-decoration:none;transition:color .15s}
+.bar nav a:hover{color:var(--ink)}
+.bar nav a.cur{color:var(--amber)}
+.bar nav a.cur::after{content:"*"}
+.bar .right{margin-left:auto;display:flex;align-items:center;gap:16px;color:var(--ink-faint)}
+.bar .right a{color:var(--ink-dim);text-decoration:none}
+.bar .right a:hover{color:var(--amber)}
+.bar .clock{color:var(--ink-faint)}
+@media(max-width:760px){.bar nav a:nth-child(n+2):not(:last-child){display:none}.bar .clock,.bar .hint{display:none}}
+
+/* ————————————————————————————————— hero */
+.hero{padding:calc(var(--bar-h) + clamp(48px,9vh,110px)) 0 0}
+.hero-grid{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:clamp(28px,4vw,64px);align-items:start}
+.kicker{
+  color:var(--amber);font-size:12.5px;font-weight:700;letter-spacing:.22em;
+  text-transform:uppercase;margin-bottom:26px;display:flex;align-items:center;gap:12px;
+}
+.kicker::before{content:"";width:34px;height:1px;background:var(--amber);display:inline-block}
+h1{
+  font-family:var(--display);font-weight:400;
+  font-size:clamp(40px,6.4vw,88px);
+  line-height:.98;letter-spacing:-.015em;text-transform:uppercase;
+  margin-bottom:30px;
+}
+h1 .hl{color:var(--amber)}
+h1 .cursor{
+  display:inline-block;width:.14em;height:.82em;background:var(--amber);
+  vertical-align:baseline;transform:translateY(.08em);margin-left:.06em;
+}
+@media(prefers-reduced-motion:no-preference){h1 .cursor{animation:blink 1.1s steps(1) infinite}}
+@keyframes blink{50%{opacity:0}}
+.lede{color:var(--ink-dim);max-width:56ch;font-size:15.5px;margin-bottom:38px}
+.lede strong{color:var(--ink);font-weight:500}
+.cta-row{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:14px}
+.btn{
+  font-family:var(--mono);font-weight:700;font-size:14px;letter-spacing:.06em;
+  text-transform:uppercase;text-decoration:none;cursor:pointer;
+  display:inline-flex;align-items:center;gap:10px;
+  padding:17px 26px;border-radius:4px;
+  transition:transform .15s,background .15s,border-color .15s,box-shadow .15s;
+}
+.btn-amber{
+  background:var(--amber);color:#0b0a08;border:1px solid #000;
+  box-shadow:0 0 0 1px rgba(255,176,0,.22),0 10px 30px -10px rgba(255,176,0,.4);
+}
+.btn-amber:hover{background:var(--amber-hot);transform:translateY(-1px)}
+.btn-amber:active{transform:translateY(0)}
+.btn-ghost{background:transparent;color:var(--ink);border:1px solid var(--panel-edge)}
+.btn-ghost:hover{border-color:var(--ink-faint)}
+.dl-meta{color:var(--ink-faint);font-size:12.5px;letter-spacing:.04em}
+.dl-meta b{color:var(--ink-dim);font-weight:500}
+
+/* entrance */
+@media(prefers-reduced-motion:no-preference){
+  .rise{opacity:0;transform:translateY(16px);animation:rise .7s cubic-bezier(.2,.7,.2,1) forwards}
+  .rise.d1{animation-delay:.08s}.rise.d2{animation-delay:.16s}.rise.d3{animation-delay:.24s}.rise.d4{animation-delay:.34s}
+  @keyframes rise{to{opacity:1;transform:none}}
+}
+
+/* ————————————————————————————————— panel mock */
+.mock-col{position:relative;z-index:2;margin-bottom:-64px}
+.menubar{
+  display:flex;justify-content:flex-end;align-items:center;gap:14px;
+  font-size:11.5px;color:var(--ink-faint);
+  border:1px solid var(--line);border-bottom:none;border-radius:10px 10px 0 0;
+  background:rgba(20,17,11,.6);padding:6px 12px;
+}
+.menubar .badge{color:var(--amber);font-weight:700}
+.mock{
+  position:relative;border:1px solid var(--panel-edge);border-radius:0 0 12px 12px;
+  background:linear-gradient(180deg,#14110b 0%,#0e0c08 100%);
+  box-shadow:0 30px 80px -30px rgba(0,0,0,.9),0 0 90px -30px rgba(255,176,0,.18);
+  overflow:hidden;font-size:12.5px;line-height:1.5;
+}
+.mock::after{ /* scanlines */
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(0deg,rgba(255,255,255,.028) 0 1px,transparent 1px 3px);
+  mix-blend-mode:overlay;
+}
+.mock-title{
+  display:flex;align-items:center;gap:8px;padding:9px 12px;
+  border-bottom:1px solid var(--line);color:var(--ink-faint);font-size:11.5px;
+}
+.dot{width:10px;height:10px;border-radius:50%;background:#2c2717}
+.mock-title .name{margin-left:6px;color:var(--ink-dim)}
+.chip{
+  margin-left:auto;border:1px solid var(--line);border-radius:3px;
+  padding:1px 7px;font-size:10.5px;letter-spacing:.08em;color:var(--ink-faint);
+}
+.chip.on{color:var(--amber);border-color:rgba(255,176,0,.35)}
+.stack{display:flex;flex-direction:column;gap:8px;padding:12px}
+.card{
+  border:1px solid var(--line);border-radius:8px;background:rgba(236,231,217,.02);
+  padding:10px 12px;position:relative;transition:border-color .3s,background .3s;
+}
+.card.attn{border-color:rgba(255,176,0,.5);background:rgba(255,176,0,.05)}
+.card.attn::before{
+  content:"";position:absolute;left:-1px;top:10px;bottom:10px;width:2px;
+  background:var(--amber);border-radius:2px;
+}
+@media(prefers-reduced-motion:no-preference){
+  .card.attn::before{animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.35}}
+}
+.card-h{display:flex;align-items:center;gap:8px;color:var(--ink-dim);font-size:11.5px}
+.led{width:7px;height:7px;border-radius:50%;background:var(--ink-faint);flex:none}
+.card.run .led{background:var(--green);box-shadow:0 0 8px rgba(61,220,132,.6)}
+.card.attn .led{background:var(--amber);box-shadow:0 0 8px rgba(255,176,0,.7)}
+.card-h .nm{color:var(--ink);font-weight:700}
+.card-h .br{color:var(--ink-faint)}
+.card-h .wt{color:var(--ink-faint)}
+.card.attn .card-h .wt{margin-left:auto;color:var(--amber)}
+.card:not(.attn) .card-h .wt{margin-left:auto}
+.card-b{margin-top:5px;color:var(--ink-dim);white-space:pre-wrap;word-break:break-word}
+.card.attn .card-b{color:var(--ink)}
+.card-b .ok{color:var(--green)}
+.card-b .zap{color:var(--amber)}
+.menu{margin-top:6px;color:var(--ink-dim)}
+.menu .sel{color:var(--amber)}
+.kbd-inline{
+  display:inline-block;border:1px solid var(--panel-edge);border-bottom-width:2px;border-radius:4px;
+  padding:0 5px;font-size:10.5px;color:var(--ink);background:#1a160e;line-height:1.6;
+}
+.omni{
+  display:flex;align-items:center;gap:8px;margin:4px 12px 12px;
+  border:1px solid var(--panel-edge);border-radius:8px;background:#0b0a07;
+  padding:9px 12px;color:var(--ink);
+}
+.omni .ps1{color:var(--amber);font-weight:700}
+.omni .ph{color:var(--ink-faint);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.omni .typed{color:var(--ink);flex:none}
+.omni .cur{width:7px;height:15px;background:var(--amber);display:inline-block;flex:none}
+@media(prefers-reduced-motion:no-preference){.omni .cur{animation:blink 1s steps(1) infinite}}
+.mock-foot{
+  display:flex;gap:14px;padding:7px 12px;border-top:1px solid var(--line);
+  color:var(--ink-faint);font-size:10.5px;letter-spacing:.04em;
+}
+.mock-foot .a{color:var(--amber)}
+
+/* ————————————————————————————————— amber statement strip */
+.strip{
+  margin-top:clamp(60px,10vh,120px);
+  background:var(--amber);color:#0b0a08;position:relative;z-index:1;
+}
+.strip .hazard{
+  height:10px;
+  background:repeating-linear-gradient(-45deg,#0b0a08 0 12px,var(--amber) 12px 24px);
+}
+.strip-inner{padding:clamp(48px,7vw,84px) 0}
+.strip h2{
+  font-family:var(--display);font-weight:400;text-transform:uppercase;
+  font-size:clamp(26px,4.4vw,58px);line-height:1.02;letter-spacing:-.01em;
+  max-width:22ch;
+}
+.strip .src{margin-top:22px;font-size:12.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;opacity:.72}
+
+/* ————————————————————————————————— section scaffolding */
+.sect{padding:clamp(70px,11vh,130px) 0 0}
+.sect-head{display:flex;align-items:baseline;gap:18px;margin-bottom:40px;flex-wrap:wrap}
+.idx{color:var(--amber);font-size:13px;font-weight:700;letter-spacing:.14em}
+.sect-head h2{
+  font-family:var(--display);font-weight:400;text-transform:uppercase;
+  font-size:clamp(26px,3.6vw,44px);letter-spacing:-.01em;line-height:1;
+}
+.sect-head .sub{color:var(--ink-faint);font-size:13px;width:100%;max-width:62ch}
+
+/* features — pre-flight checklist grid */
+.feat-grid{display:grid;grid-template-columns:repeat(12,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;background:rgba(16,14,10,.5)}
+.feat{
+  padding:26px 26px 24px;border:0 solid var(--line);border-top-width:1px;border-left-width:1px;
+  margin-top:-1px;margin-left:-1px;
+  display:flex;flex-direction:column;gap:10px;min-height:190px;
+  transition:background .2s;
+}
+.feat:hover{background:rgba(255,176,0,.035)}
+.feat .no{font-size:12px;font-weight:700;letter-spacing:.14em;color:var(--ink-faint);transition:color .2s}
+.feat:hover .no{color:var(--amber)}
+.feat h3{
+  font-family:var(--display);font-weight:400;font-size:19px;letter-spacing:.005em;
+  text-transform:uppercase;line-height:1.15;
+}
+.feat p{color:var(--ink-dim);font-size:13.5px}
+.feat p b{color:var(--ink);font-weight:500}
+.feat .spec{margin-top:auto;padding-top:14px;color:var(--ink-faint);font-size:11.5px;letter-spacing:.05em;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.s7{grid-column:span 7}.s5{grid-column:span 5}.s4{grid-column:span 4}.s8{grid-column:span 8}
+@media(max-width:900px){.s7,.s5,.s4,.s8{grid-column:span 12}.feat{min-height:0}}
+
+/* ————————————————————————————————— architecture */
+.diagram-wrap{
+  border:1px solid var(--line);border-radius:10px;background:var(--bg-raised);
+  padding:clamp(18px,3vw,36px);overflow-x:auto;
+}
+.diagram{
+  font-family:var(--mono);font-size:clamp(11px,1.35vw,13.5px);line-height:1.55;
+  color:var(--ink-faint);white-space:pre;min-width:640px;
+}
+.diagram .n{color:var(--ink);font-weight:700}
+.diagram .h{color:var(--amber);font-weight:700}
+.diagram .g{color:var(--green)}
+.arch-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin-top:26px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.arch-facts div{padding:20px 24px;border-left:1px solid var(--line);font-size:13px;color:var(--ink-dim)}
+.arch-facts div:first-child{border-left:none}
+.arch-facts b{display:block;color:var(--ink);font-weight:700;margin-bottom:6px;font-size:12.5px;letter-spacing:.08em;text-transform:uppercase}
+@media(max-width:900px){.arch-facts{grid-template-columns:1fr}.arch-facts div{border-left:none;border-top:1px solid var(--line)}.arch-facts div:first-child{border-top:none}}
+
+/* ————————————————————————————————— keys */
+.keys{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px}
+.keyrow{
+  display:flex;align-items:center;gap:16px;
+  border:1px solid var(--line);border-radius:8px;padding:14px 18px;
+  background:rgba(16,14,10,.5);transition:border-color .15s,transform .12s;
+}
+.keyrow:hover{border-color:rgba(255,176,0,.4)}
+.keyrow:hover kbd{transform:translateY(1px);border-bottom-width:2px}
+kbd{
+  font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--ink);
+  background:linear-gradient(180deg,#1e1a11,#131009);
+  border:1px solid var(--panel-edge);border-bottom-width:3px;border-radius:6px;
+  padding:5px 9px;min-width:32px;text-align:center;display:inline-block;
+  transition:transform .12s,border-bottom-width .12s;
+}
+.keycombo{display:flex;gap:6px;flex:none;min-width:118px;align-items:center}
+.keycombo .plus{color:var(--ink-faint);font-size:11px}
+.keyrow p{font-size:12.5px;color:var(--ink-dim)}
+.keyrow p b{color:var(--ink);font-weight:500}
+
+/* ————————————————————————————————— download */
+.get-grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:clamp(28px,4vw,56px);align-items:start}
+@media(max-width:900px){.get-grid,.hero-grid{grid-template-columns:minmax(0,1fr)}.mock-col{margin-bottom:0}.strip{margin-top:clamp(40px,7vh,80px)}}
+.btn-big{width:100%;justify-content:center;padding:24px 30px;font-size:16px}
+.get-note{margin-top:14px;color:var(--ink-faint);font-size:12.5px;line-height:1.7}
+.get-note a{color:var(--ink-dim)}
+.req{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+.req span{border:1px solid var(--line);border-radius:100px;padding:4px 13px;font-size:11.5px;color:var(--ink-dim);letter-spacing:.04em}
+.term{
+  border:1px solid var(--panel-edge);border-radius:10px;background:#0d0b08;overflow:hidden;
+}
+.term-t{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);color:var(--ink-faint);font-size:11.5px}
+.term-t .cp{
+  margin-left:auto;background:none;border:1px solid var(--line);border-radius:4px;
+  color:var(--ink-dim);font-family:var(--mono);font-size:11px;padding:3px 10px;cursor:pointer;
+  letter-spacing:.06em;transition:color .15s,border-color .15s;
+}
+.term-t .cp:hover{color:var(--amber);border-color:rgba(255,176,0,.4)}
+.term pre{padding:18px 20px;font-size:13px;line-height:1.9;overflow-x:auto}
+.term .ps1{color:var(--amber);user-select:none}
+.term .c{color:var(--ink-faint)}
+.term .out{color:var(--ink-faint)}
+.steps{counter-reset:st;margin-top:26px;display:flex;flex-direction:column;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.steps div{
+  counter-increment:st;padding:16px 20px 16px 58px;position:relative;
+  font-size:13px;color:var(--ink-dim);border-top:1px solid var(--line);background:rgba(16,14,10,.5);
+}
+.steps div:first-child{border-top:none}
+.steps div::before{
+  content:counter(st,decimal-leading-zero);position:absolute;left:20px;top:17px;
+  color:var(--amber);font-weight:700;font-size:12px;letter-spacing:.08em;
+}
+.steps b{color:var(--ink);font-weight:500}
+
+/* ————————————————————————————————— footer */
+footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
+.foot-bar{
+  display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;
+  padding:16px clamp(20px,4vw,48px);font-size:12px;color:var(--ink-faint);
+}
+.foot-bar .sess{background:var(--amber);color:#0b0a08;font-weight:700;padding:1px 8px;border-radius:3px}
+.foot-bar a{color:var(--ink-dim);text-decoration:none}
+.foot-bar a:hover{color:var(--amber)}
+.foot-bar .right{margin-left:auto;display:flex;gap:18px;flex-wrap:wrap}
+.foot-legal{
+  padding:0 clamp(20px,4vw,48px) 34px;font-size:11.5px;color:var(--ink-faint);max-width:80ch;line-height:1.7;
+}
+</style>
+</head>
+<body>
+
+<!-- ————————————————— tmux-style status bar -->
+<header class="bar">
+  <a class="sess" href="#top">pass</a>
+  <nav aria-label="Sections">
+    <a href="#top" class="cur" data-spy="top">0:overview</a>
+    <a href="#features" data-spy="features">1:features</a>
+    <a href="#system" data-spy="system">2:system</a>
+    <a href="#keys" data-spy="keys">3:keys</a>
+    <a href="#get" data-spy="get">4:get</a>
+  </nav>
+  <div class="right">
+    <span class="hint">⌥␣ to summon</span>
+    <a href="https://github.com/lightsoft-dev/pass" rel="noopener">github ↗</a>
+    <span class="clock" id="clock" aria-hidden="true"></span>
+  </div>
+</header>
+
+<main id="top">
+  <!-- ————————————————— hero -->
+  <section class="hero wrap" aria-label="Overview">
+    <div class="hero-grid">
+      <div>
+        <p class="kicker rise">Menu-bar mission control · Claude Code · tmux-backed</p>
+        <h1 class="rise d1">Run ten agents. Answer the one that <span class="hl">needs&nbsp;you</span><span class="cursor" aria-hidden="true"></span></h1>
+        <p class="lede rise d2">
+          Pass is a keyboard-driven macOS panel over <strong>every Claude Code session in every project</strong>.
+          Agents run on their own; the moment one is blocked on a permission, a question, or a review,
+          it surfaces — <strong>one hotkey away, one keystroke to clear</strong>.
+        </p>
+        <div class="cta-row rise d3">
+          <a class="btn btn-amber" href="https://github.com/lightsoft-dev/pass/releases/latest" data-download>↓&nbsp;&nbsp;Download for macOS</a>
+          <a class="btn btn-ghost" href="https://github.com/lightsoft-dev/pass" rel="noopener">View on GitHub ↗</a>
+        </div>
+        <p class="dl-meta rise d4"><b data-version>macOS 14+ · Apple Silicon &amp; Intel</b> · needs tmux · source on GitHub</p>
+      </div>
+
+      <!-- animated panel simulation (decorative) -->
+      <div class="mock-col rise d2" aria-hidden="true">
+        <div class="menubar"><span>◐</span><span>⌥⌘</span><span class="badge" id="mb-badge">✳ 1</span><span>18:04</span></div>
+        <div class="mock">
+          <div class="mock-title">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="name">Pass</span>
+            <span class="chip on">⌥space</span><span class="chip">floating</span>
+          </div>
+          <div class="stack" id="stack">
+            <div class="card attn" id="card-ivma" data-wait="9">
+              <div class="card-h"><span class="led"></span><span class="nm">ivma</span><span class="br">⧉ feat/checkout</span><span>✳</span><span class="wt">waiting 0:09</span></div>
+              <div class="card-b"><span class="zap">⚡</span> Allow <b>Bash(git push origin main)</b>? · <span class="kbd-inline">y</span> allow · <span class="kbd-inline">n</span> deny</div>
+            </div>
+            <div class="card run" id="card-pass">
+              <div class="card-h"><span class="led"></span><span class="nm">pass</span><span class="br">main</span><span>✳</span><span class="wt">running</span></div>
+              <div class="card-b">▸ Rewiring EventRouter → Inbox · make test — 42 passing</div>
+            </div>
+            <div class="card" id="card-blog">
+              <div class="card-h"><span class="led"></span><span class="nm">blog</span><span class="br">master</span><span>✳</span><span class="wt">2m ago</span></div>
+              <div class="card-b"><span class="ok">✓ finished</span> · Rebuilt site — 12 pages, 0 errors</div>
+            </div>
+          </div>
+          <div class="omni">
+            <span class="ps1">❯</span><span class="typed" id="omni-typed"></span><span class="ph" id="omni-ph">reply to ivma — @ jump · y/n answer · ⏎ open</span><span class="cur"></span>
+          </div>
+          <div class="mock-foot"><span><span class="a">1</span> needs you</span><span><span class="a">·</span> 2 running</span><span><span class="a">·</span> 3 sessions</span><span style="margin-left:auto">tmux: pass-*</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ————————————————— amber statement -->
+  <div class="strip" role="presentation">
+    <div class="hazard"></div>
+    <div class="strip-inner wrap">
+      <h2>Agents run on their own. Only the sessions that need you surface.</h2>
+      <p class="src">— the whole idea. Everything else is ergonomics.</p>
+    </div>
+    <div class="hazard"></div>
+  </div>
+
+  <!-- ————————————————— features -->
+  <section class="sect wrap" id="features" aria-label="Features">
+    <div class="sect-head">
+      <span class="idx">[1] PRE-FLIGHT</span>
+      <h2>What it does</h2>
+      <p class="sub">Six terminals and four worktrees is not orchestration — it's tab-hunting. Pass turns supervision into a feed: every session reports in, and your keyboard does the rest.</p>
+    </div>
+    <div class="feat-grid">
+      <div class="feat s7">
+        <span class="no">PF-01</span>
+        <h3>Summon anywhere</h3>
+        <p>A global hotkey (default <b>⌥Space</b>) raises the panel over any app, on any Space — <b>without stealing your editor's focus</b>. Keep it floating on top, or dock it as a normal window beside your editor. Resizable; remembers its size.</p>
+        <p class="spec"><kbd>⌥</kbd><kbd>space</kbd> summon · <kbd>⌘⇧F</kbd> float ⇄ dock</p>
+      </div>
+      <div class="feat s5">
+        <span class="no">PF-02</span>
+        <h3>Chat home</h3>
+        <p>Every session as a card with its <b>last response</b>, newest attention on top. One omnibox pinned at the bottom: type to reply (injected safely — it refuses a bare shell), <b>@</b> to jump, <b>y/n</b> to answer a pending permission.</p>
+        <p class="spec"><kbd>@</kbd> jump · <kbd>y</kbd><kbd>n</kbd> decide · <kbd>⏎</kbd> open</p>
+      </div>
+      <div class="feat s5">
+        <span class="no">PF-03</span>
+        <h3>A real terminal, embedded</h3>
+        <p>Open a card and you're attached to its tmux session in a <b>full interactive terminal</b> — arrows, colors, permission menus, everything. Step back with <b>⌘[</b>; hand off to Ghostty with <b>⌘⏎</b> when you want a real window.</p>
+        <p class="spec"><kbd>⌘[</kbd> back · <kbd>⌘⏎</kbd> open in Ghostty</p>
+      </div>
+      <div class="feat s7">
+        <span class="no">PF-04</span>
+        <h3>Hook-driven attention</h3>
+        <p>Claude Code hooks report <b>permission prompts, questions, and completions</b> the moment they happen — no polling, no screen-scraping guesswork. The session that needs you surfaces with exactly what it wants and <b>how long it's been waiting</b>, plus branch, worktree ⧉ badge, and agent glyph. Claude's numbered option menus mirror live into the card — drive them with plain <b>↑↓ ⏎</b> without opening the terminal.</p>
+        <p class="spec">notification · stop · prompt-submit hooks → 127.0.0.1 only</p>
+      </div>
+      <div class="feat s8">
+        <span class="no">PF-05</span>
+        <h3>tmux is the database</h3>
+        <p>Sessions are plain tmux sessions: they <b>survive Pass restarts</b>, you can <b>attach from any terminal</b>, and existing <code>pass-*</code> sessions are adopted on launch. Branch, worktree, cwd, activity — all derived live from tmux + git, so nothing ever goes stale. Register a repo, or a parent folder scanned for repos; worktrees group under their main repo.</p>
+        <p class="spec">tmux attach -t pass-ivma — from anywhere</p>
+      </div>
+      <div class="feat s4">
+        <span class="no">PF-06</span>
+        <h3>Ambient signals</h3>
+        <p>Native notifications for <b>permission / input / finished</b>, with the menu-bar badge as the always-on fallback that never asks for permission itself.</p>
+        <p class="spec">✳ 2 in the menu bar</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ————————————————— architecture -->
+  <section class="sect wrap" id="system" aria-label="How it fits together">
+    <div class="sect-head">
+      <span class="idx">[2] SYSTEM</span>
+      <h2>How it fits together</h2>
+      <p class="sub">Straight from the README. Hooks in, decisions out — and the terminal is always one keystroke away.</p>
+    </div>
+    <div class="diagram-wrap">
+<pre class="diagram">
+<span class="n">Claude Code</span> (in tmux)  ──hooks(HTTP)──▶  <span class="h">HookServer</span> (127.0.0.1:49817)
+                                              │  normalize (<span class="n">ClaudeAdapter</span>)
+                                              ▼
+   <span class="n">TmuxClient</span> ◀── reconcile ──  <span class="n">SessionStore</span>  ──▶  <span class="h">EventRouter</span> ──▶  <span class="g">Inbox + Notifications</span>
+   (create/adopt/attach)        (git identity,        (state machine)          ▲
+        ▲                        attention)                                    │
+        └────────── <span class="n">ReplyInjector</span> (bracketed paste / y·n) ◀── <span class="h">panel</span> (SwiftUI) ──┘
+</pre>
+    </div>
+    <div class="arch-facts">
+      <div><b>Agent-agnostic core</b>All agent knowledge lives in adapters. Claude Code today; the <code>/hook/&lt;agent&gt;</code> routes and per-agent glyphs for Codex &amp; pi are already wired for M5.</div>
+      <div><b>Loopback only</b>The hook server binds 127.0.0.1 — no firewall prompt, no LAN exposure. Replies are injected with bracketed paste, and a bare shell prompt refuses injection.</div>
+      <div><b>Nothing to migrate</b>Pass persists only a small project MRU list. Kill the app, reboot the Mac — your sessions are still in tmux, exactly where they were.</div>
+    </div>
+  </section>
+
+  <!-- ————————————————— keys -->
+  <section class="sect wrap" id="keys" aria-label="Keyboard reference">
+    <div class="sect-head">
+      <span class="idx">[3] KEYS</span>
+      <h2>Hands stay home</h2>
+      <p class="sub">The panel is built to be driven blind. Every path — summon, triage, decide, dive, dismiss — fits under your fingers.</p>
+    </div>
+    <div class="keys">
+      <div class="keyrow"><span class="keycombo"><kbd>⌥</kbd><span class="plus">+</span><kbd>space</kbd></span><p><b>Summon / dismiss</b> the panel, over any app, any Space</p></div>
+      <div class="keyrow"><span class="keycombo"><kbd>@</kbd></span><p><b>Jump</b> — fuzzy-filter projects &amp; sessions; <b>@name msg ⏎</b> sends straight to it</p></div>
+      <div class="keyrow"><span class="keycombo"><kbd>y</kbd><kbd>n</kbd></span><p><b>Answer a permission</b> from the home feed — no terminal needed</p></div>
+      <div class="keyrow"><span class="keycombo"><kbd>↑</kbd><kbd>↓</kbd></span><p><b>Drive Claude's option menus</b> mirrored in the card · <b>⌘↑↓</b> moves between sessions</p></div>
+      <div class="keyrow"><span class="keycombo"><kbd>⏎</kbd></span><p><b>Open the terminal</b> on an empty box — or send your typed reply</p></div>
+      <div class="keyrow"><span class="keycombo"><kbd>⌘</kbd><span class="plus">+</span><kbd>⏎</kbd></span><p><b>Open in Ghostty</b> — the same tmux session, in a real window</p></div>
+      <div class="keyrow"><span class="keycombo"><kbd>⌘</kbd><span class="plus">+</span><kbd>[</kbd></span><p><b>Step back</b> from the embedded terminal to the home feed</p></div>
+      <div class="keyrow"><span class="keycombo"><kbd>tab</kbd></span><p><b>Autocomplete</b> the @token, then keep typing your message</p></div>
+      <div class="keyrow"><span class="keycombo"><kbd>⌘⇧</kbd><span class="plus">+</span><kbd>F</kbd></span><p><b>Float ⇄ dock</b> — always-on-top panel or a normal window</p></div>
+      <div class="keyrow"><span class="keycombo"><kbd>⌘</kbd><span class="plus">+</span><kbd>⌫</kbd></span><p><b>Kill the session</b> — with a confirmation, because it can't be undone</p></div>
+    </div>
+  </section>
+
+  <!-- ————————————————— download -->
+  <section class="sect wrap" id="get" aria-label="Download">
+    <div class="sect-head">
+      <span class="idx">[4] GET</span>
+      <h2>Get Pass</h2>
+      <p class="sub">Free, source on GitHub. The hotkey is ⌥Space; the rest is your agents' problem.</p>
+    </div>
+    <div class="get-grid">
+      <div>
+        <a class="btn btn-amber btn-big" href="https://github.com/lightsoft-dev/pass/releases/latest" data-download>↓&nbsp;&nbsp;Download for macOS</a>
+        <p class="get-note" id="release-note"><b data-version>Checking latest release…</b></p>
+        <div class="req">
+          <span>macOS 14+</span><span>Apple Silicon &amp; Intel</span><span>tmux</span><span>Claude Code</span>
+        </div>
+        <p class="get-note">Building from source instead needs Xcode 26+, <a href="https://github.com/yonaskolb/XcodeGen" rel="noopener">xcodegen</a>, and a free Apple&nbsp;Development signing identity — details in <a href="https://github.com/lightsoft-dev/pass/blob/master/BUILD.md" rel="noopener">BUILD.md</a>.</p>
+      </div>
+      <div id="build-from-source">
+        <div class="term">
+          <div class="term-t">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span>build from source</span>
+            <button class="cp" data-copy="brew install xcodegen tmux
+git clone https://github.com/lightsoft-dev/pass.git && cd pass
+make open">copy</button>
+          </div>
+          <pre><span class="ps1">$</span> brew install xcodegen tmux
+<span class="ps1">$</span> git clone https://github.com/lightsoft-dev/pass.git <span class="c">&amp;&amp;</span> cd pass
+<span class="ps1">$</span> make open   <span class="c"># builds, signs, launches Pass.app</span>
+<span class="out">→ .build/Build/Products/Debug/Pass.app</span></pre>
+        </div>
+        <div class="steps">
+          <div><b>Settings › Install hooks</b> — merges Pass's hooks into <code>~/.claude/settings.json</code> (backed up first; your other hooks are untouched). New Claude sessions start reporting in.</div>
+          <div><b>Allow notifications</b> when macOS asks — the menu-bar badge works either way.</div>
+          <div>Hit <b>⌥Space</b>. <b>@</b> to jump, <b>New session…</b> from the menu bar to start one.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ————————————————— footer status bar -->
+<footer>
+  <div class="foot-bar">
+    <span class="sess">pass</span>
+    <span>dev.lightsoft.pass</span>
+    <span>a <a href="https://github.com/lightsoft-dev" rel="noopener">Lightsoft</a> tool</span>
+    <span class="right">
+      <a href="https://github.com/lightsoft-dev/pass" rel="noopener">source ↗</a>
+      <a href="https://github.com/lightsoft-dev/pass/issues" rel="noopener">issues ↗</a>
+      <span>© 2026 Lightsoft</span>
+    </span>
+  </div>
+  <p class="foot-legal">Claude Code is a product of Anthropic, PBC. Pass is an independent companion tool and is not affiliated with or endorsed by Anthropic. tmux does the heavy lifting; we just knock on your door politely.</p>
+</footer>
+
+<script>
+/* ————————————————— clock (tmux status-right) */
+(function(){
+  var el=document.getElementById('clock');if(!el)return;
+  function tick(){var d=new Date();el.textContent=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
+  tick();setInterval(tick,15000);
+})();
+
+/* ————————————————— nav scroll-spy (tmux current-window *) */
+(function(){
+  var links=[].slice.call(document.querySelectorAll('[data-spy]'));
+  var ids=['top','features','system','keys','get'];
+  var secs=ids.map(function(i){return document.getElementById(i)}).filter(Boolean);
+  function onScroll(){
+    var y=window.scrollY+120,cur='top';
+    secs.forEach(function(s){if(s.offsetTop<=y)cur=s.id});
+    links.forEach(function(a){a.classList.toggle('cur',a.getAttribute('data-spy')===cur)});
+  }
+  window.addEventListener('scroll',onScroll,{passive:true});onScroll();
+})();
+
+/* ————————————————— copy buttons */
+document.querySelectorAll('[data-copy]').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    navigator.clipboard.writeText(btn.getAttribute('data-copy')).then(function(){
+      var t=btn.textContent;btn.textContent='copied';
+      setTimeout(function(){btn.textContent=t},1400);
+    });
+  });
+});
+
+/* ————————————————— latest release → download buttons */
+(function(){
+  var btns=[].slice.call(document.querySelectorAll('[data-download]'));
+  var vers=[].slice.call(document.querySelectorAll('[data-version]'));
+  var note=document.getElementById('release-note');
+  function setVersion(t){vers.forEach(function(v){v.textContent=t})}
+  fetch('https://api.github.com/repos/lightsoft-dev/pass/releases/latest')
+    .then(function(r){return r.ok?r.json():Promise.reject(r.status)})
+    .then(function(rel){
+      var asset=(rel.assets||[]).find(function(a){return /\.(dmg|pkg|zip)$/i.test(a.name)});
+      var href=asset?asset.browser_download_url:rel.html_url;
+      btns.forEach(function(b){
+        b.href=href;
+        b.innerHTML='↓&nbsp;&nbsp;Download Pass '+(rel.tag_name||'');
+      });
+      var size=asset?' · '+(asset.size/1048576).toFixed(1)+' MB':'';
+      var kind=asset?(asset.name.split('.').pop()||'').toLowerCase():'release page';
+      setVersion((rel.tag_name||'latest')+' · '+kind+size+' · macOS 14+');
+    })
+    .catch(function(){
+      btns.forEach(function(b){
+        b.href='#build-from-source';
+        b.innerHTML='↓&nbsp;&nbsp;Build from source — 1 min';
+        b.removeAttribute('rel');
+      });
+      setVersion('macOS 14+ · Apple Silicon & Intel');
+      if(note){note.innerHTML='<b>No packaged release yet</b> — Pass is young. Three commands on the right build and launch it; a notarized download lands here soon.';}
+    });
+})();
+
+/* ————————————————— hero panel simulation */
+(function(){
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+  var ivma=document.getElementById('card-ivma'),
+      pss=document.getElementById('card-pass'),
+      blog=document.getElementById('card-blog'),
+      stack=document.getElementById('stack'),
+      typed=document.getElementById('omni-typed'),
+      ph=document.getElementById('omni-ph'),
+      badge=document.getElementById('mb-badge');
+  if(!ivma||!pss||!blog||!stack||!typed)return;
+
+  function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
+  function fmt(s){return 'waiting '+Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+  function h(el,nm,br,wt){el.querySelector('.card-h').innerHTML=
+    '<span class="led"></span><span class="nm">'+nm+'</span><span class="br">'+br+'</span><span>✳</span><span class="wt">'+wt+'</span>'}
+  function body(el,html){el.querySelector('.card-b').innerHTML=html}
+  function setBadge(n){badge&&(badge.textContent='✳ '+n)}
+
+  /* waiting-timer tick for whichever card is in attn state */
+  setInterval(function(){
+    [].slice.call(stack.querySelectorAll('.card.attn')).forEach(function(c){
+      var w=(parseInt(c.dataset.wait||'0',10)+1);c.dataset.wait=w;
+      var wt=c.querySelector('.wt');wt&&(wt.textContent=fmt(w));
+    });
+  },1000);
+
+  /* FLIP: move a card to the top of the stack smoothly */
+  function surface(card){
+    var cards=[].slice.call(stack.children),first={};
+    cards.forEach(function(c){first[c.id]=c.getBoundingClientRect().top});
+    stack.insertBefore(card,stack.firstChild);
+    cards.forEach(function(c){
+      var d=first[c.id]-c.getBoundingClientRect().top;
+      if(!d)return;
+      c.style.transform='translateY('+d+'px)';c.style.transition='none';
+      requestAnimationFrame(function(){
+        c.style.transition='transform .45s cubic-bezier(.2,.7,.2,1)';c.style.transform='';
+      });
+    });
+  }
+  function type(text){
+    ph.style.display='none';
+    var i=0;return new Promise(function(res){
+      (function step(){
+        if(i<text.length){typed.textContent+=text[i++];setTimeout(step,110)}
+        else res();
+      })();
+    });
+  }
+  function clearOmni(){typed.textContent='';ph.style.display=''}
+
+  async function loop(){
+    for(;;){
+      /* T0 — ivma waits on a permission (initial DOM state) */
+      await sleep(2600);
+
+      /* answer it: y */
+      await type('y');await sleep(420);clearOmni();
+      ivma.className='card run';ivma.dataset.wait='0';
+      h(ivma,'ivma','⧉ feat/checkout','running');
+      body(ivma,'▸ git push origin main — accepted, pushing…');
+      setBadge(0);
+      await sleep(2800);
+
+      /* pass finishes its tests, blog starts a run */
+      body(pss,'▸ EventRouter rewired · 51 tests passing — writing summary…');
+      await sleep(1800);
+
+      /* pass now needs input — numbered menu mirrors into the card */
+      pss.className='card attn';pss.dataset.wait='0';
+      h(pss,'pass','main',fmt(0));
+      body(pss,'<span class="zap">✎</span> needs input — Pick a migration for orders-db:'+
+        '<div class="menu"><span class="sel">❯ 1. expand/contract (safe, slower)</span><br>&nbsp;&nbsp;2. dual-write with backfill<br>&nbsp;&nbsp;3. abort</div>');
+      surface(pss);setBadge(1);
+      await sleep(2600);
+
+      /* choose option 2 */
+      await type('2');await sleep(420);clearOmni();
+      pss.className='card run';
+      h(pss,'pass','main','running');
+      body(pss,'▸ dual-write scaffolding — generating backfill job…');
+      setBadge(0);
+      await sleep(2400);
+
+      /* ivma finishes */
+      ivma.className='card';
+      h(ivma,'ivma','⧉ feat/checkout','just now');
+      body(ivma,'<span class="ok">✓ finished</span> · Pushed 3 commits — CI green');
+      await sleep(3000);
+
+      /* reset to T0 */
+      blog.className='card';
+      h(blog,'blog','master','4m ago');
+      body(blog,'<span class="ok">✓ finished</span> · Rebuilt site — 12 pages, 0 errors');
+      ivma.className='card attn';ivma.dataset.wait='0';
+      h(ivma,'ivma','⧉ feat/checkout',fmt(0));
+      body(ivma,'<span class="zap">⚡</span> Allow <b>Bash(git push origin main)</b>? · <span class="kbd-inline">y</span> allow · <span class="kbd-inline">n</span> deny');
+      surface(ivma);
+      pss.className='card run';
+      h(pss,'pass','main','running');
+      body(pss,'▸ Rewiring EventRouter → Inbox · make test — 42 passing');
+      setBadge(1);
+    }
+  }
+  loop();
+})();
+</script>
+</body>
+</html>
