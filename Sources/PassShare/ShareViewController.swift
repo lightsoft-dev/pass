@@ -75,9 +75,46 @@ final class ShareModel: ObservableObject {
     @Published var note = ""
     @Published var targets: ShareTargets?
     @Published var selection = ""        // "s:<session>" or "p:<root>"
+    @Published var filter = ""           // live text filter over the target list
     @Published var status: String?
     @Published var sending = false
     @Published var loadFailed = false
+
+    /// Sessions matching the filter (all of them when the filter is empty).
+    var filteredSessions: [ShareTargets.SessionTarget] {
+        guard let t = targets else { return [] }
+        let needle = filter.trimmingCharacters(in: .whitespaces)
+        guard !needle.isEmpty else { return t.sessions }
+        return t.sessions.filter { matches(needle, $0.display) || matches(needle, $0.name) }
+    }
+
+    /// Projects (→ new session) only join once a filter narrows them — there are too many
+    /// to list unfiltered in a small sheet.
+    var filteredProjects: [ShareTargets.ProjectTarget] {
+        guard let t = targets else { return [] }
+        let needle = filter.trimmingCharacters(in: .whitespaces)
+        guard !needle.isEmpty else { return [] }
+        return Array(t.projects.filter { matches(needle, $0.name) }.prefix(10))
+    }
+
+    /// Keep the selection on the top match while typing (Enter-friendly), unless the current
+    /// selection still matches.
+    func filterChanged() {
+        let sessionIDs = filteredSessions.map { "s:" + $0.name }
+        let projectIDs = filteredProjects.map { "p:" + $0.root }
+        if (sessionIDs + projectIDs).contains(selection) { return }
+        selection = sessionIDs.first ?? projectIDs.first ?? ""
+    }
+
+    /// Case-insensitive subsequence match ("dpc" hits "dolphin-crm").
+    private func matches(_ needle: String, _ hay: String) -> Bool {
+        let n = Array(needle.lowercased()), h = Array(hay.lowercased())
+        var i = 0
+        for ch in h where i < n.count {
+            if ch == n[i] { i += 1 }
+        }
+        return i == n.count
+    }
 
     init(items: [NSExtensionItem]) {
         Task {
@@ -293,24 +330,64 @@ struct ShareComposeView: View {
 
     @ViewBuilder
     private var picker: some View {
-        if let t = model.targets {
-            Picker("To", selection: $model.selection) {
-                ForEach(t.sessions) { s in
-                    Text("\(s.display)  ·  \(s.agent)").tag("s:" + s.name)
+        if model.targets != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    TextField("세션 검색 — 이름 일부만 쳐도 됩니다", text: $model.filter)
+                        .textFieldStyle(.plain).font(.system(size: 12))
+                        .onChange(of: model.filter) { _, _ in model.filterChanged() }
                 }
-                if !t.projects.isEmpty {
-                    Divider()
-                    ForEach(t.projects) { p in
-                        Text("새 세션 · \(p.name)").tag("p:" + p.root)
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .background(Color.primary.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(model.filteredSessions) { s in
+                            targetRow(id: "s:" + s.name,
+                                      title: s.display, subtitle: s.agent, icon: "terminal")
+                        }
+                        ForEach(model.filteredProjects) { p in
+                            targetRow(id: "p:" + p.root,
+                                      title: p.name, subtitle: "새 세션", icon: "plus.circle")
+                        }
+                        if model.filteredSessions.isEmpty && model.filteredProjects.isEmpty {
+                            Text("일치하는 대상 없음")
+                                .font(.system(size: 11)).foregroundStyle(.tertiary)
+                                .padding(6)
+                        }
                     }
                 }
+                .frame(maxHeight: 130)
             }
-            .pickerStyle(.menu)
         } else if !model.loadFailed {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text("세션 목록 불러오는 중…").font(.system(size: 12)).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func targetRow(id: String, title: String, subtitle: String, icon: String) -> some View {
+        Button { model.selection = id } label: {
+            HStack(spacing: 8) {
+                Image(systemName: icon).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .frame(width: 14)
+                Text(title).font(.system(size: 12)).lineLimit(1)
+                Text(subtitle).font(.system(size: 10)).foregroundStyle(.tertiary)
+                Spacer()
+                if model.selection == id {
+                    Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(model.selection == id ? Color.accentColor.opacity(0.14) : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
