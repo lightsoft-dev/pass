@@ -39,6 +39,10 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
   (attention/session → script/notify/sendText/openURL), with per-capability permissions and
   an enable-after-review flow. Ships with an **agent-usage** example (`>usage` — Claude Code
   token usage by day/model/project). Design & schema: `docs/EXTENSIONS.md`.
+- **Mobile remote developer preview** — an outbound-only macOS gateway, Cloudflare
+  Worker/Durable Object relay, and Expo client can list/create sessions, send messages, and answer
+  decisions. The current shared-token pairing is explicitly development-only; device-key pairing
+  and voice are still follow-up work.
 
 ## Build & run
 
@@ -58,6 +62,13 @@ make logs     # stream the app's OSLog
    first; never touches your other hooks). New Claude sessions then report to pass.
 2. **Settings › Notifications** — if blocked, enable pass in System Settings.
 3. Summon with ⌥Space, `@` to jump, `New session…` from the menu bar to start one.
+
+## Mobile remote developer preview
+
+The implementation and its security boundary are documented in
+[`docs/mobile-remote-architecture.md`](docs/mobile-remote-architecture.md). Relay setup lives in
+[`relay/README.md`](relay/README.md), and Expo setup lives in
+[`mobile/README.md`](mobile/README.md). No relay is deployed automatically.
 
 ## How it fits together
 
@@ -85,3 +96,5 @@ Claude Code (in tmux)  ──hooks(HTTP)──►  HookServer (127.0.0.1:49817)
 - `docs/BROWSER.md` — design (M6, pre-implementation): the embedded browser pane
   (terminal │ WKWebView split) and the `passcli` CLI that lets agents open pages in it
   (`passcli browser open <url>`), plus the S6 spikes to validate before building.
+- `docs/mobile-remote-architecture.md` — implemented developer MVP status plus the secure pairing,
+  hardening, and voice-management roadmap for mobile access.

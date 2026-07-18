@@ -181,19 +181,22 @@ actor TmuxClient {
 
     /// Load arbitrary text into the tmux paste buffer. Passed as a single Process argument,
     /// so newlines/quotes/specials need no escaping (no shell involved).
-    func setBuffer(_ text: String) async {
-        await run(["set-buffer", "--", text])
+    @discardableResult
+    func setBuffer(_ text: String) async -> Bool {
+        await run(["set-buffer", "--", text]).ok
     }
 
     /// Paste the buffer into a pane using bracketed paste (`-p`), deleting the buffer (`-d`).
     /// Bracketed paste lets Ink receive multi-line text without submitting (FINDINGS §2).
-    func pasteBuffer(into name: String) async {
-        await run(["paste-buffer", "-t", name, "-p", "-d"])
+    @discardableResult
+    func pasteBuffer(into name: String) async -> Bool {
+        await run(["paste-buffer", "-t", name, "-p", "-d"]).ok
     }
 
     /// Send literal key names (e.g. ["Enter"], ["1"], ["y"]) to a pane.
-    func sendKeys(_ name: String, _ keys: [String]) async {
-        await run(["send-keys", "-t", name] + keys)
+    @discardableResult
+    func sendKeys(_ name: String, _ keys: [String]) async -> Bool {
+        await run(["send-keys", "-t", name] + keys).ok
     }
 
     /// Exit copy-mode (or any pane mode) if the pane is in one.

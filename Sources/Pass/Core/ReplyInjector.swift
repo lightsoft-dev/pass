@@ -1,5 +1,16 @@
 import Foundation
 
+protocol ReplyInjectorTmux: Sendable {
+    func paneState(_ name: String) async -> (inMode: Bool, command: String)
+    func capturePane(_ name: String, colors: Bool) async -> String
+    func cancelMode(_ name: String) async
+    func setBuffer(_ text: String) async -> Bool
+    func pasteBuffer(into name: String) async -> Bool
+    func sendKeys(_ name: String, _ keys: [String]) async -> Bool
+}
+
+extension TmuxClient: ReplyInjectorTmux {}
+
 /// Per-agent interaction knowledge used by ReplyInjector. Only Claude is populated in the
 /// MVP; other agents get a profile in M5. Values validated in spikes/FINDINGS.md.
 struct InteractionProfile: Sendable {
@@ -37,9 +48,9 @@ struct InteractionProfile: Sendable {
 /// bare shell (that would run arbitrary commands).
 actor ReplyInjector {
     static let shared = ReplyInjector()
-    private let tmux: TmuxClient
+    private let tmux: any ReplyInjectorTmux
 
-    init(tmux: TmuxClient = .shared) { self.tmux = tmux }
+    init(tmux: any ReplyInjectorTmux = TmuxClient.shared) { self.tmux = tmux }
 
     enum PaneKind: Sendable { case agentReady, permissionDialog, shell, copyMode }
 
@@ -72,10 +83,16 @@ actor ReplyInjector {
         default:
             break
         }
-        await tmux.setBuffer(text)
-        await tmux.pasteBuffer(into: session)
+        guard await tmux.setBuffer(text) else {
+            return .error("tmux could not stage the message")
+        }
+        guard await tmux.pasteBuffer(into: session) else {
+            return .error("tmux could not paste the message into the session")
+        }
         try? await Task.sleep(nanoseconds: profile.pasteToEnterDelayMs * 1_000_000)
-        await tmux.sendKeys(session, ["Enter"])
+        guard await tmux.sendKeys(session, ["Enter"]) else {
+            return .error("tmux could not submit the message")
+        }
         Log.inject.info("sent text to \(session, privacy: .public) (\(text.count) chars)")
         return .delivered
     }
@@ -84,6 +101,20 @@ actor ReplyInjector {
     enum Decision: Sendable { case allowOnce, allowAll, deny }
 
     func sendDecision(_ session: String, agent: AgentKind, _ decision: Decision) async -> Result {
+        var kind = await classify(session, agent: agent)
+        if kind == .copyMode {
+            await tmux.cancelMode(session)
+            kind = await classify(session, agent: agent)
+        }
+        switch kind {
+        case .shell:
+            return .refusedShell
+        case .permissionDialog:
+            break
+        case .agentReady, .copyMode:
+            return .error("permission prompt is no longer active")
+        }
+
         let profile = InteractionProfile.for(agent)
         let keys: [String]
         switch decision {
@@ -91,7 +122,9 @@ actor ReplyInjector {
         case .allowAll:  keys = profile.approveAll
         case .deny:      keys = profile.deny
         }
-        await tmux.sendKeys(session, keys)
+        guard await tmux.sendKeys(session, keys) else {
+            return .error("tmux could not submit the decision")
+        }
         Log.inject.info("sent decision \(String(describing: decision), privacy: .public) to \(session, privacy: .public)")
         return .delivered
     }
@@ -100,7 +133,9 @@ actor ReplyInjector {
     /// selects+confirms the highlighted-by-number choice (FINDINGS.md §2). Refuses a bare shell.
     func pick(_ session: String, agent: AgentKind, option: Int) async -> Result {
         guard await classify(session, agent: agent) != .shell else { return .refusedShell }
-        await tmux.sendKeys(session, [String(option)])
+        guard await tmux.sendKeys(session, [String(option)]) else {
+            return .error("tmux could not submit the selected option")
+        }
         Log.inject.info("picked option \(option) in \(session, privacy: .public)")
         return .delivered
     }

@@ -1,0 +1,42 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "pass-mobile-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-16",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // The value is configured with Workers Secrets or a local .dev.vars file.
+  // Declaring only the name keeps credentials out of source control and lets
+  // `wrangler types` generate the binding type.
+  "secrets": {
+    "required": ["RELAY_AUTH_TOKEN"]
+  },
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DESKTOP_ROOMS",
+        "class_name": "DesktopRoom"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DesktopRoom"]
+    }
+  ],
+
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1
+    }
+  }
+}

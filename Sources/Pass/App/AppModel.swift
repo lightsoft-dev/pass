@@ -71,6 +71,15 @@ final class AppModel {
     private(set) var extensions: ExtensionStore!
     private(set) var extensionRuntime: ExtensionRuntime!
 
+    /// Outbound-only mobile control plane. The gateway is disabled unless its feature flag is
+    /// enabled, so normal desktop launches never make a relay connection.
+    private(set) var remoteGatewayState: RemoteGatewayState = .stopped
+    private(set) var remoteDesktopID: String = ""
+    @ObservationIgnored private var remoteGateway: RemoteGateway?
+    @ObservationIgnored private var remoteSnapshotHook: RemoteSnapshotPublicationHook?
+    @ObservationIgnored private var remoteGatewayGeneration = 0
+    @ObservationIgnored private var remoteGatewayRestartTask: Task<Void, Never>?
+
     weak var panelController: PanelController?
 
     /// Set by AppDelegate — clears a session's delivered notifications.
@@ -99,6 +108,48 @@ final class AppModel {
         }
         sessions.start()
         isReady = true
+        installRemoteGateway()
+    }
+
+    /// Re-read the feature configuration and replace the outbound relay connection. Settings
+    /// calls this explicitly after persisting edits so typing in a URL never churns sockets.
+    func reconfigureRemoteGateway() {
+        let previous = remoteGateway
+        remoteGatewayGeneration &+= 1
+        remoteGatewayRestartTask?.cancel()
+        sessions?.onRemoteStateChanged = nil
+        projects?.onRemoteStateChanged = nil
+        remoteGateway = nil
+        remoteSnapshotHook = nil
+        remoteGatewayState = .stopped
+
+        remoteGatewayRestartTask = Task { [weak self] in
+            await previous?.stop()
+            guard !Task.isCancelled, let self else { return }
+            self.installRemoteGateway()
+        }
+    }
+
+    private func installRemoteGateway(configuration: RemoteGatewayConfiguration = .load()) {
+        remoteGatewayGeneration &+= 1
+        let generation = remoteGatewayGeneration
+        remoteDesktopID = configuration.desktopID
+        let backend = AppRemoteCommandBackend(appModel: self)
+        let handler = RemoteCommandHandler(backend: backend)
+        let gateway = RemoteGateway(
+            configuration: configuration,
+            handler: handler,
+            stateObserver: { [weak self] state in
+                guard let self, self.remoteGatewayGeneration == generation else { return }
+                self.remoteGatewayState = state
+            }
+        )
+        let snapshotHook = RemoteSnapshotPublicationHook(publisher: gateway)
+        remoteGateway = gateway
+        remoteSnapshotHook = snapshotHook
+        sessions?.onRemoteStateChanged = { [weak snapshotHook] in snapshotHook?.schedule() }
+        projects?.onRemoteStateChanged = { [weak snapshotHook] in snapshotHook?.schedule() }
+        Task { await gateway.start() }
     }
 
     /// Menu bar → open the spec documents screen (summons the panel if hidden).
@@ -304,9 +355,12 @@ final class AppModel {
     func reply(to name: String, text: String) async -> ReplyInjector.Result {
         guard let s = sessions?.session(named: name) else { return .error("no session") }
         let r = await ReplyInjector.shared.sendText(name, agent: s.agent, text: text)
-        // optimistic: mark working, clear the pending item + the unacknowledged highlight
-        sessions?.acknowledge(name)
-        sessions?.applyAttention(name: name, .working)
+        // Only clear attention after tmux confirms every injection primitive succeeded. Keeping
+        // the pending item visible on failure lets the user retry instead of showing false work.
+        if case .delivered = r {
+            sessions?.acknowledge(name)
+            sessions?.applyAttention(name: name, .working)
+        }
         return r
     }
 

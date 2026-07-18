@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CoreImage.CIFilterBuiltins
 import KeyboardShortcuts
 
 /// Settings window (⌘,). Keyboard-first users rarely open it, but it's where the hotkey,
@@ -13,6 +14,9 @@ struct SettingsView: View {
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
     @AppStorage("backupOptimizeGit") private var backupOptimizeGit = true
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
+    @AppStorage(RemoteGatewayPreferenceKey.enabled) private var remoteAccessEnabled = false
+    @AppStorage(RemoteGatewayPreferenceKey.relayURL) private var remoteRelayURL = ""
+    @AppStorage(RemoteGatewayPreferenceKey.authorizationToken) private var remoteAuthorizationToken = ""
 
     var body: some View {
         Form {
@@ -142,6 +146,54 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section("Mobile access · developer preview") {
+                Toggle("Enable outbound relay connection", isOn: $remoteAccessEnabled)
+                TextField("wss://relay.example/connect", text: $remoteRelayURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11, design: .monospaced))
+                SecureField("Shared relay token", text: $remoteAuthorizationToken)
+                    .textFieldStyle(.roundedBorder)
+
+                LabeledContent("Desktop ID") {
+                    Text(appModel.remoteDesktopID)
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                LabeledContent("Status") {
+                    Text(remoteGatewayStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(remoteGatewayStatus.color)
+                        .multilineTextAlignment(.trailing)
+                }
+                Button("Apply connection settings") {
+                    appModel.reconfigureRemoteGateway()
+                }
+                if let payload = remotePairingPayload {
+                    HStack(alignment: .top, spacing: 12) {
+                        if let qrCode = remotePairingQRCode(for: payload) {
+                            Image(nsImage: qrCode)
+                                .resizable()
+                                .interpolation(.none)
+                                .frame(width: 112, height: 112)
+                                .accessibilityLabel("Developer pairing QR code")
+                        }
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text("Developer pairing")
+                                .font(.caption.weight(.semibold))
+                            Text("Scan this in Pass Remote, or copy the same JSON to the mobile pairing screen.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("Copy pairing JSON") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(payload, forType: .string)
+                            }
+                        }
+                    }
+                }
+                Text("The Mac only dials out; the local hook listener stays on 127.0.0.1. The QR above carries one shared development token stored in preferences. One-time, device-scoped QR pairing and Keychain credentials are the next security phase. PASS_REMOTE_* environment values override these fields.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Claude Code hooks") {
                 LabeledContent("Status") {
                     Text(appModel.needsHookInstall ? "Not installed" : "Installed")
@@ -212,6 +264,74 @@ struct SettingsView: View {
             appModel.hidePanel()
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    private var remoteGatewayStatus: (label: String, color: Color) {
+        switch appModel.remoteGatewayState {
+        case .disabled:
+            return ("Disabled", .secondary)
+        case .stopped:
+            return ("Stopped", .secondary)
+        case .connecting:
+            return ("Connecting…", .orange)
+        case .connected:
+            return ("Connected", .green)
+        case .waitingToReconnect(let attempt, let lastError):
+            return ("Retrying #\(attempt): \(lastError)", .orange)
+        case .failedConfiguration(let message):
+            return (message, .red)
+        }
+    }
+
+    private var remotePairingPayload: String? {
+        let configuration = RemoteGatewayConfiguration.load()
+        let token = configuration.authorizationToken?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !token.isEmpty else { return nil }
+        guard let websocketURL = try? configuration.validatedRelayURL(),
+              var components = URLComponents(url: websocketURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.scheme = websocketURL.scheme?.lowercased() == "wss" ? "https" : "http"
+        guard let relayURL = components.url?.absoluteString else { return nil }
+
+        let payload = DeveloperPairingPayload(
+            relayURL: relayURL,
+            desktopID: configuration.desktopID,
+            authorizationToken: token
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(payload) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func remotePairingQRCode(for payload: String) -> NSImage? {
+        guard let message = payload.data(using: .utf8), message.count <= 2_048 else { return nil }
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = message
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage?.transformed(
+            by: CGAffineTransform(scaleX: 8, y: 8)
+        ) else { return nil }
+        let representation = NSCIImageRep(ciImage: output)
+        let image = NSImage(size: representation.size)
+        image.addRepresentation(representation)
+        return image
+    }
+}
+
+struct DeveloperPairingPayload: Encodable {
+    let v = RemoteProtocolVersion.current
+    let relayURL: String
+    let desktopID: String
+    let authorizationToken: String
+
+    private enum CodingKeys: String, CodingKey {
+        case v
+        case relayURL = "relayUrl"
+        case desktopID = "desktopId"
+        case authorizationToken
     }
 }
 

@@ -41,6 +41,9 @@ final class SessionStore {
     var onReconciled: ((Set<String>) -> Void)?
     /// Extension-runtime tap: sessions that appeared / vanished, reported once per reconcile.
     var onSessionsChanged: (@MainActor (_ created: [Session], _ ended: [String]) -> Void)?
+    /// Remote control-plane tap. AppModel wires this to a debounced snapshot publisher so
+    /// mobile clients see the same state transitions as the local UI without polling tmux.
+    var onRemoteStateChanged: (@MainActor () -> Void)?
     /// Names seen by the previous reconcile. nil until the first pass — adopting sessions
     /// that were already running at launch must not fire "created" events.
     private var knownNames: Set<String>?
@@ -198,11 +201,14 @@ final class SessionStore {
         }
 
         // Sort: needs-you first, then most-recent activity.
-        sessions = next.sorted { a, b in
+        let sorted = next.sorted { a, b in
             let ap = a.attention.isPending, bp = b.attention.isPending
             if ap != bp { return ap }
             return a.lastActivity > b.lastActivity
         }
+        let changed = sessions != sorted
+        sessions = sorted
+        if changed { onRemoteStateChanged?() }
     }
 
     /// Is the session actively producing output right now? `.working` is the definitive signal
@@ -315,6 +321,7 @@ final class SessionStore {
         if let idx = sessions.firstIndex(where: { $0.name == name }) { sessions[idx] = s }
         else { sessions.append(s) }
         resort()
+        onRemoteStateChanged?()
     }
 
     /// Create a git worktree off a project's main checkout, then start a session inside it.
@@ -353,6 +360,7 @@ final class SessionStore {
         attentionByName[name] = nil
         unacked.remove(name)
         aliasByName.removeValue(forKey: name)
+        onRemoteStateChanged?()
         // Report the end explicitly: if this was the LAST session, reconcile sees an empty
         // listing and (deliberately, transient-failure rule) stays silent.
         if knownNames?.remove(name) != nil { onSessionsChanged?([], [name]) }
@@ -377,6 +385,7 @@ final class SessionStore {
             resort()
         }
         scheduleSave()
+        onRemoteStateChanged?()
     }
 
     /// Set (or clear, with empty/whitespace) a session's user-assigned display name.
@@ -389,6 +398,7 @@ final class SessionStore {
             sessions[idx].customName = trimmed.isEmpty ? nil : trimmed
         }
         scheduleSave()
+        onRemoteStateChanged?()
     }
 
     /// The user checked (or acted on) a session — clear its persistent needs-you highlight.
@@ -398,6 +408,7 @@ final class SessionStore {
             sessions[idx].unacknowledged = false
         }
         scheduleSave()
+        onRemoteStateChanged?()
     }
 
     /// Record a session's latest completed response.
@@ -408,6 +419,7 @@ final class SessionStore {
             sessions[idx].lastMessage = message
         }
         scheduleSave()
+        onRemoteStateChanged?()
     }
 
     // MARK: Persistence — the "needs you" queue + last responses survive app restarts.
