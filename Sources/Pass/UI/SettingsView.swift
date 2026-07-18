@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var cliLinked = false
     @State private var advertiseOn = false
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
+    @AppStorage(SessionStore.restoreDefaultsKey) private var restoreSessions = true
     @AppStorage("backupOptimizeGit") private var backupOptimizeGit = true
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
     @AppStorage(RemoteGatewayPreferenceKey.enabled) private var remoteAccessEnabled = false
@@ -143,6 +144,9 @@ struct SettingsView: View {
                 Toggle("Float above other windows", isOn: $floating)
                     .onChange(of: floating) { _, on in appModel.setPanelFloating(on) }
                 Text("Off: pass behaves like a normal window you can put beside your editor (⌘⇧F toggles).")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Restore sessions after a restart", isOn: $restoreSessions)
+                Text("If tmux was restarted (e.g. after a reboot), recreates your sessions with the same project and agent on launch — Claude resumes with --continue.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

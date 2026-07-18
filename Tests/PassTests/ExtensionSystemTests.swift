@@ -146,13 +146,13 @@ final class ExtensionManifestTests: XCTestCase {
     func testScriptContainment() throws {
         try Data("#!/bin/bash\n".utf8).write(to: dir.appendingPathComponent("report..v2.sh"))
         var named = ExtensionManifest.Action(); named.script = "report..v2.sh"
-        if case .failure(let m) = named.resolveScript(in: dir) { XCTFail(m) }
+        if case .failure(let m) = named.resolveScript(in: dir) { XCTFail(m.message) }
 
         var escape = ExtensionManifest.Action(); escape.script = "../../etc/evil.sh"
         guard case .failure(let msg) = escape.resolveScript(in: dir) else {
             return XCTFail("traversal escaped the extension folder")
         }
-        XCTAssertTrue(msg.contains("stay inside"))
+        XCTAssertTrue(msg.message.contains("stay inside"))
 
         var absolute = ExtensionManifest.Action(); absolute.script = "/bin/ls"
         guard case .failure = absolute.resolveScript(in: dir) else {

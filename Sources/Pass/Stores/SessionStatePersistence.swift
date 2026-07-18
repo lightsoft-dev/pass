@@ -4,6 +4,17 @@ import Foundation
 /// queue and each session's last response — so they survive an app restart. (Sessions
 /// themselves survive because tmux owns them; this is the layer pass adds on top.)
 enum SessionStatePersistence {
+    /// Enough to recreate a session after its tmux server dies (reboot / `kill-server`): the live
+    /// list is tmux-derived and vanishes with the server, and the project/agent binding lives only
+    /// in tmux options. Persisting it lets pass respawn the session (same dir + agent, `--continue`
+    /// for Claude) on the next launch.
+    struct SessionRef: Codable, Equatable {
+        var name: String
+        var projectRoot: String
+        var cwd: String
+        var agent: String   // AgentKind rawValue
+    }
+
     struct Snapshot: Codable {
         struct Pending: Codable {
             var kind: String        // Attention.Kind rawValue
@@ -22,6 +33,9 @@ enum SessionStatePersistence {
         // split comes back showing the same page. Optional for backward compat. Owned by
         // BrowserStore; SessionStore load-modify-saves so it never clobbers this field.
         var browserURLs: [String: String]?
+        // The previous run's live launchable-agent sessions, so they can be recreated if the
+        // tmux server was restarted meanwhile. Optional for backward compat.
+        var sessions: [SessionRef]?
     }
 
     private static var fileURL: URL {

@@ -21,6 +21,9 @@ struct CommandView: View {
     @FocusState private var omniboxFocused: Bool
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
+    // Which agent ⌘N starts. Chosen from the dropdown in the new-session bar; remembered so the
+    // next ⌘N defaults to your last pick.
+    @AppStorage("newSessionAgent") private var newSessionAgentRaw = AgentKind.claude.rawValue
 
     enum Route: Equatable {
         case list
@@ -30,6 +33,7 @@ struct CommandView: View {
     }
 
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
+    private var newSessionAgent: AgentKind { AgentKind(rawValue: newSessionAgentRaw) ?? .claude }
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
     /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
@@ -261,7 +265,7 @@ struct CommandView: View {
             }
             if newSessionMode {
                 if case .project(let p)? = jumpSelectedItem {
-                    appModel.createSession(projectDir: p.rootPath)
+                    appModel.createSession(projectDir: p.rootPath, agent: newSessionAgent)
                     hideQuickCommand()
                 }
                 return true
@@ -433,6 +437,7 @@ struct CommandView: View {
                         return .ignored
                     }
                     .onAppear { refocusField() } // grab focus the instant this field mounts
+                if newSessionMode { newSessionAgentPicker }
             }
             .padding(.horizontal, 16).padding(.vertical, 13)
 
@@ -458,6 +463,33 @@ struct CommandView: View {
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.12)))
+    }
+
+    /// ⌘N agent dropdown — pick which CLI the new session launches (claude/codex/pi). Sits at the
+    /// top-right of the new-session bar; the choice is remembered for next time.
+    private var newSessionAgentPicker: some View {
+        Menu {
+            ForEach(AgentKind.launchable, id: \.self) { agent in
+                Button {
+                    newSessionAgentRaw = agent.rawValue
+                    refocusField() // keep typing the project name after choosing
+                } label: {
+                    Text("\(agent == newSessionAgent ? "✓ " : "")\(agent.glyph)  \(agent.rawValue)")
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(newSessionAgent.glyph)
+                Text(newSessionAgent.rawValue).font(.system(size: 12, weight: .medium))
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            }
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Color.accentColor.opacity(0.14), in: Capsule())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -498,8 +530,8 @@ struct CommandView: View {
 
     private var hint: String {
         if newSessionMode {
-            if case .project(let p)? = jumpSelectedItem { return "⏎ new session in \(p.name)" }
-            return "type a project name · ⏎ start a session · Esc close"
+            if case .project(let p)? = jumpSelectedItem { return "⏎ new \(newSessionAgent.rawValue) session in \(p.name)" }
+            return "type a project name · ⏎ start a \(newSessionAgent.rawValue) session · Esc close"
         }
         if query.hasPrefix("+") {
             let branch = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
@@ -857,7 +889,9 @@ struct CommandView: View {
         case .session(let s):
             jumpToSession(s)
         case .project(let p):
-            appModel.createSession(projectDir: p.rootPath); query = ""
+            // In ⌘N the dropdown chooses the agent; a project tap in @-jump uses the default.
+            appModel.createSession(projectDir: p.rootPath, agent: newSessionMode ? newSessionAgent : .claude)
+            query = ""
         case .command(let c):
             runExtensionCommand(c)
         }

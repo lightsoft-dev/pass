@@ -52,6 +52,17 @@ final class SessionStore {
     /// when git hoists the projectRoot (e.g. a dotfiles setup where $HOME itself is a repo).
     private var ephemeralSessions: Set<String> = []
 
+    /// Descriptors for the CURRENT live launchable-agent sessions, mirrored to state.json so a
+    /// session can be recreated after its tmux server dies. Rebuilt on every non-empty reconcile.
+    private var sessionDescriptors: [String: SessionStatePersistence.SessionRef] = [:]
+    /// Sessions persisted by the PREVIOUS run, consumed once at launch to restore any the
+    /// (possibly restarted) tmux server no longer holds. Kept separate from `sessionDescriptors`
+    /// so a reconcile can't prune it before `restoreOrphanedSessions()` runs.
+    private var pendingRestore: [SessionStatePersistence.SessionRef] = []
+
+    /// Opt-out for launch-time session restore (default on).
+    static let restoreDefaultsKey = "restoreSessionsOnLaunch"
+
     private let tmux: TmuxClient
     private let projects: ProjectStore
     private var pollTask: Task<Void, Never>?
@@ -67,6 +78,7 @@ final class SessionStore {
         Task {
             tmuxMissing = !(await tmux.isAvailable)
             await reconcile()
+            await restoreOrphanedSessions()   // bring back sessions lost to a tmux server restart
             // Headless test hook: PASS_DEBUG_CREATE=<dir> creates a session on launch.
             if let dir = ProcessInfo.processInfo.environment["PASS_DEBUG_CREATE"], !dir.isEmpty {
                 let name = await createSession(projectDir: dir)
@@ -97,6 +109,60 @@ final class SessionStore {
 
     func stop() { pollTask?.cancel() }
 
+    // MARK: Restore (survive a tmux server death — reboot / kill-server)
+
+    /// Recreate sessions the previous run had but the (restarted) tmux server no longer holds.
+    /// Runs once, right after the first reconcile. tmux sessions can't be resurrected — their
+    /// live process and scrollback are gone with the server — so this respawns a fresh session
+    /// with the SAME name, project dir and agent; for Claude it launches `--continue`, resuming
+    /// the last conversation in that directory. Skips anything whose dir has since disappeared,
+    /// and honours the opt-out default.
+    private func restoreOrphanedSessions() async {
+        defer { pendingRestore = [] }   // consume once, whatever the outcome
+        guard !pendingRestore.isEmpty else { return }
+        guard UserDefaults.standard.object(forKey: Self.restoreDefaultsKey) as? Bool ?? true else { return }
+
+        let live = Set(sessions.map(\.name))
+        let fm = FileManager.default
+        var restored = 0
+        for ref in pendingRestore {
+            guard !live.contains(ref.name) else { continue }             // still here — nothing to do
+            guard let agent = AgentKind(rawValue: ref.agent),
+                  AgentKind.launchable.contains(agent) else { continue } // only agents we can relaunch
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: ref.cwd, isDirectory: &isDir), isDir.boolValue else {
+                Log.tmux.info("restore skipped \(ref.name, privacy: .public) — dir gone: \(ref.cwd, privacy: .public)")
+                continue
+            }
+            guard !(await tmux.hasSession(ref.name)) else { continue }   // name already taken
+
+            upsertLaunching(name: ref.name, projectRoot: ref.projectRoot, cwd: ref.cwd, agent: agent, git: nil)
+            await tmux.newSession(name: ref.name, cwd: ref.cwd, projectRoot: ref.projectRoot,
+                                  agent: agent, launchCommand: Self.resumeCommand(for: agent))
+            projects.rememberIfNew(rootPath: ref.projectRoot)
+            restored += 1
+        }
+        if restored > 0 {
+            Log.tmux.info("restored \(restored, privacy: .public) session(s) after tmux server loss")
+            await reconcile()
+        }
+    }
+
+    /// How to relaunch an agent so it picks up where it left off. Claude resumes the directory's
+    /// last conversation with `--continue`; other agents relaunch fresh (no reliable resume flag).
+    /// Honours the user's per-agent launch-command override.
+    private static func resumeCommand(for agent: AgentKind) -> String? {
+        guard let base = LaunchCommands.command(for: agent) else { return nil }
+        switch agent {
+        case .claude:
+            let hasContinue = base.contains("--continue")
+                || base.range(of: #"(^|\s)-c(\s|$)"#, options: .regularExpression) != nil
+            return hasContinue ? base : base + " --continue"
+        default:
+            return base
+        }
+    }
+
     // MARK: Reconcile
 
     func reconcile() async {
@@ -106,6 +172,7 @@ final class SessionStore {
         let ephemeralSnapshot = ephemeralSessions
 
         var next: [Session] = []
+        var newDescriptors: [String: SessionStatePersistence.SessionRef] = [:]
         for r in raw {
             // Only manage pass-* sessions (tag/adopt). Non-pass sessions are shown read-only.
             let isManaged = r.name.hasPrefix(PassConfig.sessionPrefix)
@@ -126,6 +193,13 @@ final class SessionStore {
             if isManaged, projectRoot != r.name,
                !ephemeralSessions.contains(r.name), !Self.isInternalRoot(projectRoot) {
                 projects.rememberIfNew(rootPath: projectRoot)
+                // Remember enough to respawn this session if the tmux server dies (agents only —
+                // shell/generic have no launch command to restore).
+                if AgentKind.launchable.contains(agent) {
+                    newDescriptors[r.name] = .init(name: r.name, projectRoot: projectRoot,
+                                                   cwd: r.cwd.isEmpty ? projectRoot : r.cwd,
+                                                   agent: agent.rawValue)
+                }
             }
 
             var session = Session(
@@ -177,7 +251,13 @@ final class SessionStore {
             unacked = unacked.intersection(liveNames)
             aliasByName = aliasByName.filter { liveNames.contains($0.key) }
             ephemeralSessions = ephemeralSessions.intersection(liveNames)
-            if before != (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count) { scheduleSave() }
+            // Descriptors track exactly the live launchable-agent sessions. Pruning here (rather
+            // than on an empty listing) is deliberate: a session that vanished while others remain
+            // really ended, but an all-gone listing is a transient/server-death case whose
+            // descriptors we must KEEP so the next launch can restore them.
+            let descriptorsChanged = sessionDescriptors != newDescriptors
+            sessionDescriptors = newDescriptors
+            if before != (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count) || descriptorsChanged { scheduleSave() }
             onReconciled?(liveNames)
         }
 
@@ -360,6 +440,9 @@ final class SessionStore {
         attentionByName[name] = nil
         unacked.remove(name)
         aliasByName.removeValue(forKey: name)
+        // Forget the restore descriptor and persist now — a deliberate kill must not come back on
+        // the next launch, and if this was the LAST session reconcile skips its save (empty list).
+        if sessionDescriptors.removeValue(forKey: name) != nil { scheduleSave() }
         onRemoteStateChanged?()
         // Report the end explicitly: if this was the LAST session, reconcile sees an empty
         // listing and (deliberately, transient-failure rule) stays silent.
@@ -429,6 +512,7 @@ final class SessionStore {
         lastMessageByName = snap.lastMessages
         unacked = Set(snap.unacked ?? [])
         aliasByName = snap.aliases ?? [:]
+        pendingRestore = snap.sessions ?? []
         for (name, p) in snap.pending {
             guard let kind = Attention.Kind(rawValue: p.kind) else { continue }
             attentionByName[name] = .pending(Attention(kind: kind, receivedAt: p.receivedAt, preview: p.preview))
@@ -441,16 +525,18 @@ final class SessionStore {
         let attn = attentionByName, last = lastMessageByName
         let unack = unacked
         let aliases = aliasByName
+        let descriptors = sessionDescriptors
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled, self != nil else { return }
-            // Load-modify-save: this store owns pending/lastMessages/unacked/aliases; fields
-            // owned by other stores (browserURLs) must survive our writes.
+            // Load-modify-save: this store owns pending/lastMessages/unacked/aliases/sessions;
+            // fields owned by other stores (browserURLs) must survive our writes.
             var snap = SessionStatePersistence.load()
             snap.pending = [:]
             snap.lastMessages = last
             snap.unacked = Array(unack)
             snap.aliases = aliases
+            snap.sessions = Array(descriptors.values)
             for (name, state) in attn {
                 if case .pending(let a) = state {
                     snap.pending[name] = .init(kind: a.kind.rawValue, receivedAt: a.receivedAt, preview: a.preview)

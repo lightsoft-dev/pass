@@ -219,12 +219,22 @@ extension ExtensionManifest {
 }
 
 extension ExtensionManifest.Action {
+    /// Why a script path was rejected — carried as the `Result` failure so callers can surface
+    /// the exact reason. A string literal is enough to construct one (`Result` requires the
+    /// failure to be an `Error`, which a bare `String` is not).
+    struct ScriptError: Error, CustomStringConvertible, ExpressibleByStringLiteral {
+        let message: String
+        init(_ message: String) { self.message = message }
+        init(stringLiteral value: String) { message = value }
+        var description: String { message }
+    }
+
     /// Resolve `script` against the extension folder, refusing anything that escapes it.
     /// The ONE containment rule, shared by validation (`problems`) and runtime enforcement —
     /// two hand-rolled copies would drift the first time either is hardened. Path-normalizing
     /// (`a/./b`, `sub/../x`) rather than substring-matching, so a file legitimately named
     /// `report..v2.sh` is not rejected.
-    func resolveScript(in directory: URL, fileManager: FileManager = .default) -> Result<URL, String> {
+    func resolveScript(in directory: URL, fileManager: FileManager = .default) -> Result<URL, ScriptError> {
         guard let script, !script.isEmpty else { return .failure("action has no script") }
         guard !script.hasPrefix("/") else {
             return .failure("script must be a relative path inside the extension folder")
@@ -235,7 +245,7 @@ extension ExtensionManifest.Action {
             return .failure("script must stay inside the extension folder")
         }
         guard fileManager.fileExists(atPath: url.path) else {
-            return .failure("script not found: \(script)")
+            return .failure(ScriptError("script not found: \(script)"))
         }
         return .success(url)
     }
