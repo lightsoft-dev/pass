@@ -147,7 +147,7 @@ final class ExtensionRuntime {
         if action.script != nil {
             let url: URL
             switch action.resolveScript(in: directory) { // same resolver validation uses
-            case .failure(let message): return message
+            case .failure(let error): return error.description
             case .success(let resolved): url = resolved
             }
             let args = (action.args ?? []).map { ExtensionTemplate.expand($0, context: ctx) }

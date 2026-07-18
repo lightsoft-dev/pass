@@ -48,7 +48,7 @@ final class ExtensionStore {
     private let defaults: UserDefaults
     private static let enabledKey = "extensions.enabled"
 
-    static var defaultDirectory: URL {
+    nonisolated static var defaultDirectory: URL {
         PassConfig.stateDirectory.appendingPathComponent("extensions", isDirectory: true)
     }
 
