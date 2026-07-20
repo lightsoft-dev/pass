@@ -71,6 +71,23 @@ final class AppModel {
     private(set) var extensions: ExtensionStore!
     private(set) var extensionRuntime: ExtensionRuntime!
 
+    /// Outbound-only mobile control plane. The gateway is disabled unless its feature flag is
+    /// enabled, so normal desktop launches never make a relay connection.
+    private(set) var remoteGatewayState: RemoteGatewayState = .stopped
+    private(set) var remoteDesktopID: String = ""
+    private(set) var remotePublicAccessAvailable = false
+    private(set) var remoteUsesPublicCredentials = false
+    private(set) var remoteAccountState: RemoteAccountState = .unavailable
+    private(set) var remotePublicPairingPayload: String?
+    @ObservationIgnored private var remoteGateway: RemoteGateway?
+    @ObservationIgnored private var remoteSnapshotHook: RemoteSnapshotPublicationHook?
+    @ObservationIgnored private var remoteTerminalCoordinator: RemoteTerminalCoordinator?
+    @ObservationIgnored private var remoteGatewayGeneration = 0
+    @ObservationIgnored private var remoteGatewayRestartTask: Task<Void, Never>?
+    @ObservationIgnored private var remoteCredentialRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var remotePairingExpiryTask: Task<Void, Never>?
+    @ObservationIgnored private var remoteAccountService: RemoteAccountService!
+
     weak var panelController: PanelController?
 
     /// Set by AppDelegate — clears a session's delivered notifications.
@@ -80,6 +97,8 @@ final class AppModel {
 
     /// Build the stores and start the reconcile loop. Called once from AppDelegate.
     func configure() {
+        remoteAccountService = RemoteAccountService()
+        refreshRemoteAccountState()
         projects = ProjectStore()
         sessions = SessionStore(projects: projects)
         specs = SpecStore()
@@ -99,6 +118,211 @@ final class AppModel {
         }
         sessions.start()
         isReady = true
+        installRemoteGateway()
+    }
+
+    /// Re-read the feature configuration and replace the outbound relay connection. Settings
+    /// calls this explicitly after persisting edits so typing in a URL never churns sockets.
+    func reconfigureRemoteGateway() {
+        let previous = remoteGateway
+        let previousTerminalCoordinator = remoteTerminalCoordinator
+        remoteGatewayGeneration &+= 1
+        remoteGatewayRestartTask?.cancel()
+        sessions?.stopRemoteStreaming()
+        sessions?.onRemoteStateChanged = nil
+        sessions?.onRemoteStreamChanged = nil
+        projects?.onRemoteStateChanged = nil
+        remoteGateway = nil
+        remoteSnapshotHook = nil
+        remoteTerminalCoordinator = nil
+        remoteGatewayState = .stopped
+
+        remoteGatewayRestartTask = Task { [weak self] in
+            await previousTerminalCoordinator?.stop()
+            await previous?.stop()
+            guard !Task.isCancelled, let self else { return }
+            self.installRemoteGateway()
+        }
+    }
+
+    private func installRemoteGateway(configuration: RemoteGatewayConfiguration = .loadSecure()) {
+        remoteGatewayGeneration &+= 1
+        let generation = remoteGatewayGeneration
+        remoteDesktopID = configuration.desktopID
+        let backend = AppRemoteCommandBackend(appModel: self)
+        let handler = RemoteCommandHandler(backend: backend)
+        let gateway = RemoteGateway(
+            configuration: configuration,
+            handler: handler,
+            stateObserver: { [weak self] state in
+                guard let self, self.remoteGatewayGeneration == generation else { return }
+                self.remoteGatewayState = state
+            }
+        )
+        let snapshotHook = RemoteSnapshotPublicationHook(publisher: gateway)
+        remoteGateway = gateway
+        remoteSnapshotHook = snapshotHook
+        remoteTerminalCoordinator = RemoteTerminalCoordinator { [weak gateway] snapshot in
+            await gateway?.publishTerminalSnapshot(snapshot)
+        }
+        sessions?.onRemoteStateChanged = { [weak snapshotHook] in snapshotHook?.schedule() }
+        sessions?.onRemoteStreamChanged = { [weak self] in
+            guard let sessions = self?.sessions?.sessions else { return }
+            let sources = sessions.map(RemoteMessageStreamSource.init)
+            Task { await gateway.publishMessageStreams(sources) }
+        }
+        projects?.onRemoteStateChanged = { [weak snapshotHook] in snapshotHook?.schedule() }
+        scheduleRemoteCredentialRefresh()
+        if configuration.isEnabled {
+            sessions?.startRemoteStreaming()
+            sessions?.onRemoteStreamChanged?()
+        } else {
+            sessions?.stopRemoteStreaming()
+        }
+        Task { await gateway.start() }
+    }
+
+    func openRemoteTerminal(
+        _ command: RemoteSessionTerminalOpenCommand
+    ) async -> RemoteSessionTerminalSnapshot? {
+        guard let remoteTerminalCoordinator else { return nil }
+        return await remoteTerminalCoordinator.open(
+            session: command.session,
+            subscriptionID: command.subscriptionID,
+            previousRevision: command.previousRevision
+        )
+    }
+
+    func sendRemoteTerminalInput(_ command: RemoteSessionTerminalInputCommand) async -> Bool {
+        guard let remoteTerminalCoordinator else { return false }
+        return await remoteTerminalCoordinator.sendInput(
+            session: command.session,
+            subscriptionID: command.subscriptionID,
+            input: command.input
+        )
+    }
+
+    func closeRemoteTerminal(_ command: RemoteSessionTerminalCloseCommand) async {
+        await remoteTerminalCoordinator?.close(
+            session: command.session,
+            subscriptionID: command.subscriptionID
+        )
+    }
+
+    func signInForRemoteAccess() {
+        guard let configuration = RemotePublicConfiguration.load() else {
+            remoteAccountState = .failed("Public account authentication is not configured in this build.")
+            return
+        }
+        remoteAccountState = .signingIn
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.remoteAccountService.signInAndRegisterDesktop(
+                    configuration: configuration
+                )
+                self.remoteUsesPublicCredentials = true
+                self.remotePublicAccessAvailable = true
+                self.remoteAccountState = .registered
+                self.reconfigureRemoteGateway()
+            } catch {
+                self.remoteAccountState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func createRemotePairing() {
+        guard remoteUsesPublicCredentials else {
+            remoteAccountState = .failed("Sign in before creating a pairing code.")
+            return
+        }
+        remoteAccountState = .creatingPairing
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let (pairing, registration) = try await self.remoteAccountService.createPairing()
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                let data = try encoder.encode(pairing)
+                guard let payload = String(data: data, encoding: .utf8) else {
+                    throw RemoteAccountError.invalidServerResponse
+                }
+                self.remotePublicPairingPayload = payload
+                self.remoteDesktopID = registration.id
+                self.remoteAccountState = .registered
+                self.reconfigureRemoteGateway()
+                self.clearRemotePairingPayload(at: pairing.expiresAt)
+            } catch {
+                self.remoteAccountState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func signOutFromRemoteAccess() {
+        remoteAccountState = .signingOut
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                if let configuration = RemotePublicConfiguration.load() {
+                    try await self.remoteAccountService.revokeDesktop(configuration: configuration)
+                } else {
+                    try self.remoteAccountService.clearLocalCredentials()
+                }
+                self.remoteCredentialRefreshTask?.cancel()
+                self.remoteCredentialRefreshTask = nil
+                self.remotePairingExpiryTask?.cancel()
+                self.remotePairingExpiryTask = nil
+                self.remotePublicPairingPayload = nil
+                self.remoteUsesPublicCredentials = false
+                self.remoteAccountState = RemotePublicConfiguration.load() == nil ? .unavailable : .signedOut
+                self.reconfigureRemoteGateway()
+            } catch {
+                self.remoteAccountState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func refreshRemoteAccountState() {
+        let hasConfiguration = RemotePublicConfiguration.load() != nil
+        let hasCredentials = (try? RemoteCredentialStore.loadDesktopRegistration()) != nil
+        remotePublicAccessAvailable = hasConfiguration || hasCredentials
+        remoteUsesPublicCredentials = hasCredentials
+        remoteAccountState = hasCredentials ? .registered : (hasConfiguration ? .signedOut : .unavailable)
+    }
+
+    private func scheduleRemoteCredentialRefresh() {
+        remoteCredentialRefreshTask?.cancel()
+        guard
+            let registration = try? RemoteCredentialStore.loadDesktopRegistration(),
+            let expiration = registration.credentials.accessExpiration
+        else { return }
+        let delay = max(0, expiration.timeIntervalSinceNow - 60)
+        remoteCredentialRefreshTask = Task { [weak self] in
+            let nanoseconds = UInt64(min(delay, 86_400) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            guard !Task.isCancelled, let self else { return }
+            do {
+                _ = try await self.remoteAccountService.refreshDesktopRegistrationIfNeeded()
+                self.remoteCredentialRefreshTask = nil
+                self.reconfigureRemoteGateway()
+            } catch {
+                self.remoteAccountState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func clearRemotePairingPayload(at expiration: String) {
+        remotePairingExpiryTask?.cancel()
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = formatter.date(from: expiration) else { return }
+        let payload = remotePublicPairingPayload
+        remotePairingExpiryTask = Task { [weak self] in
+            let delay = max(0, date.timeIntervalSinceNow)
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.remotePublicPairingPayload == payload else { return }
+            self.remotePublicPairingPayload = nil
+        }
     }
 
     /// Menu bar → open the spec documents screen (summons the panel if hidden).
@@ -304,9 +528,12 @@ final class AppModel {
     func reply(to name: String, text: String) async -> ReplyInjector.Result {
         guard let s = sessions?.session(named: name) else { return .error("no session") }
         let r = await ReplyInjector.shared.sendText(name, agent: s.agent, text: text)
-        // optimistic: mark working, clear the pending item + the unacknowledged highlight
-        sessions?.acknowledge(name)
-        sessions?.applyAttention(name: name, .working)
+        // Only clear attention after tmux confirms every injection primitive succeeded. Keeping
+        // the pending item visible on failure lets the user retry instead of showing false work.
+        if case .delivered = r {
+            sessions?.acknowledge(name)
+            sessions?.applyAttention(name: name, .working)
+        }
         return r
     }
 

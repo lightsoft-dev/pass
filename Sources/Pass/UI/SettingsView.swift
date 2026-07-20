@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CoreImage.CIFilterBuiltins
 import KeyboardShortcuts
 
 /// Settings window (⌘,). Keyboard-first users rarely open it, but it's where the hotkey,
@@ -15,6 +16,9 @@ struct SettingsView: View {
     @AppStorage(SessionStore.restoreDefaultsKey) private var restoreSessions = true
     @AppStorage("backupOptimizeGit") private var backupOptimizeGit = true
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
+    @AppStorage(RemoteGatewayPreferenceKey.enabled) private var remoteAccessEnabled = false
+    @AppStorage(RemoteGatewayPreferenceKey.relayURL) private var remoteRelayURL = ""
+    @AppStorage(RemoteGatewayPreferenceKey.authorizationToken) private var remoteAuthorizationToken = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -59,6 +63,8 @@ struct SettingsView: View {
             agentCommandsSection
         case .extensions:
             extensionsSection
+        case .mobile:
+            mobileAccessSection
         case .integrations:
             claudeHooksSection
             browserCLISection
@@ -214,6 +220,120 @@ struct SettingsView: View {
         }
     }
 
+    private var mobileAccessSection: some View {
+        Section(appModel.remotePublicAccessAvailable ? "Mobile access" : "Mobile access · developer preview") {
+            if appModel.remotePublicAccessAvailable {
+                LabeledContent("Account", value: remoteAccountStatus)
+                if appModel.remoteUsesPublicCredentials {
+                    LabeledContent("Desktop ID") {
+                        Text(appModel.remoteDesktopID)
+                            .font(.system(size: 10, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                    LabeledContent("Connection") {
+                        Text(remoteGatewayStatus.label)
+                            .font(.caption)
+                            .foregroundStyle(remoteGatewayStatus.color)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Button("Create one-time pairing code", systemImage: "qrcode") {
+                        appModel.createRemotePairing()
+                    }
+                    .disabled(remoteAccountBusy)
+                    if let payload = appModel.remotePublicPairingPayload {
+                        pairingCodeView(
+                            payload: payload,
+                            title: "One-time pairing",
+                            description: "Scan with Pass Remote. This code expires after five minutes and can be used once.",
+                            accessibilityLabel: "One-time pairing QR code"
+                        )
+                    }
+                    Button("Sign out and revoke this Mac", role: .destructive) {
+                        appModel.signOutFromRemoteAccess()
+                    }
+                    .disabled(remoteAccountBusy)
+                } else {
+                    Button("Sign in", systemImage: "person.crop.circle") {
+                        appModel.signInForRemoteAccess()
+                    }
+                    .disabled(remoteAccountBusy)
+                }
+                if remoteAccountBusy {
+                    ProgressView().controlSize(.small)
+                }
+                if case .failed(let message) = appModel.remoteAccountState {
+                    Label(message, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Text("The Mac connects outbound to the relay. Account and desktop credentials are stored in Keychain; pairing codes are short-lived and device-scoped.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Toggle("Enable outbound relay connection", isOn: $remoteAccessEnabled)
+                TextField("wss://relay.example/connect", text: $remoteRelayURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11, design: .monospaced))
+                SecureField("Shared relay token", text: $remoteAuthorizationToken)
+                    .textFieldStyle(.roundedBorder)
+                LabeledContent("Desktop ID") {
+                    Text(appModel.remoteDesktopID)
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                LabeledContent("Status") {
+                    Text(remoteGatewayStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(remoteGatewayStatus.color)
+                        .multilineTextAlignment(.trailing)
+                }
+                Button("Apply connection settings") {
+                    appModel.reconfigureRemoteGateway()
+                }
+                if let payload = developmentRemotePairingPayload {
+                    pairingCodeView(
+                        payload: payload,
+                        title: "Developer pairing",
+                        description: "Scan this in Pass Remote, or copy the same JSON to the mobile pairing screen.",
+                        accessibilityLabel: "Developer pairing QR code"
+                    )
+                } else {
+                    Label(remotePairingUnavailableMessage, systemImage: "qrcode")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("The Mac only dials out; the local hook listener stays on 127.0.0.1. This development QR carries one reusable shared token. PASS_REMOTE_* environment values override these fields.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func pairingCodeView(
+        payload: String,
+        title: String,
+        description: String,
+        accessibilityLabel: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            if let qrCode = remotePairingQRCode(for: payload) {
+                Image(nsImage: qrCode)
+                    .resizable()
+                    .interpolation(.none)
+                    .frame(width: 112, height: 112)
+                    .accessibilityLabel(accessibilityLabel)
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                Text(title).font(.caption.weight(.semibold))
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Copy pairing JSON") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(payload, forType: .string)
+                }
+            }
+        }
+    }
+
     private var claudeHooksSection: some View {
         Section("Claude Code hooks") {
             LabeledContent("Status") {
@@ -280,6 +400,97 @@ struct SettingsView: View {
             }
         }
     }
+
+    private var remoteGatewayStatus: (label: String, color: Color) {
+        switch appModel.remoteGatewayState {
+        case .disabled:
+            return ("Disabled", .secondary)
+        case .stopped:
+            return ("Stopped", .secondary)
+        case .connecting:
+            return ("Connecting…", .orange)
+        case .connected:
+            return ("Connected", .green)
+        case .waitingToReconnect(let attempt, let lastError):
+            return ("Retrying #\(attempt): \(lastError)", .orange)
+        case .failedConfiguration(let message):
+            return (message, .red)
+        }
+    }
+
+    private var remoteAccountBusy: Bool {
+        switch appModel.remoteAccountState {
+        case .signingIn, .creatingPairing, .signingOut: true
+        default: false
+        }
+    }
+
+    private var remoteAccountStatus: String {
+        switch appModel.remoteAccountState {
+        case .unavailable: "Unavailable"
+        case .signedOut: "Signed out"
+        case .signingIn: "Signing in..."
+        case .registered: "Signed in"
+        case .creatingPairing: "Creating pairing code..."
+        case .signingOut: "Signing out..."
+        case .failed: appModel.remoteUsesPublicCredentials ? "Signed in" : "Sign in required"
+        }
+    }
+
+    private var developmentRemotePairingPayload: String? {
+        let configuration = RemoteGatewayConfiguration.load()
+        let token = configuration.authorizationToken?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !token.isEmpty else { return nil }
+        guard let websocketURL = try? configuration.validatedRelayURL(),
+              var components = URLComponents(url: websocketURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.scheme = websocketURL.scheme?.lowercased() == "wss" ? "https" : "http"
+        guard let relayURL = components.url?.absoluteString else { return nil }
+
+        let payload = DeveloperPairingPayload(
+            relayURL: relayURL,
+            desktopID: configuration.desktopID,
+            authorizationToken: token
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(payload) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private var remotePairingUnavailableMessage: String {
+        let configuration = RemoteGatewayConfiguration.load()
+        let token = configuration.authorizationToken?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hasValidRelayURL = (try? configuration.validatedRelayURL()) != nil
+
+        switch (hasValidRelayURL, token.isEmpty) {
+        case (false, true):
+            return "Enter a valid relay URL and shared token to generate the pairing QR code."
+        case (false, false):
+            return "Enter a valid relay URL to generate the pairing QR code."
+        case (true, true):
+            return "Enter the shared relay token to generate the pairing QR code."
+        case (true, false):
+            return "The pairing QR code could not be generated."
+        }
+    }
+
+    private func remotePairingQRCode(for payload: String) -> NSImage? {
+        guard let message = payload.data(using: .utf8), message.count <= 2_048 else { return nil }
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = message
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage?.transformed(
+            by: CGAffineTransform(scaleX: 8, y: 8)
+        ) else { return nil }
+        let representation = NSCIImageRep(ciImage: output)
+        let image = NSImage(size: representation.size)
+        image.addRepresentation(representation)
+        return image
+    }
 }
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
@@ -289,6 +500,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case backup
     case agents
     case extensions
+    case mobile
     case integrations
     case system
 
@@ -302,6 +514,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .backup: return "Backup"
         case .agents: return "Agents"
         case .extensions: return "Extensions"
+        case .mobile: return "Mobile"
         case .integrations: return "Integrations"
         case .system: return "System"
         }
@@ -315,6 +528,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .backup: return "archivebox"
         case .agents: return "terminal"
         case .extensions: return "puzzlepiece.extension"
+        case .mobile: return "iphone"
         case .integrations: return "point.3.connected.trianglepath.dotted"
         case .system: return "server.rack"
         }
@@ -328,9 +542,24 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .backup: return "Export project and settings bundle"
         case .agents: return "Default launch commands"
         case .extensions: return "Installed extension scripts"
+        case .mobile: return "Remote access and device pairing"
         case .integrations: return "Hooks, CLI, and browser"
         case .system: return "Notifications and local listener"
         }
+    }
+}
+
+struct DeveloperPairingPayload: Encodable {
+    let v = RemoteProtocolVersion.current
+    let relayURL: String
+    let desktopID: String
+    let authorizationToken: String
+
+    private enum CodingKeys: String, CodingKey {
+        case v
+        case relayURL = "relayUrl"
+        case desktopID = "desktopId"
+        case authorizationToken
     }
 }
 

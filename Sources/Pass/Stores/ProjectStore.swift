@@ -8,6 +8,10 @@ import Observation
 final class ProjectStore {
     private(set) var projects: [Project] = []
 
+    /// Remote control-plane tap. AppModel wires this to the same debounced full-snapshot
+    /// publisher as session changes so mobile project pickers do not go stale.
+    var onRemoteStateChanged: (@MainActor () -> Void)?
+
     private let fileURL: URL
 
     /// `fileURL` is injectable so tests can point at a temp file instead of the real
@@ -29,6 +33,7 @@ final class ProjectStore {
         projects.removeAll { $0.rootPath == rootPath }
         projects.insert(Project(rootPath: rootPath), at: 0)
         save()
+        onRemoteStateChanged?()
     }
 
     /// Register only if not already known — no reorder, no save when present. Safe to call
@@ -37,19 +42,25 @@ final class ProjectStore {
         guard !projects.contains(where: { $0.rootPath == rootPath }) else { return }
         projects.append(Project(rootPath: rootPath))
         save()
+        onRemoteStateChanged?()
     }
 
     func forget(rootPath: String) {
+        let previousCount = projects.count
         projects.removeAll { $0.rootPath == rootPath }
         save()
+        if projects.count != previousCount { onRemoteStateChanged?() }
     }
 
     /// Assign (or clear, with nil/empty) the emoji shown at the front of a project's cards.
     func setEmoji(rootPath: String, _ emoji: String?) {
         guard let idx = projects.firstIndex(where: { $0.rootPath == rootPath }) else { return }
         let trimmed = emoji?.trimmingCharacters(in: .whitespaces)
-        projects[idx].emoji = (trimmed?.isEmpty == false) ? String(trimmed!.prefix(2)) : nil
+        let emoji = (trimmed?.isEmpty == false) ? String(trimmed!.prefix(2)) : nil
+        let changed = projects[idx].emoji != emoji
+        projects[idx].emoji = emoji
         save()
+        if changed { onRemoteStateChanged?() }
     }
 
     func emoji(forRoot root: String) -> String? {
