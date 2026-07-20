@@ -205,8 +205,8 @@ extension ExtensionManifest {
             out.append("\(label): permission \"\(p)\" not declared")
         }
         if action.script != nil,
-           case .failure(let message) = action.resolveScript(in: directory, fileManager: fileManager) {
-            out.append("\(label): \(message)")
+           case .failure(let problem) = action.resolveScript(in: directory, fileManager: fileManager) {
+            out.append("\(label): \(problem.message)")
         }
         return out
     }
@@ -237,12 +237,12 @@ extension ExtensionManifest.Action {
     func resolveScript(in directory: URL, fileManager: FileManager = .default) -> Result<URL, ScriptError> {
         guard let script, !script.isEmpty else { return .failure("action has no script") }
         guard !script.hasPrefix("/") else {
-            return .failure("script must be a relative path inside the extension folder")
+            return .failure(ScriptError("script must be a relative path inside the extension folder"))
         }
         let root = directory.standardizedFileURL.path
         let url = directory.appendingPathComponent(script).standardizedFileURL
         guard url.path.hasPrefix(root + "/") else {
-            return .failure("script must stay inside the extension folder")
+            return .failure(ScriptError("script must stay inside the extension folder"))
         }
         guard fileManager.fileExists(atPath: url.path) else {
             return .failure(ScriptError("script not found: \(script)"))
