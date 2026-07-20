@@ -1,6 +1,9 @@
 import Foundation
 import FlyingFox
 import FlyingSocks
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// One received hook, ready for the main actor to route.
 struct HookHit: Sendable {

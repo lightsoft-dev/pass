@@ -294,8 +294,8 @@ extension ExtensionManifest {
             out.append("\(label): permission \"\(p)\" not declared")
         }
         if action.script != nil,
-           case .failure(let message) = action.resolveScript(in: directory, fileManager: fileManager) {
-            out.append("\(label): \(message)")
+           case .failure(let problem) = action.resolveScript(in: directory, fileManager: fileManager) {
+            out.append("\(label): \(problem.message)")
         }
         return out
     }
