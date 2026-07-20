@@ -13,7 +13,7 @@ Implemented:
 - versioned protocol-v1 parsing with runtime DTO validation
 - one authenticated WebSocket, relay presence/receipts/resume, heartbeat, and jittered reconnect
 - session inbox ordered with decision/input requests first
-- session detail, delivery activity, message sending, and structured decisions
+- parsed session conversation, delivery activity, message sending, and structured decisions
 - per-session live assistant responses with reconnect recovery and ordered update handling
 - per-session interactive tmux terminal with an offline xterm.js renderer and software control keys
 - registered-project and agent picker for session creation
@@ -140,6 +140,11 @@ The renderer defaults to a readable mode that preserves at least 80% of the term
 size and pans horizontally when needed. Fit mode shows the complete pane width, while 1:1 mode
 retains the native size; all modes recalculate on rotation and none resize tmux. This first version
 mirrors the current pane and does not expose scrollback/copy mode.
+
+Session detail defaults to Chat rather than the terminal renderer. The mobile parser removes ANSI
+and TUI chrome, recognizes Claude and Codex user/assistant/tool markers, merges the authoritative
+live assistant stream, and renders prose, lists, inline code, fenced code, and collapsible tool
+output as native mobile UI. Terminal remains available as a fallback tab for exact TTY control.
 
 ## Validation
 

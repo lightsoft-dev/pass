@@ -5,7 +5,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,17 +12,19 @@ import {
 } from "react-native";
 
 import { AppButton } from "../../components/AppButton";
+import { ConversationSurface } from "../../components/ConversationSurface";
 import { Screen } from "../../components/Screen";
 import { TerminalSurface } from "../../components/TerminalSurface";
+import { buildConversation } from "../../conversation/terminalConversation";
 import {
   COMMAND_LIMITS,
   splitUTF8ByBytes,
   utf8ByteLength,
 } from "../../protocol/commands";
 import { useRemote } from "../../state/RemoteProvider";
-import { colors, radius, spacing } from "../../theme/theme";
+import { colors, spacing } from "../../theme/theme";
 
-type DetailMode = "terminal" | "activity";
+type DetailMode = "conversation" | "terminal";
 
 function labelForStatus(status: string) {
   switch (status) {
@@ -59,16 +60,17 @@ export default function SessionDetailScreen() {
   const terminalActions = useRef({ openTerminal, sendTerminalInput, closeTerminal });
   terminalActions.current = { openTerminal, sendTerminalInput, closeTerminal };
 
-  const [mode, setMode] = useState<DetailMode>("terminal");
+  const [mode, setMode] = useState<DetailMode>("conversation");
   const [message, setMessage] = useState("");
   const [resultText, setResultText] = useState<string | null>(null);
   const [terminalError, setTerminalError] = useState<string | null>(null);
-  const timeline = useMemo(
+  const fallbackUser = useMemo(
     () =>
       state.activities
         .filter((item) => item.session === sessionName)
         .slice()
-        .sort((a, b) => b.at.localeCompare(a.at)),
+        .sort((a, b) => b.at.localeCompare(a.at))
+        .find((item) => item.kind === "message" && item.detail)?.detail,
     [sessionName, state.activities],
   );
   const canWrite =
@@ -79,6 +81,16 @@ export default function SessionDetailScreen() {
   const responseText = stream?.text || session?.liveMessage || session?.lastMessage;
   const responseStreaming = stream?.phase === "streaming" || Boolean(session?.liveMessage);
   const responseTruncated = stream?.truncated === true || session?.liveMessageTruncated === true;
+  const conversation = useMemo(
+    () => buildConversation({
+      pane: terminal?.content,
+      agent: session?.agent ?? "generic",
+      latestAssistant: responseText,
+      latestAssistantStreaming: responseStreaming,
+      fallbackUser,
+    }),
+    [fallbackUser, responseStreaming, responseText, session?.agent, terminal?.content],
+  );
 
   useEffect(() => {
     if (terminal?.revision) terminalRevision.current = terminal.revision;
@@ -150,7 +162,7 @@ export default function SessionDetailScreen() {
     const result = sendMessage(session.name, text);
     if (result.ok) {
       setMessage("");
-      setResultText("Sent to relay. Delivery confirmation will appear below.");
+      setResultText("Sent.");
     } else setResultText(result.error);
   };
 
@@ -178,7 +190,7 @@ export default function SessionDetailScreen() {
             </Text>
           </View>
           <View accessibilityRole="tablist" style={styles.segmented}>
-            {(["terminal", "activity"] as const).map((item) => (
+            {(["conversation", "terminal"] as const).map((item) => (
               <Pressable
                 key={item}
                 accessibilityRole="tab"
@@ -187,7 +199,7 @@ export default function SessionDetailScreen() {
                 style={[styles.segment, mode === item && styles.segmentSelected]}
               >
                 <Text style={[styles.segmentText, mode === item && styles.segmentTextSelected]}>
-                  {item === "terminal" ? "Terminal" : "Activity"}
+                  {item === "conversation" ? "Chat" : "Terminal"}
                 </Text>
               </Pressable>
             ))}
@@ -199,7 +211,7 @@ export default function SessionDetailScreen() {
             <View style={styles.attentionCopy}>
               <Text style={styles.attentionTitle}>{labelForStatus(session.attention.status)}</Text>
               <Text numberOfLines={2} style={styles.attentionText}>
-                {session.attention.preview || "Open the terminal for the full prompt."}
+                {session.attention.preview || "Review the pending request below."}
               </Text>
             </View>
             {session.attention.status === "decision" ? (
@@ -212,7 +224,42 @@ export default function SessionDetailScreen() {
           </View>
         ) : null}
 
-        {mode === "terminal" ? (
+        {mode === "conversation" ? (
+          <>
+            <ConversationSurface
+              blocks={conversation}
+              truncated={responseTruncated}
+            />
+            <View style={styles.composer}>
+              {resultText ? <Text numberOfLines={2} style={styles.result}>{resultText}</Text> : null}
+              <View style={styles.composerRow}>
+                <TextInput
+                  accessibilityLabel="Message to coding session"
+                  maxLength={COMMAND_LIMITS.messageCharacters}
+                  multiline
+                  onChangeText={setMessage}
+                  placeholder={`Message ${session.agent}…`}
+                  placeholderTextColor={colors.subtle}
+                  style={styles.composerInput}
+                  value={message}
+                />
+                <Pressable
+                  accessibilityLabel="Send message"
+                  accessibilityRole="button"
+                  disabled={!canWrite || !message.trim()}
+                  onPress={send}
+                  style={({ pressed }) => [
+                    styles.sendButton,
+                    (!canWrite || !message.trim()) && styles.sendButtonDisabled,
+                    pressed && canWrite && message.trim() && styles.sendButtonPressed,
+                  ]}
+                >
+                  <Text style={styles.sendIcon}>↑</Text>
+                </Pressable>
+              </View>
+            </View>
+          </>
+        ) : (
           canUseTerminal || terminal ? (
             <TerminalSurface
               enabled={canUseTerminal}
@@ -231,60 +278,6 @@ export default function SessionDetailScreen() {
               </Text>
             </View>
           )
-        ) : (
-          <>
-            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-              <View style={styles.section}>
-                <View style={styles.responseHeading}>
-                  <Text style={styles.sectionTitle}>Agent response</Text>
-                  {responseStreaming ? <Text style={styles.liveText}>LIVE</Text> : null}
-                </View>
-                <View style={[styles.responseCard, responseStreaming && styles.streamingResponseCard]}>
-                  <Text selectable style={responseText ? styles.response : styles.muted}>
-                    {responseText || "No completed response has been published yet."}
-                  </Text>
-                  {responseTruncated ? (
-                    <Text style={styles.streamNotice}>Showing the first 64 KiB.</Text>
-                  ) : null}
-                </View>
-              </View>
-
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Mobile activity</Text>
-                {timeline.length === 0 ? (
-                  <Text style={styles.muted}>Messages and attention changes appear here.</Text>
-                ) : timeline.map((item) => (
-                  <View key={item.id} style={styles.timelineItem}>
-                    <View style={styles.timelineDot} />
-                    <View style={styles.timelineText}>
-                      <View style={styles.timelineTop}>
-                        <Text style={styles.timelineTitle}>{item.title}</Text>
-                        <Text style={styles.timelineTime}>
-                          {new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                        </Text>
-                      </View>
-                      {item.detail ? <Text style={styles.timelineDetail}>{item.detail}</Text> : null}
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </ScrollView>
-
-            <View style={styles.composer}>
-              {resultText ? <Text numberOfLines={2} style={styles.result}>{resultText}</Text> : null}
-              <TextInput
-                accessibilityLabel="Message to coding session"
-                maxLength={COMMAND_LIMITS.messageCharacters}
-                multiline
-                onChangeText={setMessage}
-                placeholder="Send an instruction…"
-                placeholderTextColor={colors.subtle}
-                style={styles.composerInput}
-                value={message}
-              />
-              <AppButton label="Send message" disabled={!canWrite || !message.trim()} onPress={send} />
-            </View>
-          </>
         )}
       </KeyboardAvoidingView>
     </Screen>
@@ -339,23 +332,12 @@ const styles = StyleSheet.create({
   attentionText: { color: colors.text, fontSize: 11, lineHeight: 15 },
   decisionActions: { flexDirection: "row", gap: 5 },
   terminalUnavailable: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl, gap: spacing.sm },
-  content: { padding: spacing.md, paddingBottom: spacing.lg, gap: spacing.lg, maxWidth: 760, width: "100%", alignSelf: "center" },
-  section: { gap: spacing.sm },
-  sectionTitle: { color: colors.text, fontSize: 14, fontWeight: "800" },
-  responseHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  liveText: { color: colors.info, fontSize: 10, fontWeight: "900" },
-  responseCard: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.md, gap: spacing.sm },
-  streamingResponseCard: { borderLeftColor: colors.info, borderLeftWidth: 3 },
-  response: { color: colors.text, fontSize: 14, lineHeight: 22 },
-  streamNotice: { color: colors.subtle, fontSize: 11 },
-  timelineItem: { flexDirection: "row", gap: spacing.sm },
-  timelineDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent, marginTop: 6 },
-  timelineText: { flex: 1, paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, gap: 4 },
-  timelineTop: { flexDirection: "row", gap: spacing.sm },
-  timelineTitle: { flex: 1, color: colors.text, fontSize: 13, fontWeight: "700" },
-  timelineTime: { color: colors.subtle, fontSize: 11 },
-  timelineDetail: { color: colors.muted, fontSize: 13, lineHeight: 18 },
-  composer: { backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border, padding: spacing.md, gap: spacing.sm },
-  composerInput: { minHeight: 58, maxHeight: 130, color: colors.text, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: 11, fontSize: 14, textAlignVertical: "top" },
+  composer: { backgroundColor: "#121519", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: 6 },
+  composerRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  composerInput: { flex: 1, minHeight: 44, maxHeight: 120, color: colors.text, backgroundColor: "#1b1f24", borderWidth: 1, borderColor: "#303741", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 11, fontSize: 14, lineHeight: 20, textAlignVertical: "top" },
+  sendButton: { width: 44, height: 44, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: "#61bd8e" },
+  sendButtonDisabled: { backgroundColor: "#252b32", opacity: 0.55 },
+  sendButtonPressed: { opacity: 0.72 },
+  sendIcon: { color: "#07130d", fontSize: 22, fontWeight: "900", lineHeight: 24 },
   result: { color: colors.muted, fontSize: 11 },
 });
