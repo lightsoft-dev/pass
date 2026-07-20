@@ -88,7 +88,7 @@ final class ExtensionStore {
                 let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: Data(contentsOf: file))
                 found.append(Loaded(manifest: manifest, directory: dir,
                                     problems: manifest.problems(directory: dir, fileManager: fm),
-                                    fingerprint: Self.fingerprint(directory: dir, fileManager: fm)))
+                                    fingerprint: Self.contentFingerprint(directory: dir, fileManager: fm)))
             } catch {
                 errors.append(LoadError(folder: dir.lastPathComponent,
                                         message: "extension.json: \(error.localizedDescription)"))
@@ -202,7 +202,7 @@ final class ExtensionStore {
 
     /// Stable digest of every non-.git file. Approval follows reviewed content, not just an id;
     /// changing HTML/JS/scripts/manifest disables the extension on the next reload.
-    private static func fingerprint(directory: URL, fileManager: FileManager) -> String {
+    static func contentFingerprint(directory: URL, fileManager: FileManager = .default) -> String {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
         guard let enumerator = fileManager.enumerator(at: directory,
                                                       includingPropertiesForKeys: keys,

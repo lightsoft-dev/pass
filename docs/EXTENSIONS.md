@@ -1,11 +1,12 @@
 # pass 익스텐션 시스템 설계
 
-> 상태: **Tier 1 (E1–E3) + 독립 Web UI 창 구현됨.** 매니페스트 로더(`ExtensionStore`) + 검증
+> 상태: **Tier 1 (E1–E4) + 독립 Web UI 창 구현됨.** 매니페스트 로더(`ExtensionStore`) + 검증
 > (`ExtensionManifest.problems`), ⌘P `>명령` 팔레트, 이벤트 규칙 + 액션 실행기
 > (`ExtensionRuntime`), Settings › Extensions(토글/리로드/실행 로그/번들 예제 설치)가
 > 동작한다. `apiVersion: 2`는 별도 `NSWindow + WKWebView`, 이벤트 브리지, 명명된 액션을
-> 추가한다. 번들 예제: **agent-usage**, **event-monitor** (`>events`). 남은 것: E4 AI 빌더,
-> E5 상주 프로세스·에이전트 기여, E6 공유.
+> 추가한다. Settings의 AI Builder는 자연어 목표를 Claude 세션에 전달하고 Stop hook에서 생성 완료를
+> 감지한 뒤 파일/권한 검토, 피드백 재작업, fingerprint 승인 활성화를 제공한다. 번들 예제:
+> **agent-usage**, **event-monitor** (`>events`). 남은 것: E5 상주 프로세스·에이전트 기여, E6 공유.
 
 ---
 
@@ -256,7 +257,7 @@ pass.closeWindow();
   파일 삭제 = 제거.
 - **리로드**: Settings의 "Reload"로 수동 재검색한다. 열린 Web UI 창은 리로드 전에 닫힌다.
 - **Settings › Extensions 탭**: 목록(이름/버전/권한/상태), 켜기/끄기, 폴더 열기, 로그 보기,
-  번들 예제 설치. "AI로 새 익스텐션 만들기"는 E4 범위다(§7).
+  번들 예제 설치, AI로 새 익스텐션 만들기(§7).
 - **실행 로그**: 익스텐션별 최근 실행 N건(액션, exit code, stderr 꼬리)을 메모리에 유지 —
   "왜 안 되지?"의 1차 디버깅 수단.
 
@@ -275,11 +276,10 @@ AI 빌더는 이 루프의 대상을 `.pass/specs.json` 대신 `~/.pass/extensio
    │  자연어 설명 입력: "세션이 permission 기다리면 내 Slack DM으로 보내줘"
    ▼
 pass: ~/.pass/extensions/<slug>/ 생성 (초기엔 disabled 상태로 격리)
-      Claude 세션 시작 (createSession — cwd를 해당 디렉토리로)
-      계약 프롬프트 주입 (ReplyInjector; runSpecAgent와 동일한 재시도 루프)
+      Claude 세션 시작 (createSession — cwd를 해당 디렉토리로, 최초 프롬프트는 launch 인자)
    ▼
 Claude: 번들 문서(EXTENSION_API.md)를 읽고 extension.json + 스크립트 작성
-        `pass-ext validate` 실행해 스키마 자체 검증 (CLI 검증기 제공, §7.3)
+        `"$PASS_CLI" extension validate .` 실행해 앱과 동일한 스키마로 자체 검증
         완료 시 Stop hook → pass가 감지
    ▼
 pass: 매니페스트 재검증 → 검토 화면
@@ -297,21 +297,23 @@ Read <app-bundle>/EXTENSION_API.md for the manifest schema, events, actions, and
 Goal: <사용자의 자연어 설명>
 
 Rules:
-- Write extension.json (apiVersion 1) and any scripts it references, in THIS directory only.
+- Write extension.json (apiVersion 1, or 2 for Web UI) and every referenced file in THIS directory only.
 - Declare the minimal permissions the extension needs.
-- Validate with `pass-ext validate .` and fix every error before finishing.
+- Validate with `"$PASS_CLI" extension validate .` and fix every error before finishing.
 - Scripts must be executable, self-contained, and safe to show a reviewer.
 - When done, write a one-paragraph SUMMARY.md describing what the extension does and why
   each permission is needed.
 ```
 
+피드백 재작업은 살아 있는 같은 세션에 `ReplyInjector`로 전달해 대화 컨텍스트를 유지한다.
+
 ### 지원 요소
 
 1. **EXTENSION_API.md** — 앱 번들에 포함되는 단일 API 문서. 사람용 문서이자 AI용 컨텍스트.
    스키마, 이벤트/액션 카탈로그, 템플릿 변수, 예제 3종. **이 문서의 품질이 곧 AI 빌더의 품질이다.**
-2. **`pass-ext` CLI 검증기** — 앱 번들에 포함하는 작은 실행 파일 (또는 앱 자체의 `--validate`
-   모드). 스키마 검증 + 참조 스크립트 존재/실행권한 확인 + 권한-액션 일치 검사. 에이전트가
-   피드백 루프를 스스로 돌 수 있게 하는 열쇠.
+2. **`passcli extension validate` 검증기** — 세션의 `$PASS_CLI`가 loopback API를 통해 앱의 실제
+   `ExtensionManifest` 디코더/검증기를 호출한다. 참조 리소스 존재·격리와 권한-액션 일치 검사를
+   앱과 똑같이 수행하며 설치/활성화는 절대 하지 않는다.
 3. **검토 화면** — AI 생성물은 무조건 여기를 거친다. 파일 전문 + 권한 + 트리거 조건.
    활성화 전까지 어떤 규칙도 디스패치되지 않는다.
 
@@ -354,7 +356,7 @@ Rules:
 | ✅ **E2 명령** | ⌘P `>명령` 라우팅, 템플릿 변수 확장, 액션 실행 (script/terminal/sendText/notify/openURL), 실행 로그 | ~450 LOC |
 | ✅ **E3 이벤트 규칙** | `ExtensionRuntime` — EventRouter·SessionStore 탭, 규칙 매칭(on/if), 액션 디스패치 | ~300 LOC |
 | ✅ **E3.5 Web UI 창** | `apiVersion 2`, 별도 NSWindow+WKWebView, private scheme/CSP, snapshot·event·named-action bridge, event-monitor 예제 | ~700 LOC |
-| **E4 AI 빌더** | EXTENSION_API.md, `pass-ext validate`, 생성 플로우(세션 생성+계약 프롬프트+Stop 감지), 검토·활성화 UI, rework 루프 | ~450 LOC + 문서 |
+| ✅ **E4 AI 빌더** | EXTENSION_API.md, `passcli extension validate`, 생성 플로우(격리 세션+계약 프롬프트+Stop 감지), 파일·권한 검토/승인 UI, 같은 세션 rework 루프 | ~900 LOC + 문서 |
 | **E5 상주 프로세스 + 에이전트** | 프로세스 감독(spawn/restart/log), 이벤트 push(HTTP), `/ext/api`, 에이전트 기여를 AgentRegistry에 연결 — codex/pi 어댑터를 번들 익스텐션으로 이관(M5 합류) | 설계 후 산정 |
 | **E6 공유** | git install/update UI, 재검토 diff | ~250 LOC |
 

@@ -71,6 +71,7 @@ final class AppModel {
     private(set) var extensions: ExtensionStore!
     private(set) var extensionRuntime: ExtensionRuntime!
     private(set) var extensionWindows: ExtensionWindowManager!
+    private(set) var extensionBuilder: ExtensionBuilder!
 
     /// Outbound-only mobile control plane. The gateway is disabled unless its feature flag is
     /// enabled, so normal desktop launches never make a relay connection.
@@ -114,12 +115,16 @@ final class AppModel {
         extensions = ExtensionStore()
         extensionWindows = ExtensionWindowManager(store: extensions)
         extensionRuntime = ExtensionRuntime(store: extensions, windows: extensionWindows, appModel: self)
+        extensionBuilder = ExtensionBuilder(store: extensions, sessions: sessions)
         extensionWindows.runtime = extensionRuntime
         extensions.onReload = { [weak self] in self?.extensionWindows?.closeAll() }
         extensions.onDisabled = { [weak self] id in self?.extensionWindows?.close(extensionId: id) }
         sessions.onSessionsChanged = { [weak self] created, ended in
-            self?.extensionRuntime?.sessionsCreated(created)
-            self?.extensionRuntime?.sessionsEnded(ended)
+            guard let self else { return }
+            self.extensionRuntime?.sessionsCreated(
+                created.filter { !self.extensionBuilder.ownsSession($0.name) })
+            self.extensionRuntime?.sessionsEnded(
+                ended.filter { !self.extensionBuilder.ownsSession($0) })
         }
         sessions.start()
         isReady = true

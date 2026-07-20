@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var floating = true
     @State private var cliLinked = false
     @State private var advertiseOn = false
+    @State private var showExtensionBuilder = false
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
     @AppStorage(SessionStore.restoreDefaultsKey) private var restoreSessions = true
     @AppStorage("backupOptimizeGit") private var backupOptimizeGit = true
@@ -44,6 +45,9 @@ struct SettingsView: View {
             // Hide it and pull the app forward so Settings is actually visible/focused.
             appModel.hidePanel()
             NSApp.activate(ignoringOtherApps: true)
+        }
+        .sheet(isPresented: $showExtensionBuilder) {
+            ExtensionBuilderView().environment(appModel)
         }
     }
 
@@ -176,6 +180,11 @@ struct SettingsView: View {
                 }
             }
             HStack {
+                Button {
+                    showExtensionBuilder = true
+                } label: {
+                    Label("Build with AI…", systemImage: "wand.and.stars")
+                }
                 Button("Reload") { store?.reload() }
                 Button("Open folder…") {
                     if let dir = store?.revealDirectory() { NSWorkspace.shared.open(dir) }
