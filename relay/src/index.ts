@@ -8,10 +8,10 @@ import {
 import { handleControlRequest } from "./control";
 
 import {
-  COMMAND_RETENTION_MS,
   MAX_FRAME_BYTES,
   MAX_RESUME_COMMANDS,
   PROTOCOL_VERSION,
+  commandRetentionMs,
   isMutatingCommand,
   isRecord,
   isRole,
@@ -35,11 +35,13 @@ const INTERNAL_AUTHORIZATION_HEADER = "X-Pass-Internal-Authorization";
 const INTERNAL_SCOPES_HEADER = "X-Pass-Internal-Scopes";
 const INTERNAL_CREDENTIAL_EXPIRES_AT_HEADER = "X-Pass-Internal-Credential-Expires-At";
 const OPEN = 1;
+const TERMINAL_SUBSCRIPTION_LIFETIME_MS = 45 * 1_000;
 
 const DEVELOPMENT_SCOPES = [
   "sessions:read",
   "sessions:write",
   "sessions:stream",
+  "sessions:terminal",
   "projects:read",
   "decisions:answer",
 ] as const;
@@ -80,6 +82,12 @@ type CommandRow = {
 
 type LatestSequenceRow = {
   latest_sequence: number;
+};
+
+type TerminalSubscriptionRow = {
+  subscription_id: string;
+  origin_device_id: string;
+  expires_at: number;
 };
 
 function jsonResponse(
@@ -190,6 +198,10 @@ function requiredCommandScope(commandType: string): string | null {
       return "sessions:write";
     case "session.answerDecision":
       return "decisions:answer";
+    case "session.terminal.open":
+    case "session.terminal.input":
+    case "session.terminal.close":
+      return "sessions:terminal";
     default:
       return null;
   }
@@ -290,6 +302,22 @@ export class DesktopRoom extends DurableObject<Env> {
       this.ctx.storage.sql.exec(
         "INSERT INTO _relay_schema_migrations (version, applied_at) VALUES (?, ?)",
         1,
+        Date.now(),
+      );
+    }
+    if (current < 2) {
+      this.ctx.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS terminal_subscriptions (
+          subscription_id TEXT PRIMARY KEY,
+          origin_device_id TEXT NOT NULL,
+          expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS terminal_subscriptions_expiry_idx
+          ON terminal_subscriptions(expires_at);
+      `);
+      this.ctx.storage.sql.exec(
+        "INSERT INTO _relay_schema_migrations (version, applied_at) VALUES (?, ?)",
+        2,
         Date.now(),
       );
     }
@@ -635,7 +663,7 @@ export class DesktopRoom extends DurableObject<Env> {
         command.type,
         mutating ? 1 : 0,
         now,
-        now + COMMAND_RETENTION_MS,
+        now + commandRetentionMs(command.type),
       )
       .one();
 
@@ -657,6 +685,7 @@ export class DesktopRoom extends DurableObject<Env> {
       return;
     }
 
+    this.trackTerminalSubscription(command, attachment.deviceId, now);
     this.sendReceipt(mobile, inserted, false);
   }
 
@@ -667,6 +696,10 @@ export class DesktopRoom extends DurableObject<Env> {
     this.pruneExpiredCommands();
 
     if (event.replyTo === undefined) {
+      if (event.type === "session.terminal.snapshot") {
+        this.routeTerminalSnapshot(event);
+        return;
+      }
       if (
         event.type === "session.snapshot" ||
         event.type === "session.message.started" ||
@@ -702,7 +735,7 @@ export class DesktopRoom extends DurableObject<Env> {
         "UPDATE commands SET status = ?, acked_at = ?, expires_at = ? WHERE command_id = ?",
         status,
         ackedAt,
-        ackedAt + COMMAND_RETENTION_MS,
+        ackedAt + commandRetentionMs(command.command_type),
         command.command_id,
       );
     }
@@ -893,6 +926,51 @@ export class DesktopRoom extends DurableObject<Env> {
     );
   }
 
+  private trackTerminalSubscription(
+    command: MobileCommand,
+    deviceId: string,
+    now: number,
+  ): void {
+    const subscriptionId = command.payload.subscriptionId;
+    if (!isValidIdentifier(subscriptionId)) return;
+    if (command.type === "session.terminal.open") {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO terminal_subscriptions (subscription_id, origin_device_id, expires_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(subscription_id) DO UPDATE SET
+           origin_device_id = excluded.origin_device_id,
+           expires_at = excluded.expires_at`,
+        subscriptionId,
+        deviceId,
+        now + TERMINAL_SUBSCRIPTION_LIFETIME_MS,
+      );
+    } else if (command.type === "session.terminal.close") {
+      this.ctx.storage.sql.exec(
+        "DELETE FROM terminal_subscriptions WHERE subscription_id = ? AND origin_device_id = ?",
+        subscriptionId,
+        deviceId,
+      );
+    }
+  }
+
+  private routeTerminalSnapshot(event: DesktopEvent): void {
+    if (!isRecord(event.payload)) return;
+    const subscriptionId = event.payload.subscriptionId;
+    if (!isValidIdentifier(subscriptionId)) return;
+    const subscription = this.ctx.storage.sql
+      .exec<TerminalSubscriptionRow>(
+        `SELECT * FROM terminal_subscriptions
+         WHERE subscription_id = ? AND expires_at > ? LIMIT 1`,
+        subscriptionId,
+        Date.now(),
+      )
+      .toArray()[0];
+    if (subscription === undefined) return;
+    for (const mobile of this.mobileSocketsForDevice(subscription.origin_device_id)) {
+      this.send(mobile, event);
+    }
+  }
+
   private latestSequence(): number {
     return this.ctx.storage.sql
       .exec<LatestSequenceRow>(
@@ -904,6 +982,10 @@ export class DesktopRoom extends DurableObject<Env> {
   private pruneExpiredCommands(): void {
     this.ctx.storage.sql.exec(
       "DELETE FROM commands WHERE expires_at < ?",
+      Date.now(),
+    );
+    this.ctx.storage.sql.exec(
+      "DELETE FROM terminal_subscriptions WHERE expires_at < ?",
       Date.now(),
     );
   }

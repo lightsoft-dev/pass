@@ -81,6 +81,7 @@ final class AppModel {
     private(set) var remotePublicPairingPayload: String?
     @ObservationIgnored private var remoteGateway: RemoteGateway?
     @ObservationIgnored private var remoteSnapshotHook: RemoteSnapshotPublicationHook?
+    @ObservationIgnored private var remoteTerminalCoordinator: RemoteTerminalCoordinator?
     @ObservationIgnored private var remoteGatewayGeneration = 0
     @ObservationIgnored private var remoteGatewayRestartTask: Task<Void, Never>?
     @ObservationIgnored private var remoteCredentialRefreshTask: Task<Void, Never>?
@@ -124,6 +125,7 @@ final class AppModel {
     /// calls this explicitly after persisting edits so typing in a URL never churns sockets.
     func reconfigureRemoteGateway() {
         let previous = remoteGateway
+        let previousTerminalCoordinator = remoteTerminalCoordinator
         remoteGatewayGeneration &+= 1
         remoteGatewayRestartTask?.cancel()
         sessions?.stopRemoteStreaming()
@@ -132,9 +134,11 @@ final class AppModel {
         projects?.onRemoteStateChanged = nil
         remoteGateway = nil
         remoteSnapshotHook = nil
+        remoteTerminalCoordinator = nil
         remoteGatewayState = .stopped
 
         remoteGatewayRestartTask = Task { [weak self] in
+            await previousTerminalCoordinator?.stop()
             await previous?.stop()
             guard !Task.isCancelled, let self else { return }
             self.installRemoteGateway()
@@ -158,6 +162,9 @@ final class AppModel {
         let snapshotHook = RemoteSnapshotPublicationHook(publisher: gateway)
         remoteGateway = gateway
         remoteSnapshotHook = snapshotHook
+        remoteTerminalCoordinator = RemoteTerminalCoordinator { [weak gateway] snapshot in
+            await gateway?.publishTerminalSnapshot(snapshot)
+        }
         sessions?.onRemoteStateChanged = { [weak snapshotHook] in snapshotHook?.schedule() }
         sessions?.onRemoteStreamChanged = { [weak self] in
             guard let sessions = self?.sessions?.sessions else { return }
@@ -173,6 +180,33 @@ final class AppModel {
             sessions?.stopRemoteStreaming()
         }
         Task { await gateway.start() }
+    }
+
+    func openRemoteTerminal(
+        _ command: RemoteSessionTerminalOpenCommand
+    ) async -> RemoteSessionTerminalSnapshot? {
+        guard let remoteTerminalCoordinator else { return nil }
+        return await remoteTerminalCoordinator.open(
+            session: command.session,
+            subscriptionID: command.subscriptionID,
+            previousRevision: command.previousRevision
+        )
+    }
+
+    func sendRemoteTerminalInput(_ command: RemoteSessionTerminalInputCommand) async -> Bool {
+        guard let remoteTerminalCoordinator else { return false }
+        return await remoteTerminalCoordinator.sendInput(
+            session: command.session,
+            subscriptionID: command.subscriptionID,
+            input: command.input
+        )
+    }
+
+    func closeRemoteTerminal(_ command: RemoteSessionTerminalCloseCommand) async {
+        await remoteTerminalCoordinator?.close(
+            session: command.session,
+            subscriptionID: command.subscriptionID
+        )
     }
 
     func signInForRemoteAccess() {

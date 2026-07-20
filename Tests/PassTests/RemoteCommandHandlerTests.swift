@@ -22,6 +22,7 @@ final class RemoteCommandHandlerTests: XCTestCase {
         XCTAssertEqual(snapshot.sessions.map(\.name), ["pass-app"])
         XCTAssertEqual(snapshot.projects.map(\.rootPath), ["/projects/app"])
         XCTAssertTrue(snapshot.capabilities.contains(.decisionsAnswer))
+        XCTAssertTrue(snapshot.capabilities.contains(.sessionsTerminal))
     }
 
     func testCreateRequiresRegisteredProjectAndReturnsCreatedSession() async {
@@ -150,6 +151,77 @@ final class RemoteCommandHandlerTests: XCTestCase {
         XCTAssertEqual(errorCode(failure), "decision_not_pending")
     }
 
+    func testTerminalOpenPublishesSnapshotAndInputUsesActiveSubscription() async {
+        let backend = FakeRemoteCommandBackend()
+        backend.sessions = [Self.session]
+        let handler = makeHandler(backend)
+        let subscriptionID = "term_123"
+
+        let opened = await handler.handle(command(
+            id: "cmd_terminal_open",
+            command: .sessionTerminalOpen(.init(
+                session: " pass-app ",
+                subscriptionID: subscriptionID,
+                previousRevision: nil
+            ))
+        ))
+
+        XCTAssertEqual(opened.map(\.type), [RemoteEventType.acknowledgement, RemoteEventType.sessionTerminalSnapshot])
+        guard case .sessionTerminalSnapshot(let snapshot) = opened[1].event else {
+            return XCTFail("Expected terminal snapshot")
+        }
+        XCTAssertEqual(snapshot.subscriptionID, subscriptionID)
+        XCTAssertEqual(snapshot.content, "\u{001B}[32mready\u{001B}[0m")
+        XCTAssertEqual(snapshot.cursorX, 5)
+
+        let input = await handler.handle(command(
+            id: "cmd_terminal_input",
+            command: .sessionTerminalInput(.init(
+                session: "pass-app",
+                subscriptionID: subscriptionID,
+                input: "한글\r"
+            ))
+        ))
+        XCTAssertEqual(input.map(\.type), [RemoteEventType.acknowledgement])
+        XCTAssertEqual(backend.terminalInputs.first?.input, "한글\r")
+
+        let closed = await handler.handle(command(
+            id: "cmd_terminal_close",
+            command: .sessionTerminalClose(.init(
+                session: "pass-app",
+                subscriptionID: subscriptionID
+            ))
+        ))
+        XCTAssertEqual(closed.map(\.type), [RemoteEventType.acknowledgement])
+        XCTAssertEqual(backend.closedTerminals.first?.subscriptionID, subscriptionID)
+    }
+
+    func testTerminalCommandsRejectInvalidSubscriptionAndOversizedInput() async {
+        let backend = FakeRemoteCommandBackend()
+        backend.sessions = [Self.session]
+        let handler = makeHandler(backend)
+
+        let invalidID = await handler.handle(command(
+            id: "cmd_bad_terminal",
+            command: .sessionTerminalOpen(.init(
+                session: "pass-app",
+                subscriptionID: "not valid",
+                previousRevision: nil
+            ))
+        ))
+        XCTAssertEqual(errorCode(invalidID), "invalid_subscription")
+
+        let oversized = await handler.handle(command(
+            id: "cmd_large_terminal_input",
+            command: .sessionTerminalInput(.init(
+                session: "pass-app",
+                subscriptionID: "term_123",
+                input: String(repeating: "🙂", count: RemoteWireLimits.terminalInputBytes / 4 + 1)
+            ))
+        ))
+        XCTAssertEqual(errorCode(oversized), "terminal_input_too_large")
+    }
+
     func testRejectsStaleAndFutureProtocolVersionsAndEmptyID() async {
         let backend = FakeRemoteCommandBackend()
         let handler = makeHandler(backend)
@@ -231,6 +303,8 @@ private final class FakeRemoteCommandBackend: RemoteCommandBackend {
     var createdCommands: [RemoteSessionCreateCommand] = []
     var sentCommands: [RemoteSessionSendMessageCommand] = []
     var decisionCommands: [RemoteSessionAnswerDecisionCommand] = []
+    var terminalInputs: [RemoteSessionTerminalInputCommand] = []
+    var closedTerminals: [RemoteSessionTerminalCloseCommand] = []
     var createError: RemoteExecutionError?
     var sendError: RemoteExecutionError?
     var decisionError: RemoteExecutionError?
@@ -264,5 +338,32 @@ private final class FakeRemoteCommandBackend: RemoteCommandBackend {
             throw RemoteExecutionError(code: "session_not_found", message: "The requested session is not running.")
         }
         decisionCommands.append(command)
+    }
+
+    func openTerminal(_ command: RemoteSessionTerminalOpenCommand) async throws -> RemoteSessionTerminalSnapshot {
+        guard sessions.contains(where: { $0.name == command.session }) else {
+            throw RemoteExecutionError(code: "session_not_found", message: "The requested session is not running.")
+        }
+        return RemoteSessionTerminalSnapshot(
+            session: command.session,
+            subscriptionID: command.subscriptionID,
+            revision: "rev_1",
+            pane: TerminalPaneSnapshot(
+                content: "\u{001B}[32mready\u{001B}[0m",
+                columns: 80,
+                rows: 24,
+                cursorX: 5,
+                cursorY: 2
+            ),
+            omitContent: command.previousRevision == "rev_1"
+        )
+    }
+
+    func sendTerminalInput(_ command: RemoteSessionTerminalInputCommand) async throws {
+        terminalInputs.append(command)
+    }
+
+    func closeTerminal(_ command: RemoteSessionTerminalCloseCommand) async throws {
+        closedTerminals.append(command)
     }
 }

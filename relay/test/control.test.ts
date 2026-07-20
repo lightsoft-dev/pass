@@ -191,6 +191,7 @@ describe("public account and device control plane", () => {
     const device = nested(claim, "device");
     const mobileCredentials = nested(claim, "credentials");
     expect(claim.scopes).toContain("sessions:write");
+    expect(claim.scopes).toContain("sessions:terminal");
 
     const reused = await api(`/v2/pairings/${String(pairing.pairingId)}/claim`, {
       token: ownerToken,

@@ -13,9 +13,22 @@ struct RawSession: Sendable {
     var paneInMode: Bool
 }
 
+struct TerminalPaneSnapshot: Equatable, Sendable {
+    var content: String
+    var columns: Int
+    var rows: Int
+    var cursorX: Int
+    var cursorY: Int
+}
+
+protocol TerminalPaneAccess: Sendable {
+    func terminalSnapshot(_ name: String) async -> TerminalPaneSnapshot?
+    func sendTerminalInput(_ input: String, to name: String) async -> Bool
+}
+
 /// The ONLY thing that spawns tmux. Resolves the binary once; every call uses the absolute
 /// path. Uses the default socket so `tmux attach` from any terminal just works.
-actor TmuxClient {
+actor TmuxClient: TerminalPaneAccess {
     static let shared = TmuxClient()
 
     private let tmuxPath: String?
@@ -144,6 +157,51 @@ actor TmuxClient {
         var args = ["capture-pane", "-p", "-J", "-t", name]
         if colors { args.insert("-e", at: 1) }
         return await run(args).stdout
+    }
+
+    /// Captures the visible terminal grid without joining wrapped rows. Cursor and dimensions
+    /// let a remote terminal renderer reconstruct the current screen after every reconnect.
+    func terminalSnapshot(_ name: String) async -> TerminalPaneSnapshot? {
+        let marker = "__PASS_TERMINAL_PANE__"
+        let capture = await run([
+            "capture-pane", "-p", "-e", "-t", name,
+            ";", "display-message", "-p", "-t", name,
+            "\(marker)\t#{pane_width}\t#{pane_height}\t#{cursor_x}\t#{cursor_y}",
+        ])
+        guard capture.ok,
+              let markerRange = capture.stdout.range(
+                of: "\n\(marker)\t",
+                options: .backwards
+              ) else { return nil }
+        let paneContent = String(capture.stdout[..<markerRange.lowerBound])
+        let factLine = capture.stdout[markerRange.upperBound...]
+            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)[0]
+        let fields = factLine
+            .components(separatedBy: "\t")
+        guard fields.count == 4,
+              let columns = Int(fields[0]), let rows = Int(fields[1]),
+              let cursorX = Int(fields[2]), let cursorY = Int(fields[3]),
+              columns > 0, rows > 0 else {
+            return nil
+        }
+        return TerminalPaneSnapshot(
+            content: paneContent,
+            columns: columns,
+            rows: rows,
+            cursorX: max(0, min(cursorX, columns - 1)),
+            cursorY: max(0, min(cursorY, rows - 1))
+        )
+    }
+
+    /// Literal mode preserves composed Unicode and terminal escape sequences without asking tmux
+    /// to reinterpret each UTF-8 byte as a separate key code.
+    func sendTerminalInput(_ input: String, to name: String) async -> Bool {
+        guard !input.isEmpty else { return true }
+        if !input.utf8.contains(0) {
+            return await run(["send-keys", "-l", "-t", name, "--", input]).ok
+        }
+        let hex = input.utf8.map { String(format: "%02x", $0) }
+        return await run(["send-keys", "-t", name, "-H"] + hex).ok
     }
 
     /// Run before a pass client attaches. Older builds called `resize-window` for the text

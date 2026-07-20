@@ -5,7 +5,7 @@ instance: send messages to agent sessions, list/create sessions, observe state, 
 voice agent that speaks as a management layer instead of merely transcribing text into the
 existing chat box.
 
-## Implementation status (2026-07-18)
+## Implementation status (2026-07-20)
 
 The repository now contains a working control plane with a development compatibility mode and a
 public-account implementation:
@@ -29,6 +29,10 @@ public-account implementation:
   transcript or pane every 750 ms and sends the complete current text, bounded to 64 KiB UTF-8.
   Stream events are ephemeral at the relay; a fresh snapshot includes `liveMessage` so reconnects
   can recover the current response.
+- Session detail now defaults to an interactive terminal tab. A TTL-based desktop coordinator
+  captures the active tmux pane every 120 ms, publishes only revision changes, and accepts exact
+  UTF-8/escape input bytes. The mobile renders bounded ANSI snapshots with a locally bundled
+  xterm.js WebView and retains the previous structured activity UI in a separate tab.
 
 The public path no longer puts a reusable relay bearer in the QR. Remaining launch hardening is
 edge rate limiting, managed OIDC deployment values, provider-side account deletion, abuse and
@@ -179,9 +183,10 @@ Use one versioned JSON protocol over WebSocket for the control plane. Every comm
 
 ### Desktop-to-mobile events
 
-The developer MVP currently emits `ack`, `error`, `session.snapshot`, `message.delivered`, and the
-three `session.message.*` streaming events. Other incremental and voice events in this table remain
-the target contract for later phases; full snapshots remain the source of truth.
+The developer MVP currently emits `ack`, `error`, `session.snapshot`, `message.delivered`, the
+three `session.message.*` streaming events, and `session.terminal.snapshot`. Other incremental and
+voice events in this table remain the target contract for later phases; full snapshots remain the
+source of truth.
 
 | Event | Payload |
 | --- | --- |
@@ -189,6 +194,7 @@ the target contract for later phases; full snapshots remain the source of truth.
 | `session.message.started` | First sampled text for an in-progress assistant response. |
 | `session.message.updated` | New complete sampled text for the same message id and a higher sequence. |
 | `session.message.completed` | Final complete text when the response stops streaming. |
+| `session.terminal.snapshot` | Revisioned ANSI active-pane image, geometry, cursor, and truncation state. |
 | `session.updated` | One changed session: name, display name, agent, project root, git branch, attention, last message, activity. |
 | `session.removed` | Removed tmux session name. |
 | `attention.changed` | Pending decision/input/working/idle state and optional prompt preview. |
@@ -197,8 +203,9 @@ the target contract for later phases; full snapshots remain the source of truth.
 
 ### Mobile-to-desktop commands
 
-The developer MVP implements the five `session.*`/`project.list` commands. `voice.*` commands are
-listed here as roadmap items and are not advertised as a capability by the desktop.
+The developer MVP implements the session/project commands below, including a short-lived terminal
+subscription. `voice.*` commands are listed here as roadmap items and are not advertised as a
+capability by the desktop.
 
 | Command | Purpose |
 | --- | --- |
@@ -206,6 +213,9 @@ listed here as roadmap items and are not advertised as a capability by the deskt
 | `session.create` | Create a tmux-backed pass session for a registered project and agent. |
 | `session.sendMessage` | Send a typed message to an existing coding session using `ReplyInjector`. |
 | `session.answerDecision` | Send a structured yes/no or permission decision. |
+| `session.terminal.open` | Open or renew a 30-second pane subscription; optionally provide the last revision. |
+| `session.terminal.input` | Send bounded terminal UTF-8/escape input to an active subscription. |
+| `session.terminal.close` | End a terminal subscription. |
 | `project.list` | List registered projects that can start sessions. |
 | `voice.start` | Start a voice-management conversation. |
 | `voice.inputAudio` | Stream or reference audio chunks, depending on transport. |
@@ -261,6 +271,7 @@ confirmation so voice and text control share the same audit trail.
   tokens quickly.
 - **Authorization:** Gate actions with capability scopes such as `sessions:read`,
   `sessions:write`, `sessions:stream`, `projects:read`, `voice:use`, and `decisions:answer`.
+  Interactive terminal access additionally requires `sessions:terminal`.
 - **Local-first execution:** The desktop app remains the authority for tmux, repo paths, and
   injections.
 - **Transport:** Desktop dials out to the relay over TLS. Do not expose the existing hook server
@@ -273,8 +284,8 @@ confirmation so voice and text control share the same audit trail.
 1. **Pairing screen** — scans desktop QR code and verifies device registration.
 2. **Home / Inbox** — mirrors the pass panel: pending sessions first, last response preview,
    project/branch badges, and attention state.
-3. **Session detail** — message composer, status timeline, last assistant response, and actions
-   like attach instructions or kill request if allowed.
+3. **Session detail** — live tmux terminal by default, with structured messages, status timeline,
+   last assistant response, and decision controls in the Activity tab.
 4. **Create session** — project picker and agent picker.
 5. **Voice control** — push-to-talk or hands-free mode, live state indicator, transcript of the
    management conversation, and action confirmations.

@@ -76,6 +76,17 @@ interface RemoteContextValue {
     initialPrompt?: string,
   ) => CommandResult;
   answerDecision: (session: string, decision: Decision) => CommandResult;
+  openTerminal: (
+    session: string,
+    subscriptionId: string,
+    previousRevision?: string,
+  ) => CommandResult;
+  sendTerminalInput: (
+    session: string,
+    subscriptionId: string,
+    input: string,
+  ) => CommandResult;
+  closeTerminal: (session: string, subscriptionId: string) => CommandResult;
 }
 
 const RemoteContext = createContext<RemoteContextValue | null>(null);
@@ -332,6 +343,19 @@ export function RemoteProvider({ children }: PropsWithChildren) {
         }),
       answerDecision: (session, decision) =>
         send("session.answerDecision", { session, decision }),
+      openTerminal: (session, subscriptionId, previousRevision) =>
+        send("session.terminal.open", {
+          session,
+          subscriptionId,
+          ...(previousRevision ? { previousRevision } : {}),
+        }),
+      sendTerminalInput: (session, subscriptionId, input) =>
+        send("session.terminal.input", { session, subscriptionId, input }),
+      closeTerminal: (session, subscriptionId) => {
+        const result = send("session.terminal.close", { session, subscriptionId });
+        dispatch({ type: "TERMINAL_CLOSED", subscriptionId });
+        return result;
+      },
     }),
     [
       forgetPairing,

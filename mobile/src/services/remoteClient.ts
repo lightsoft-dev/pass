@@ -61,6 +61,12 @@ const MUTATING_COMMANDS = new Set<ClientCommandType>([
   "session.create",
   "session.sendMessage",
   "session.answerDecision",
+  "session.terminal.input",
+]);
+const BACKGROUND_COMMANDS = new Set<ClientCommandType>([
+  "session.terminal.open",
+  "session.terminal.input",
+  "session.terminal.close",
 ]);
 
 export class RemoteClientError extends Error {
@@ -179,7 +185,7 @@ export class RemoteClient {
       );
     }
     this.sendRaw(command);
-    this.options.onCommand?.(command);
+    if (!BACKGROUND_COMMANDS.has(type)) this.options.onCommand?.(command);
     return command;
   }
 

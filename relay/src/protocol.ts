@@ -1,6 +1,7 @@
 export const PROTOCOL_VERSION = 1 as const;
 
 export const COMMAND_RETENTION_MS = 10 * 60 * 1_000;
+export const TERMINAL_COMMAND_RETENTION_MS = 60 * 1_000;
 // The desktop owns command-payload limits (currently 64 Ki Swift Characters).
 // The relay only caps the complete UTF-8 frame to bound parsing/memory work.
 export const MAX_FRAME_BYTES = 1_024 * 1_024;
@@ -13,6 +14,9 @@ export const COMMAND_TYPES = [
   "session.create",
   "session.sendMessage",
   "session.answerDecision",
+  "session.terminal.open",
+  "session.terminal.input",
+  "session.terminal.close",
   "project.list",
 ] as const;
 
@@ -22,6 +26,7 @@ export const MUTATING_COMMAND_TYPES = [
   "session.create",
   "session.sendMessage",
   "session.answerDecision",
+  "session.terminal.input",
 ] as const satisfies readonly KnownCommandType[];
 
 export const DESKTOP_EVENT_TYPES = [
@@ -32,6 +37,7 @@ export const DESKTOP_EVENT_TYPES = [
   "session.message.started",
   "session.message.updated",
   "session.message.completed",
+  "session.terminal.snapshot",
 ] as const;
 
 export type DesktopEventType = (typeof DESKTOP_EVENT_TYPES)[number];
@@ -204,6 +210,12 @@ export function isDesktopEventType(value: unknown): value is DesktopEventType {
 
 export function isMutatingCommand(commandType: string): boolean {
   return MUTATING_COMMAND_TYPE_SET.has(commandType);
+}
+
+export function commandRetentionMs(commandType: string): number {
+  return commandType.startsWith("session.terminal.")
+    ? TERMINAL_COMMAND_RETENTION_MS
+    : COMMAND_RETENTION_MS;
 }
 
 export function isStoredCommandStatus(

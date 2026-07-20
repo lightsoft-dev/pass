@@ -214,4 +214,45 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertLessThanOrEqual(payload.text.utf8.count, RemoteWireLimits.streamMessageBytes)
         XCTAssertTrue(payload.truncated)
     }
+
+    func testTerminalCommandAndSnapshotUseMobileWireKeys() throws {
+        let command = RemoteCommandEnvelope(
+            id: "cmd_terminal",
+            sentAt: timestamp,
+            command: .sessionTerminalOpen(.init(
+                session: "pass-app",
+                subscriptionID: "term_123",
+                previousRevision: "rev_1"
+            ))
+        )
+
+        let encodedCommand = try RemoteWireCodec.encode(command)
+        let decodedCommand = try RemoteWireCodec.decodeCommand(from: encodedCommand)
+
+        XCTAssertEqual(decodedCommand, command)
+        XCTAssertTrue(String(decoding: encodedCommand, as: UTF8.self).contains(#""subscriptionId":"term_123""#))
+
+        let snapshot = RemoteSessionTerminalSnapshot(
+            session: "pass-app",
+            subscriptionID: "term_123",
+            revision: "rev_2",
+            pane: .init(
+                content: "\u{001B}[32mready\u{001B}[0m",
+                columns: 120,
+                rows: 36,
+                cursorX: 5,
+                cursorY: 2
+            )
+        )
+        let event = RemoteEventEnvelope(
+            id: "evt_terminal",
+            sentAt: timestamp,
+            event: .sessionTerminalSnapshot(snapshot)
+        )
+
+        let decodedEvent = try RemoteWireCodec.decodeEvent(from: RemoteWireCodec.encode(event))
+
+        XCTAssertEqual(decodedEvent, event)
+        XCTAssertEqual(decodedEvent.type, RemoteEventType.sessionTerminalSnapshot)
+    }
 }

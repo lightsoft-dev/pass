@@ -6,6 +6,7 @@ import {
   CommandValidationError,
   createCommand,
   encodeCommand,
+  splitUTF8ByBytes,
   utf8ByteLength,
   validateCommand,
   type CommandValidationCode,
@@ -162,6 +163,66 @@ test("preflights the serialized frame by UTF-8 bytes", () => {
   assert.throws(
     () => encodeCommand(command, serialized.length),
     expectValidationCode("outbound_frame_too_large"),
+  );
+});
+
+test("bounds terminal input by UTF-8 bytes and chunks large pastes", () => {
+  const boundary = "🙂".repeat(COMMAND_LIMITS.terminalInputBytes / 4);
+  assert.doesNotThrow(() =>
+    validateCommand(
+      createCommand(
+        "session.terminal.input",
+        { session: "pass-app", subscriptionId: "term_123", input: boundary },
+        { id: "cmd_terminal_boundary" },
+      ),
+    ),
+  );
+  assert.throws(
+    () =>
+      validateCommand(
+        createCommand(
+          "session.terminal.input",
+          {
+            session: "pass-app",
+            subscriptionId: "term_123",
+            input: `${boundary}🙂`,
+          },
+          { id: "cmd_terminal_large" },
+        ),
+      ),
+    expectValidationCode("terminal_input_too_large"),
+  );
+
+  const chunks = splitUTF8ByBytes(`abc${"🙂".repeat(3_000)}한글`, 4_096);
+  assert.equal(chunks.join(""), `abc${"🙂".repeat(3_000)}한글`);
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.every((chunk) => utf8ByteLength(chunk) <= 4_096));
+});
+
+test("parses terminal snapshots with optional unchanged content", () => {
+  const base = {
+    version: 1,
+    id: "evt_terminal",
+    type: "session.terminal.snapshot",
+    sentAt: "2026-07-16T10:01:01Z",
+    payload: {
+      session: "pass-app",
+      subscriptionId: "term_123",
+      revision: "abcd1234",
+      columns: 160,
+      rows: 42,
+      cursorX: 4,
+      cursorY: 12,
+      truncated: false,
+    },
+  };
+  assert.equal(parseServerEvent(base).ok, true);
+  assert.equal(
+    parseServerEvent({
+      ...base,
+      payload: { ...base.payload, content: "🙂".repeat(131_073) },
+    }).ok,
+    false,
   );
 });
 

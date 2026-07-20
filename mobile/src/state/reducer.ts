@@ -5,6 +5,7 @@ import type {
   RemoteProject,
   RemoteSession,
   SessionMessageStreamPayload,
+  SessionTerminalSnapshotPayload,
   ServerEvent,
   VoiceActionConfirmation,
   VoiceStatus,
@@ -71,6 +72,7 @@ export interface RemoteState {
   pendingCommands: Record<string, PendingCommand>;
   activities: RemoteActivity[];
   messageStreamsBySession: Record<string, SessionMessageStream>;
+  terminalsBySubscription: Record<string, SessionTerminalSnapshotPayload>;
   voice: {
     status: VoiceStatus;
     conversationId?: string;
@@ -101,6 +103,7 @@ export const initialRemoteState: RemoteState = {
   pendingCommands: {},
   activities: [],
   messageStreamsBySession: {},
+  terminalsBySubscription: {},
   voice: { status: "idle", turns: [], actions: [] },
   latestSequence: 0,
   protocolErrors: 0,
@@ -116,6 +119,7 @@ export type RemoteAction =
     }
   | { type: "COMMAND_SENT"; command: ClientCommand }
   | { type: "EVENT_RECEIVED"; event: ServerEvent }
+  | { type: "TERMINAL_CLOSED"; subscriptionId: string }
   | { type: "PROTOCOL_ERROR"; message: string };
 
 function indexBy<T>(items: T[], key: (item: T) => string): Record<string, T> {
@@ -472,6 +476,19 @@ function reduceEvent(state: RemoteState, event: ServerEvent): RemoteState {
         "completed",
         event.sentAt,
       );
+    case "session.terminal.snapshot": {
+      const current = state.terminalsBySubscription[event.payload.subscriptionId];
+      return {
+        ...state,
+        terminalsBySubscription: {
+          ...state.terminalsBySubscription,
+          [event.payload.subscriptionId]: {
+            ...event.payload,
+            content: event.payload.content ?? current?.content ?? "",
+          },
+        },
+      };
+    }
     case "message.delivered": {
       const commandId = event.replyTo ?? event.id;
       const pendingCommands = updateCommand(
@@ -536,6 +553,11 @@ export function remoteReducer(state: RemoteState, action: RemoteAction): RemoteS
         pendingCommands: indexBy(keepNewest(entries, 150), (item) => item.id),
         activities: addCommandActivity(state.activities, action.command),
       };
+    }
+    case "TERMINAL_CLOSED": {
+      const terminalsBySubscription = { ...state.terminalsBySubscription };
+      delete terminalsBySubscription[action.subscriptionId];
+      return { ...state, terminalsBySubscription };
     }
     case "EVENT_RECEIVED":
       return reduceEvent(state, action.event);

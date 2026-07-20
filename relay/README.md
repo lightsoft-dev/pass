@@ -104,6 +104,9 @@ Known commands are:
 - `session.create` (mutating)
 - `session.sendMessage` (mutating)
 - `session.answerDecision` (mutating)
+- `session.terminal.open`
+- `session.terminal.input` (mutating)
+- `session.terminal.close`
 
 Public mobile credentials can send only known commands allowed by their scopes. Legacy development
 clients retain forward-compatible unknown-command behavior. The relay caps complete frames at 1 MiB
@@ -116,7 +119,7 @@ invalid calendar date are rejected.
 
 The desktop publishes the exact event envelope below, with event types `ack`, `error`,
 `session.snapshot`, `message.delivered`, or the streaming events `session.message.started`,
-`session.message.updated`, and `session.message.completed`:
+`session.message.updated`, `session.message.completed`, and `session.terminal.snapshot`:
 
 ```json
 {
@@ -131,7 +134,8 @@ The desktop publishes the exact event envelope below, with event types `ack`, `e
 
 Events with `replyTo` are routed only to the originating mobile device, including well-formed event
 types introduced by a future desktop release. An unsolicited `session.snapshot` or known
-`session.message.*` stream event is broadcast to every connected mobile in that desktop room.
+`session.message.*`/`session.terminal.snapshot` stream event is broadcast to every connected mobile
+in that desktop room.
 Other unknown unsolicited event types are ignored rather than broadcast, and they do not close the
 desktop socket.
 
@@ -160,10 +164,13 @@ mistaking relay control messages for remote commands.
   sequence. It does **not** store command payloads or desktop event payloads.
 - Session message stream events are forwarded only to currently connected mobiles and are not
   persisted or replayed. A reconnecting mobile recovers current text from the desktop snapshot.
+- Terminal snapshots are also ephemeral and are never persisted. Terminal command idempotency
+  metadata expires after one minute because input frames are high frequency.
 - Re-sending the same command id from the same mobile device returns `relay.receipt` with
   `replay: true` and does not forward the command again.
 - Reusing a command id from another device returns `command.id_conflict`.
-- Metadata expires after ten minutes and is pruned lazily on command, event, and resume traffic.
+- Other command metadata expires after ten minutes and is pruned lazily on command, event, and
+  resume traffic.
 - Per-socket role/device/connection metadata is stored with `serializeAttachment`, so routing and
   presence recover after Durable Object hibernation.
 

@@ -447,6 +447,20 @@ actor RemoteGateway: RemoteSnapshotPublishing {
         }
     }
 
+    func publishTerminalSnapshot(_ snapshot: RemoteSessionTerminalSnapshot) async {
+        guard state == .connected, let transport else { return }
+        let event = RemoteEventEnvelope(
+            id: "evt_\(UUID().uuidString.lowercased())",
+            sentAt: Date(),
+            event: .sessionTerminalSnapshot(snapshot)
+        )
+        do {
+            try await send(event, using: transport)
+        } catch {
+            await transport.disconnect()
+        }
+    }
+
     private func runConnectionLoop() async {
         var attempt = 0
         var delay = max(0.05, configuration.minimumReconnectDelay)

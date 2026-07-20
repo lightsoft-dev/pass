@@ -15,6 +15,7 @@ Implemented:
 - session inbox ordered with decision/input requests first
 - session detail, delivery activity, message sending, and structured decisions
 - per-session live assistant responses with reconnect recovery and ordered update handling
+- per-session interactive tmux terminal with an offline xterm.js renderer and software control keys
 - registered-project and agent picker for session creation
 - persisted notification and voice-mode preferences
 - capability-gated voice-management placeholder (no microphone capture or audio upload)
@@ -106,11 +107,15 @@ Commands use `{version,id,type,sentAt,payload}` and currently include:
 - `session.create`
 - `session.sendMessage`
 - `session.answerDecision` (`allowOnce`, `allowAll`, or `deny`)
+- `session.terminal.open`
+- `session.terminal.input`
+- `session.terminal.close`
 
 The desktop emits `ack`, `error`, `session.snapshot`, `message.delivered`, and
 `session.message.started|updated|completed`, correlated through top-level `replyTo` where
-applicable. Stream updates contain the complete current response, not a suffix, and are ordered by
-message id plus sequence. Text is bounded to 64 KiB UTF-8. The client also understands relay-owned
+applicable. It also emits `session.terminal.snapshot` for a live terminal subscription. Stream
+updates contain the complete current response, not a suffix, and are ordered by message id plus
+sequence. Text is bounded to 64 KiB UTF-8. The client also understands relay-owned
 `relay.ready`, `desktop.presence`, `relay.receipt`, `relay.resume.result`, and `relay.pong`
 envelopes.
 
@@ -122,6 +127,19 @@ inbox shows retained and total counts when `truncated: true` is present.
 Live response events are not replayed by the relay. The desktop includes an active `liveMessage`
 in each fresh snapshot, so a reconnect can resume from the latest sampled text before subsequent
 stream events arrive.
+
+Terminal access is capability-gated by `sessions:terminal`. Opening a terminal creates a 30-second
+desktop subscription that the mobile renews every 10 seconds. The desktop captures the active tmux
+pane every 120 ms and publishes only changed, revisioned ANSI snapshots, bounded to 512 KiB UTF-8.
+Unchanged renewals omit pane content. xterm.js is bundled into an offline WebView document during
+`npm install`; it is not loaded from a CDN. Keyboard input is batched for 12 ms and large pastes are
+split into 4 KiB UTF-8 frames before the desktop injects composed text and escape sequences with
+`tmux send-keys -l` (`-H` is retained only as a fallback for NUL-containing input).
+Snapshots received during IME composition are discarded so they cannot interrupt composed input.
+The renderer defaults to a readable mode that preserves at least 80% of the terminal's native text
+size and pans horizontally when needed. Fit mode shows the complete pane width, while 1:1 mode
+retains the native size; all modes recalculate on rotation and none resize tmux. This first version
+mirrors the current pane and does not expose scrollback/copy mode.
 
 ## Validation
 

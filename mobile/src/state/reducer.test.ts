@@ -240,3 +240,56 @@ test("ack completes commands that have no later delivery event", () => {
   assert.equal(state.pendingCommands.cmd_create?.status, "completed");
   assert.equal(state.activities.length, 0, "only user messages create timeline activities");
 });
+
+test("terminal keepalives preserve the last rendered pane content", () => {
+  let state = remoteReducer(initialRemoteState, {
+    type: "EVENT_RECEIVED",
+    event: {
+      version: 1,
+      id: "evt_terminal_1",
+      type: "session.terminal.snapshot",
+      sentAt: "2026-07-16T10:00:01Z",
+      payload: {
+        session: "pass-app",
+        subscriptionId: "term_123",
+        revision: "rev_1",
+        content: "\u001b[31mtests passing\u001b[0m",
+        columns: 120,
+        rows: 36,
+        cursorX: 13,
+        cursorY: 4,
+        truncated: false,
+      },
+    },
+  });
+  state = remoteReducer(state, {
+    type: "EVENT_RECEIVED",
+    event: {
+      version: 1,
+      id: "evt_terminal_2",
+      type: "session.terminal.snapshot",
+      sentAt: "2026-07-16T10:00:02Z",
+      payload: {
+        session: "pass-app",
+        subscriptionId: "term_123",
+        revision: "rev_1",
+        columns: 120,
+        rows: 36,
+        cursorX: 13,
+        cursorY: 4,
+        truncated: false,
+      },
+    },
+  });
+
+  assert.equal(
+    state.terminalsBySubscription.term_123?.content,
+    "\u001b[31mtests passing\u001b[0m",
+  );
+
+  state = remoteReducer(state, {
+    type: "TERMINAL_CLOSED",
+    subscriptionId: "term_123",
+  });
+  assert.equal(state.terminalsBySubscription.term_123, undefined);
+});

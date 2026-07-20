@@ -21,6 +21,9 @@ protocol RemoteCommandBackend: AnyObject {
     func createSession(_ command: RemoteSessionCreateCommand) async throws -> String
     func sendMessage(_ command: RemoteSessionSendMessageCommand) async throws
     func answerDecision(_ command: RemoteSessionAnswerDecisionCommand) async throws
+    func openTerminal(_ command: RemoteSessionTerminalOpenCommand) async throws -> RemoteSessionTerminalSnapshot
+    func sendTerminalInput(_ command: RemoteSessionTerminalInputCommand) async throws
+    func closeTerminal(_ command: RemoteSessionTerminalCloseCommand) async throws
 }
 
 /// Production bridge to the same stores and reply path used by the desktop UI.
@@ -144,6 +147,38 @@ final class AppRemoteCommandBackend: RemoteCommandBackend {
             throw RemoteExecutionError(code: "delivery_failed", message: message, retryable: true)
         }
     }
+
+    func openTerminal(_ command: RemoteSessionTerminalOpenCommand) async throws -> RemoteSessionTerminalSnapshot {
+        guard let appModel, appModel.isReady, let sessions = appModel.sessions else {
+            throw RemoteExecutionError(code: "desktop_not_ready", message: "The desktop is still starting.", retryable: true)
+        }
+        guard sessions.session(named: command.session) != nil else {
+            throw RemoteExecutionError(code: "session_not_found", message: "The requested session is not running.")
+        }
+        guard let snapshot = await appModel.openRemoteTerminal(command) else {
+            throw RemoteExecutionError(code: "terminal_unavailable", message: "The tmux pane could not be captured.", retryable: true)
+        }
+        return snapshot
+    }
+
+    func sendTerminalInput(_ command: RemoteSessionTerminalInputCommand) async throws {
+        guard let appModel, appModel.isReady, let sessions = appModel.sessions else {
+            throw RemoteExecutionError(code: "desktop_not_ready", message: "The desktop is still starting.", retryable: true)
+        }
+        guard sessions.session(named: command.session) != nil else {
+            throw RemoteExecutionError(code: "session_not_found", message: "The requested session is not running.")
+        }
+        guard await appModel.sendRemoteTerminalInput(command) else {
+            throw RemoteExecutionError(code: "terminal_not_open", message: "The terminal subscription expired. Reopen it and retry.", retryable: true)
+        }
+    }
+
+    func closeTerminal(_ command: RemoteSessionTerminalCloseCommand) async throws {
+        guard let appModel, appModel.isReady else {
+            throw RemoteExecutionError(code: "desktop_not_ready", message: "The desktop is still starting.", retryable: true)
+        }
+        await appModel.closeRemoteTerminal(command)
+    }
 }
 
 @MainActor
@@ -162,6 +197,7 @@ final class RemoteCommandHandler: RemoteCommandHandling {
     static let maximumSessionNameCharacters = 300
     static let maximumMessageCharacters = 64 * 1_024
     static let maximumInitialPromptCharacters = 64 * 1_024
+    static let maximumSubscriptionIDCharacters = 128
 
     private let backend: any RemoteCommandBackend
     private let now: () -> Date
@@ -291,6 +327,63 @@ final class RemoteCommandHandler: RemoteCommandHandling {
                 return [failure(for: error, replyTo: envelope.id)]
             }
 
+        case .sessionTerminalOpen(let command):
+            guard validSession(command.session) else {
+                return [failure(replyTo: envelope.id, code: "invalid_session", message: "A valid session name is required.")]
+            }
+            guard validSubscriptionID(command.subscriptionID) else {
+                return [failure(replyTo: envelope.id, code: "invalid_subscription", message: "A valid terminal subscription id is required.")]
+            }
+            do {
+                var normalized = command
+                normalized.session = command.session.trimmingCharacters(in: .whitespacesAndNewlines)
+                let snapshot = try await backend.openTerminal(normalized)
+                return [
+                    acknowledgement(for: envelope, resourceID: normalized.subscriptionID),
+                    event(replyTo: envelope.id, .sessionTerminalSnapshot(snapshot)),
+                ]
+            } catch {
+                return [failure(for: error, replyTo: envelope.id)]
+            }
+
+        case .sessionTerminalInput(let command):
+            guard validSession(command.session) else {
+                return [failure(replyTo: envelope.id, code: "invalid_session", message: "A valid session name is required.")]
+            }
+            guard validSubscriptionID(command.subscriptionID) else {
+                return [failure(replyTo: envelope.id, code: "invalid_subscription", message: "A valid terminal subscription id is required.")]
+            }
+            guard !command.input.isEmpty else {
+                return [failure(replyTo: envelope.id, code: "invalid_terminal_input", message: "Terminal input cannot be empty.")]
+            }
+            guard command.input.utf8.count <= RemoteWireLimits.terminalInputBytes else {
+                return [failure(replyTo: envelope.id, code: "terminal_input_too_large", message: "Terminal input is too large.")]
+            }
+            do {
+                var normalized = command
+                normalized.session = command.session.trimmingCharacters(in: .whitespacesAndNewlines)
+                try await backend.sendTerminalInput(normalized)
+                return [acknowledgement(for: envelope, resourceID: normalized.subscriptionID)]
+            } catch {
+                return [failure(for: error, replyTo: envelope.id)]
+            }
+
+        case .sessionTerminalClose(let command):
+            guard validSession(command.session) else {
+                return [failure(replyTo: envelope.id, code: "invalid_session", message: "A valid session name is required.")]
+            }
+            guard validSubscriptionID(command.subscriptionID) else {
+                return [failure(replyTo: envelope.id, code: "invalid_subscription", message: "A valid terminal subscription id is required.")]
+            }
+            do {
+                var normalized = command
+                normalized.session = command.session.trimmingCharacters(in: .whitespacesAndNewlines)
+                try await backend.closeTerminal(normalized)
+                return [acknowledgement(for: envelope, resourceID: normalized.subscriptionID)]
+            } catch {
+                return [failure(for: error, replyTo: envelope.id)]
+            }
+
         case .unsupported(let type, _):
             return [failure(
                 replyTo: envelope.id,
@@ -309,6 +402,7 @@ final class RemoteCommandHandler: RemoteCommandHandling {
                 .sessionsRead,
                 .sessionsWrite,
                 .sessionsStream,
+                .sessionsTerminal,
                 .projectsRead,
                 .decisionsAnswer,
             ]
@@ -324,6 +418,19 @@ final class RemoteCommandHandler: RemoteCommandHandling {
             replyTo: command.id,
             .acknowledgement(RemoteAcknowledgement(commandType: command.type, resourceID: resourceID))
         )
+    }
+
+    private func validSession(_ session: String) -> Bool {
+        let trimmed = session.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed.count <= Self.maximumSessionNameCharacters
+    }
+
+    private func validSubscriptionID(_ id: String) -> Bool {
+        guard id.count <= Self.maximumSubscriptionIDCharacters else { return false }
+        return id.range(
+            of: #"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"#,
+            options: .regularExpression
+        ) != nil
     }
 
     private func failure(for error: Error, replyTo: String?) -> RemoteEventEnvelope {

@@ -1,7 +1,13 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { PROTOCOL_VERSION, parseIsoTimestamp } from "../src/protocol";
+import {
+  COMMAND_RETENTION_MS,
+  PROTOCOL_VERSION,
+  TERMINAL_COMMAND_RETENTION_MS,
+  commandRetentionMs,
+  parseIsoTimestamp,
+} from "../src/protocol";
 
 const TEST_TOKEN = "test-only-pass-relay-token";
 
@@ -132,6 +138,13 @@ function desktopEvent(
 }
 
 describe("Pass mobile relay", () => {
+  it("keeps high-frequency terminal command metadata for a shorter window", () => {
+    expect(commandRetentionMs("session.sendMessage")).toBe(COMMAND_RETENTION_MS);
+    expect(commandRetentionMs("session.terminal.input")).toBe(
+      TERMINAL_COMMAND_RETENTION_MS,
+    );
+  });
+
   it("accepts only calendar-valid RFC 3339 timestamps", () => {
     for (const timestamp of [
       "2026-07-16T00:00:00Z",
@@ -338,12 +351,18 @@ describe("Pass mobile relay", () => {
       role: "mobile",
       deviceId: "phone-a",
     });
+    const mobileAObserver = await connect({
+      desktopId: "desk-a",
+      role: "mobile",
+      deviceId: "phone-a-observer",
+    });
     const mobileB = await connect({
       desktopId: "desk-b",
       role: "mobile",
       deviceId: "phone-b",
     });
     await mobileA.next("relay.ready");
+    await mobileAObserver.next("relay.ready");
     await mobileB.next("relay.ready");
 
     const snapshot = desktopEvent("evt-push", "session.snapshot", {
@@ -367,6 +386,63 @@ describe("Pass mobile relay", () => {
 
     await expect(mobileA.next("session.message.updated")).resolves.toEqual(stream);
     await mobileB.expectNo("session.message.updated");
+
+    mobileA.send(command("cmd-terminal-open", "session.terminal.open", {
+      session: "pass-app",
+      subscriptionId: "term_123",
+    }));
+    await desktopA.next("session.terminal.open");
+    await mobileA.next("relay.receipt");
+
+    const terminal = desktopEvent("evt-terminal", "session.terminal.snapshot", {
+      session: "pass-app",
+      subscriptionId: "term_123",
+      revision: "rev_1",
+      content: "\u001b[32mready\u001b[0m",
+      columns: 120,
+      rows: 36,
+      cursorX: 5,
+      cursorY: 2,
+      truncated: false,
+    });
+    desktopA.send(terminal);
+
+    await expect(mobileA.next("session.terminal.snapshot")).resolves.toEqual(terminal);
+    await mobileAObserver.expectNo("session.terminal.snapshot");
+    await mobileB.expectNo("session.terminal.snapshot");
+  });
+
+  it("forwards terminal input and routes its acknowledgement to the origin device", async () => {
+    const desktop = await connect({ desktopId: "desk-terminal", role: "desktop" });
+    const mobile = await connect({
+      desktopId: "desk-terminal",
+      role: "mobile",
+      deviceId: "phone-terminal",
+    });
+    await mobile.next("relay.ready");
+
+    const input = command("cmd-terminal-input", "session.terminal.input", {
+      session: "pass-app",
+      subscriptionId: "term_123",
+      input: "\u001b[A",
+    });
+    mobile.send(input);
+    await expect(desktop.next("session.terminal.input")).resolves.toEqual(input);
+    await mobile.next("relay.receipt");
+
+    const acknowledgement = desktopEvent(
+      "evt-terminal-ack",
+      "ack",
+      { commandType: "session.terminal.input", resourceID: "term_123" },
+      "cmd-terminal-input",
+    );
+    desktop.send(acknowledgement);
+    await expect(mobile.next("ack")).resolves.toEqual(acknowledgement);
+
+    mobile.send(input);
+    const replay = await mobile.next("relay.receipt");
+    expect(payloadOf(replay)).toMatchObject({ replay: true, status: "accepted" });
+    await desktop.expectNo("session.terminal.input");
   });
 
   it("routes future correlated desktop events without exposing unsolicited ones", async () => {

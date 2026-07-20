@@ -1,8 +1,10 @@
+import * as Crypto from "expo-crypto";
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,9 +14,16 @@ import {
 
 import { AppButton } from "../../components/AppButton";
 import { Screen } from "../../components/Screen";
-import { COMMAND_LIMITS } from "../../protocol/commands";
+import { TerminalSurface } from "../../components/TerminalSurface";
+import {
+  COMMAND_LIMITS,
+  splitUTF8ByBytes,
+  utf8ByteLength,
+} from "../../protocol/commands";
 import { useRemote } from "../../state/RemoteProvider";
 import { colors, radius, spacing } from "../../theme/theme";
+
+type DetailMode = "terminal" | "activity";
 
 function labelForStatus(status: string) {
   switch (status) {
@@ -29,11 +38,31 @@ function labelForStatus(status: string) {
 export default function SessionDetailScreen() {
   const params = useLocalSearchParams<{ name: string | string[] }>();
   const sessionName = Array.isArray(params.name) ? params.name[0] : params.name;
-  const { state, sendMessage, answerDecision } = useRemote();
+  const {
+    state,
+    sendMessage,
+    answerDecision,
+    openTerminal,
+    sendTerminalInput,
+    closeTerminal,
+  } = useRemote();
   const session = sessionName ? state.sessionsByName[sessionName] : undefined;
   const stream = sessionName ? state.messageStreamsBySession[sessionName] : undefined;
+  const subscriptionId = useMemo(
+    () => `term_${Crypto.randomUUID().replaceAll("-", "")}`,
+    [sessionName],
+  );
+  const terminal = state.terminalsBySubscription[subscriptionId];
+  const terminalRevision = useRef<string | undefined>(undefined);
+  const inputBuffer = useRef("");
+  const inputTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const terminalActions = useRef({ openTerminal, sendTerminalInput, closeTerminal });
+  terminalActions.current = { openTerminal, sendTerminalInput, closeTerminal };
+
+  const [mode, setMode] = useState<DetailMode>("terminal");
   const [message, setMessage] = useState("");
   const [resultText, setResultText] = useState<string | null>(null);
+  const [terminalError, setTerminalError] = useState<string | null>(null);
   const timeline = useMemo(
     () =>
       state.activities
@@ -44,13 +73,67 @@ export default function SessionDetailScreen() {
   );
   const canWrite =
     state.connection.phase === "online" && state.capabilities.includes("sessions:write");
-  const canDecide =
-    canWrite && state.capabilities.includes("decisions:answer");
+  const canDecide = canWrite && state.capabilities.includes("decisions:answer");
+  const canUseTerminal =
+    state.connection.phase === "online" && state.capabilities.includes("sessions:terminal");
   const responseText = stream?.text || session?.liveMessage || session?.lastMessage;
-  const responseStreaming =
-    stream?.phase === "streaming" || Boolean(session?.liveMessage);
-  const responseTruncated =
-    stream?.truncated === true || session?.liveMessageTruncated === true;
+  const responseStreaming = stream?.phase === "streaming" || Boolean(session?.liveMessage);
+  const responseTruncated = stream?.truncated === true || session?.liveMessageTruncated === true;
+
+  useEffect(() => {
+    if (terminal?.revision) terminalRevision.current = terminal.revision;
+  }, [terminal?.revision]);
+
+  const flushTerminalInput = () => {
+    inputTimer.current = null;
+    if (!sessionName || !inputBuffer.current) return;
+    const input = inputBuffer.current;
+    inputBuffer.current = "";
+    for (const chunk of splitUTF8ByBytes(input, 4_096)) {
+      const result = terminalActions.current.sendTerminalInput(
+        sessionName,
+        subscriptionId,
+        chunk,
+      );
+      if (!result.ok) {
+        setTerminalError(result.error);
+        break;
+      }
+      setTerminalError(null);
+    }
+  };
+
+  const queueTerminalInput = (input: string) => {
+    if (!canUseTerminal || !input) return;
+    inputBuffer.current += input;
+    if (utf8ByteLength(inputBuffer.current) >= 4_096) {
+      if (inputTimer.current) clearTimeout(inputTimer.current);
+      flushTerminalInput();
+      return;
+    }
+    if (!inputTimer.current) inputTimer.current = setTimeout(flushTerminalInput, 12);
+  };
+
+  useEffect(() => {
+    if (!sessionName || !canUseTerminal) return;
+    const renew = () => {
+      const result = terminalActions.current.openTerminal(
+        sessionName,
+        subscriptionId,
+        terminalRevision.current,
+      );
+      if (result.ok) setTerminalError(null);
+      else setTerminalError(result.error);
+    };
+    renew();
+    const interval = setInterval(renew, 10_000);
+    return () => {
+      clearInterval(interval);
+      if (inputTimer.current) clearTimeout(inputTimer.current);
+      flushTerminalInput();
+      terminalActions.current.closeTerminal(sessionName, subscriptionId);
+    };
+  }, [canUseTerminal, sessionName, subscriptionId]);
 
   if (!session) {
     return (
@@ -73,10 +156,11 @@ export default function SessionDetailScreen() {
 
   const decide = (decision: "allowOnce" | "allowAll" | "deny") => {
     const result = answerDecision(session.name, decision);
-    setResultText(
-      result.ok ? "Decision sent. Waiting for the desktop acknowledgement." : result.error,
-    );
+    setResultText(result.ok ? "Decision sent." : result.error);
   };
+
+  const attentionVisible =
+    session.attention.status === "decision" || session.attention.status === "input";
 
   return (
     <Screen edges={["left", "right", "bottom"]}>
@@ -86,116 +170,122 @@ export default function SessionDetailScreen() {
         keyboardVerticalOffset={90}
         style={styles.flex}
       >
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <View style={styles.heading}>
-            <Text style={styles.title}>{session.displayName}</Text>
-            {session.displayName !== session.defaultDisplayName ? (
-              <Text style={styles.muted}>{session.defaultDisplayName}</Text>
-            ) : null}
-            <View style={styles.metaRow}>
-              <Text style={styles.meta}>{session.agent}</Text>
-              {session.gitBranch ? <Text style={styles.meta}>⌥ {session.gitBranch}</Text> : null}
-              <Text style={styles.meta}>{labelForStatus(session.attention.status)}</Text>
-            </View>
+        <View style={styles.header}>
+          <View style={styles.identity}>
+            <Text numberOfLines={1} style={styles.headerTitle}>{session.displayName}</Text>
+            <Text numberOfLines={1} style={styles.headerMeta}>
+              {session.agent}{session.gitBranch ? ` · ${session.gitBranch}` : ""} · {labelForStatus(session.attention.status)}
+            </Text>
           </View>
-
-          {(session.attention.status === "decision" || session.attention.status === "input") ? (
-            <View style={styles.attentionCard}>
-              <Text style={styles.attentionTitle}>{labelForStatus(session.attention.status)}</Text>
-              <Text style={styles.attentionText}>
-                {session.attention.preview || "Open the desktop for the full prompt."}
-              </Text>
-              {session.attention.status === "decision" ? (
-                <View style={styles.decisionActions}>
-                  <AppButton
-                    compact
-                    label="Allow once"
-                    disabled={!canDecide}
-                    onPress={() => decide("allowOnce")}
-                  />
-                  <AppButton
-                    compact
-                    variant="secondary"
-                    label="Allow all"
-                    disabled={!canDecide}
-                    onPress={() => decide("allowAll")}
-                  />
-                  <AppButton
-                    compact
-                    variant="danger"
-                    label="Deny"
-                    disabled={!canDecide}
-                    onPress={() => decide("deny")}
-                  />
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-
-          <View style={styles.section}>
-            <View style={styles.responseHeading}>
-              <Text style={styles.sectionTitle}>Agent response</Text>
-              {responseStreaming ? (
-                <View style={styles.liveLabel}>
-                  <View style={styles.liveDot} />
-                  <Text style={styles.liveText}>LIVE</Text>
-                </View>
-              ) : null}
-            </View>
-            <View
-              style={[
-                styles.responseCard,
-                responseStreaming && styles.streamingResponseCard,
-              ]}
-            >
-              <Text selectable style={responseText ? styles.response : styles.muted}>
-                {responseText || "No completed response has been published yet."}
-                {responseStreaming ? <Text style={styles.cursor}> ▍</Text> : null}
-              </Text>
-              {responseTruncated ? (
-                <Text style={styles.streamNotice}>Showing the first 64 KiB of this response.</Text>
-              ) : null}
-            </View>
+          <View accessibilityRole="tablist" style={styles.segmented}>
+            {(["terminal", "activity"] as const).map((item) => (
+              <Pressable
+                key={item}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: mode === item }}
+                onPress={() => setMode(item)}
+                style={[styles.segment, mode === item && styles.segmentSelected]}
+              >
+                <Text style={[styles.segmentText, mode === item && styles.segmentTextSelected]}>
+                  {item === "terminal" ? "Terminal" : "Activity"}
+                </Text>
+              </Pressable>
+            ))}
           </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Mobile activity</Text>
-            {timeline.length === 0 ? (
-              <Text style={styles.muted}>Messages and attention changes from this app appear here.</Text>
-            ) : (
-              timeline.map((item) => (
-                <View key={item.id} style={styles.timelineItem}>
-                  <View style={styles.timelineDot} />
-                  <View style={styles.timelineText}>
-                    <View style={styles.timelineTop}>
-                      <Text style={styles.timelineTitle}>{item.title}</Text>
-                      <Text style={styles.timelineTime}>
-                        {new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </Text>
-                    </View>
-                    {item.detail ? <Text style={styles.timelineDetail}>{item.detail}</Text> : null}
-                    {item.status ? <Text style={styles.timelineStatus}>{item.status}</Text> : null}
-                  </View>
-                </View>
-              ))
-            )}
-          </View>
-        </ScrollView>
-
-        <View style={styles.composer}>
-          {resultText ? <Text style={styles.result}>{resultText}</Text> : null}
-          <TextInput
-            accessibilityLabel="Message to coding session"
-            maxLength={COMMAND_LIMITS.messageCharacters}
-            multiline
-            onChangeText={setMessage}
-            placeholder="Send an instruction to this coding session…"
-            placeholderTextColor={colors.subtle}
-            style={styles.composerInput}
-            value={message}
-          />
-          <AppButton label="Send message" disabled={!canWrite || !message.trim()} onPress={send} />
         </View>
+
+        {attentionVisible ? (
+          <View style={styles.attentionBand}>
+            <View style={styles.attentionCopy}>
+              <Text style={styles.attentionTitle}>{labelForStatus(session.attention.status)}</Text>
+              <Text numberOfLines={2} style={styles.attentionText}>
+                {session.attention.preview || "Open the terminal for the full prompt."}
+              </Text>
+            </View>
+            {session.attention.status === "decision" ? (
+              <View style={styles.decisionActions}>
+                <AppButton compact label="Once" disabled={!canDecide} onPress={() => decide("allowOnce")} />
+                <AppButton compact variant="secondary" label="All" disabled={!canDecide} onPress={() => decide("allowAll")} />
+                <AppButton compact variant="danger" label="Deny" disabled={!canDecide} onPress={() => decide("deny")} />
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {mode === "terminal" ? (
+          canUseTerminal || terminal ? (
+            <TerminalSurface
+              enabled={canUseTerminal}
+              error={terminalError}
+              onError={setTerminalError}
+              onInput={queueTerminalInput}
+              snapshot={terminal}
+            />
+          ) : (
+            <View style={styles.terminalUnavailable}>
+              <Text style={styles.title}>Terminal unavailable</Text>
+              <Text style={styles.muted}>
+                {state.connection.phase === "online"
+                  ? "The connected desktop does not advertise terminal access."
+                  : "Reconnect the desktop to open this tmux pane."}
+              </Text>
+            </View>
+          )
+        ) : (
+          <>
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+              <View style={styles.section}>
+                <View style={styles.responseHeading}>
+                  <Text style={styles.sectionTitle}>Agent response</Text>
+                  {responseStreaming ? <Text style={styles.liveText}>LIVE</Text> : null}
+                </View>
+                <View style={[styles.responseCard, responseStreaming && styles.streamingResponseCard]}>
+                  <Text selectable style={responseText ? styles.response : styles.muted}>
+                    {responseText || "No completed response has been published yet."}
+                  </Text>
+                  {responseTruncated ? (
+                    <Text style={styles.streamNotice}>Showing the first 64 KiB.</Text>
+                  ) : null}
+                </View>
+              </View>
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Mobile activity</Text>
+                {timeline.length === 0 ? (
+                  <Text style={styles.muted}>Messages and attention changes appear here.</Text>
+                ) : timeline.map((item) => (
+                  <View key={item.id} style={styles.timelineItem}>
+                    <View style={styles.timelineDot} />
+                    <View style={styles.timelineText}>
+                      <View style={styles.timelineTop}>
+                        <Text style={styles.timelineTitle}>{item.title}</Text>
+                        <Text style={styles.timelineTime}>
+                          {new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </Text>
+                      </View>
+                      {item.detail ? <Text style={styles.timelineDetail}>{item.detail}</Text> : null}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+
+            <View style={styles.composer}>
+              {resultText ? <Text numberOfLines={2} style={styles.result}>{resultText}</Text> : null}
+              <TextInput
+                accessibilityLabel="Message to coding session"
+                maxLength={COMMAND_LIMITS.messageCharacters}
+                multiline
+                onChangeText={setMessage}
+                placeholder="Send an instruction…"
+                placeholderTextColor={colors.subtle}
+                style={styles.composerInput}
+                value={message}
+              />
+              <AppButton label="Send message" disabled={!canWrite || !message.trim()} onPress={send} />
+            </View>
+          </>
+        )}
       </KeyboardAvoidingView>
     </Screen>
   );
@@ -204,36 +294,68 @@ export default function SessionDetailScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   missing: { alignItems: "center", justifyContent: "center", padding: spacing.lg, gap: spacing.sm },
+  title: { color: colors.text, fontSize: 18, fontWeight: "800" },
+  muted: { color: colors.muted, fontSize: 13, lineHeight: 19 },
+  header: {
+    minHeight: 58,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  identity: { flex: 1, minWidth: 0, gap: 3 },
+  headerTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },
+  headerMeta: { color: colors.subtle, fontSize: 10, textTransform: "capitalize" },
+  segmented: {
+    width: 156,
+    height: 32,
+    padding: 2,
+    flexDirection: "row",
+    backgroundColor: colors.background,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  segment: { flex: 1, alignItems: "center", justifyContent: "center", borderRadius: 4 },
+  segmentSelected: { backgroundColor: "#2a313b" },
+  segmentText: { color: colors.subtle, fontSize: 11, fontWeight: "700" },
+  segmentTextSelected: { color: colors.text },
+  attentionBand: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: "#2a2216",
+    borderBottomWidth: 1,
+    borderBottomColor: "#60481f",
+  },
+  attentionCopy: { flex: 1, minWidth: 0, gap: 2 },
+  attentionTitle: { color: colors.warning, fontSize: 12, fontWeight: "800" },
+  attentionText: { color: colors.text, fontSize: 11, lineHeight: 15 },
+  decisionActions: { flexDirection: "row", gap: 5 },
+  terminalUnavailable: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl, gap: spacing.sm },
   content: { padding: spacing.md, paddingBottom: spacing.lg, gap: spacing.lg, maxWidth: 760, width: "100%", alignSelf: "center" },
-  heading: { gap: spacing.xs },
-  title: { color: colors.text, fontSize: 24, fontWeight: "800" },
-  muted: { color: colors.muted, fontSize: 14, lineHeight: 20 },
-  metaRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
-  meta: { color: colors.subtle, fontSize: 12, textTransform: "capitalize" },
-  attentionCard: { backgroundColor: "#2a2216", borderWidth: 1, borderColor: "#60481f", borderRadius: radius.lg, padding: spacing.md, gap: spacing.sm },
-  attentionTitle: { color: colors.warning, fontSize: 15, fontWeight: "800" },
-  attentionText: { color: colors.text, fontSize: 14, lineHeight: 21 },
-  decisionActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   section: { gap: spacing.sm },
-  sectionTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },
-  responseHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
-  liveLabel: { flexDirection: "row", alignItems: "center", gap: 6 },
-  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.info },
-  liveText: { color: colors.info, fontSize: 10, fontWeight: "900", letterSpacing: 0.8 },
+  sectionTitle: { color: colors.text, fontSize: 14, fontWeight: "800" },
+  responseHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  liveText: { color: colors.info, fontSize: 10, fontWeight: "900" },
   responseCard: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.md, gap: spacing.sm },
   streamingResponseCard: { borderLeftColor: colors.info, borderLeftWidth: 3 },
   response: { color: colors.text, fontSize: 14, lineHeight: 22 },
-  cursor: { color: colors.info, fontWeight: "900" },
-  streamNotice: { color: colors.subtle, fontSize: 11, lineHeight: 16 },
+  streamNotice: { color: colors.subtle, fontSize: 11 },
   timelineItem: { flexDirection: "row", gap: spacing.sm },
-  timelineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent, marginTop: 6 },
+  timelineDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent, marginTop: 6 },
   timelineText: { flex: 1, paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, gap: 4 },
   timelineTop: { flexDirection: "row", gap: spacing.sm },
   timelineTitle: { flex: 1, color: colors.text, fontSize: 13, fontWeight: "700" },
   timelineTime: { color: colors.subtle, fontSize: 11 },
   timelineDetail: { color: colors.muted, fontSize: 13, lineHeight: 18 },
-  timelineStatus: { color: colors.accent, fontSize: 10, textTransform: "uppercase", fontWeight: "800" },
   composer: { backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border, padding: spacing.md, gap: spacing.sm },
-  composerInput: { minHeight: 70, maxHeight: 150, color: colors.text, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: 12, fontSize: 14, textAlignVertical: "top" },
-  result: { color: colors.muted, fontSize: 12 },
+  composerInput: { minHeight: 58, maxHeight: 130, color: colors.text, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: 11, fontSize: 14, textAlignVertical: "top" },
+  result: { color: colors.muted, fontSize: 11 },
 });

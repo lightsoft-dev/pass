@@ -18,6 +18,8 @@ enum RemoteWireLimits {
     static let attentionPreviewBytes = 4_096
     static let lastMessageBytes = 8_192
     static let streamMessageBytes = 64 * 1_024
+    static let terminalSnapshotBytes = 512 * 1_024
+    static let terminalInputBytes = 16 * 1_024
     static let projectNameBytes = 500
     static let emojiBytes = 32
 
@@ -60,6 +62,9 @@ enum RemoteCommandType {
     static let sessionCreate = "session.create"
     static let sessionSendMessage = "session.sendMessage"
     static let sessionAnswerDecision = "session.answerDecision"
+    static let sessionTerminalOpen = "session.terminal.open"
+    static let sessionTerminalInput = "session.terminal.input"
+    static let sessionTerminalClose = "session.terminal.close"
     static let projectList = "project.list"
 }
 
@@ -71,6 +76,7 @@ enum RemoteEventType {
     static let sessionMessageStarted = "session.message.started"
     static let sessionMessageUpdated = "session.message.updated"
     static let sessionMessageCompleted = "session.message.completed"
+    static let sessionTerminalSnapshot = "session.terminal.snapshot"
 }
 
 /// JSON fallback used to preserve an unknown command/event payload. Keeping unknown types
@@ -161,11 +167,46 @@ struct RemoteSessionAnswerDecisionCommand: Codable, Equatable, Sendable {
     var decision: RemoteDecision
 }
 
+struct RemoteSessionTerminalOpenCommand: Codable, Equatable, Sendable {
+    var session: String
+    var subscriptionID: String
+    var previousRevision: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case session, previousRevision
+        case subscriptionID = "subscriptionId"
+    }
+}
+
+struct RemoteSessionTerminalInputCommand: Codable, Equatable, Sendable {
+    var session: String
+    var subscriptionID: String
+    var input: String
+
+    private enum CodingKeys: String, CodingKey {
+        case session, input
+        case subscriptionID = "subscriptionId"
+    }
+}
+
+struct RemoteSessionTerminalCloseCommand: Codable, Equatable, Sendable {
+    var session: String
+    var subscriptionID: String
+
+    private enum CodingKeys: String, CodingKey {
+        case session
+        case subscriptionID = "subscriptionId"
+    }
+}
+
 enum RemoteCommand: Equatable, Sendable {
     case sessionList
     case sessionCreate(RemoteSessionCreateCommand)
     case sessionSendMessage(RemoteSessionSendMessageCommand)
     case sessionAnswerDecision(RemoteSessionAnswerDecisionCommand)
+    case sessionTerminalOpen(RemoteSessionTerminalOpenCommand)
+    case sessionTerminalInput(RemoteSessionTerminalInputCommand)
+    case sessionTerminalClose(RemoteSessionTerminalCloseCommand)
     case projectList
     case unsupported(type: String, payload: RemoteJSONValue)
 
@@ -175,6 +216,9 @@ enum RemoteCommand: Equatable, Sendable {
         case .sessionCreate: return RemoteCommandType.sessionCreate
         case .sessionSendMessage: return RemoteCommandType.sessionSendMessage
         case .sessionAnswerDecision: return RemoteCommandType.sessionAnswerDecision
+        case .sessionTerminalOpen: return RemoteCommandType.sessionTerminalOpen
+        case .sessionTerminalInput: return RemoteCommandType.sessionTerminalInput
+        case .sessionTerminalClose: return RemoteCommandType.sessionTerminalClose
         case .projectList: return RemoteCommandType.projectList
         case .unsupported(let type, _): return type
         }
@@ -227,6 +271,18 @@ struct RemoteCommandEnvelope: Codable, Equatable, Sendable {
             command = .sessionAnswerDecision(
                 try container.decode(RemoteSessionAnswerDecisionCommand.self, forKey: .payload)
             )
+        case RemoteCommandType.sessionTerminalOpen:
+            command = .sessionTerminalOpen(
+                try container.decode(RemoteSessionTerminalOpenCommand.self, forKey: .payload)
+            )
+        case RemoteCommandType.sessionTerminalInput:
+            command = .sessionTerminalInput(
+                try container.decode(RemoteSessionTerminalInputCommand.self, forKey: .payload)
+            )
+        case RemoteCommandType.sessionTerminalClose:
+            command = .sessionTerminalClose(
+                try container.decode(RemoteSessionTerminalCloseCommand.self, forKey: .payload)
+            )
         case RemoteCommandType.projectList:
             command = .projectList
         default:
@@ -249,6 +305,12 @@ struct RemoteCommandEnvelope: Codable, Equatable, Sendable {
         case .sessionSendMessage(let payload):
             try container.encode(payload, forKey: .payload)
         case .sessionAnswerDecision(let payload):
+            try container.encode(payload, forKey: .payload)
+        case .sessionTerminalOpen(let payload):
+            try container.encode(payload, forKey: .payload)
+        case .sessionTerminalInput(let payload):
+            try container.encode(payload, forKey: .payload)
+        case .sessionTerminalClose(let payload):
             try container.encode(payload, forKey: .payload)
         case .unsupported(_, let payload):
             try container.encode(payload, forKey: .payload)
@@ -439,6 +501,7 @@ enum RemoteCapability: String, Codable, CaseIterable, Equatable, Sendable {
     case sessionsRead = "sessions:read"
     case sessionsWrite = "sessions:write"
     case sessionsStream = "sessions:stream"
+    case sessionsTerminal = "sessions:terminal"
     case projectsRead = "projects:read"
     case decisionsAnswer = "decisions:answer"
 }
@@ -468,6 +531,48 @@ struct RemoteCommandFailure: Codable, Equatable, Sendable {
 
 struct RemoteMessageDelivered: Codable, Equatable, Sendable {
     var session: String
+}
+
+struct RemoteSessionTerminalSnapshot: Codable, Equatable, Sendable {
+    var session: String
+    var subscriptionID: String
+    var revision: String
+    var content: String?
+    var columns: Int
+    var rows: Int
+    var cursorX: Int
+    var cursorY: Int
+    var truncated: Bool
+
+    init(
+        session: String,
+        subscriptionID: String,
+        revision: String,
+        pane: TerminalPaneSnapshot,
+        omitContent: Bool = false
+    ) {
+        self.session = RemoteWireLimits.prefix(
+            session,
+            maximumUTF8Bytes: RemoteWireLimits.sessionNameBytes
+        )
+        self.subscriptionID = subscriptionID
+        self.revision = revision
+        let truncated = pane.content.utf8.count > RemoteWireLimits.terminalSnapshotBytes
+        self.content = omitContent ? nil : RemoteWireLimits.prefix(
+            pane.content,
+            maximumUTF8Bytes: RemoteWireLimits.terminalSnapshotBytes
+        )
+        columns = max(1, min(pane.columns, 1_000))
+        rows = max(1, min(pane.rows, 1_000))
+        cursorX = max(0, min(pane.cursorX, columns - 1))
+        cursorY = max(0, min(pane.cursorY, rows - 1))
+        self.truncated = truncated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case session, revision, content, columns, rows, cursorX, cursorY, truncated
+        case subscriptionID = "subscriptionId"
+    }
 }
 
 /// Self-contained live response state. `text` is the complete bounded response observed at this
@@ -502,6 +607,7 @@ enum RemoteEvent: Equatable, Sendable {
     case sessionMessageStarted(RemoteSessionMessageStream)
     case sessionMessageUpdated(RemoteSessionMessageStream)
     case sessionMessageCompleted(RemoteSessionMessageStream)
+    case sessionTerminalSnapshot(RemoteSessionTerminalSnapshot)
     case unsupported(type: String, payload: RemoteJSONValue)
 
     var type: String {
@@ -513,6 +619,7 @@ enum RemoteEvent: Equatable, Sendable {
         case .sessionMessageStarted: return RemoteEventType.sessionMessageStarted
         case .sessionMessageUpdated: return RemoteEventType.sessionMessageUpdated
         case .sessionMessageCompleted: return RemoteEventType.sessionMessageCompleted
+        case .sessionTerminalSnapshot: return RemoteEventType.sessionTerminalSnapshot
         case .unsupported(let type, _): return type
         }
     }
@@ -570,6 +677,10 @@ struct RemoteEventEnvelope: Codable, Equatable, Sendable {
             event = .sessionMessageUpdated(try container.decode(RemoteSessionMessageStream.self, forKey: .payload))
         case RemoteEventType.sessionMessageCompleted:
             event = .sessionMessageCompleted(try container.decode(RemoteSessionMessageStream.self, forKey: .payload))
+        case RemoteEventType.sessionTerminalSnapshot:
+            event = .sessionTerminalSnapshot(
+                try container.decode(RemoteSessionTerminalSnapshot.self, forKey: .payload)
+            )
         default:
             let payload = try container.decodeIfPresent(RemoteJSONValue.self, forKey: .payload) ?? .object([:])
             event = .unsupported(type: type, payload: payload)
@@ -597,6 +708,8 @@ struct RemoteEventEnvelope: Codable, Equatable, Sendable {
         case .sessionMessageUpdated(let payload):
             try container.encode(payload, forKey: .payload)
         case .sessionMessageCompleted(let payload):
+            try container.encode(payload, forKey: .payload)
+        case .sessionTerminalSnapshot(let payload):
             try container.encode(payload, forKey: .payload)
         case .unsupported(_, let payload):
             try container.encode(payload, forKey: .payload)

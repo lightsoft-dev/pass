@@ -11,6 +11,8 @@ export const COMMAND_LIMITS = {
   sessionCharacters: 300,
   projectPathCharacters: 4_096,
   outboundFrameBytes: 1_024 * 1_024,
+  terminalInputBytes: 16 * 1_024,
+  subscriptionIdCharacters: 128,
 } as const;
 
 export type CommandValidationCode =
@@ -19,6 +21,9 @@ export type CommandValidationCode =
   | "invalid_message"
   | "message_too_large"
   | "initial_prompt_too_large"
+  | "invalid_subscription"
+  | "invalid_terminal_input"
+  | "terminal_input_too_large"
   | "outbound_frame_too_large";
 
 export class CommandValidationError extends Error {
@@ -59,6 +64,28 @@ export function utf8ByteLength(value: string): number {
   return bytes;
 }
 
+/** Splits text without breaking Unicode scalars while respecting a UTF-8 byte budget. */
+export function splitUTF8ByBytes(value: string, maximumBytes: number): string[] {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 4) {
+    throw new RangeError("maximumBytes must be an integer of at least 4.");
+  }
+  const chunks: string[] = [];
+  let current = "";
+  let currentBytes = 0;
+  for (const character of value) {
+    const characterBytes = utf8ByteLength(character);
+    if (current && currentBytes + characterBytes > maximumBytes) {
+      chunks.push(current);
+      current = "";
+      currentBytes = 0;
+    }
+    current += character;
+    currentBytes += characterBytes;
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 function requireSession(session: string): void {
   const normalized = session.trim();
   if (!normalized) {
@@ -71,6 +98,18 @@ function requireSession(session: string): void {
     throw new CommandValidationError(
       "invalid_session",
       `Session name must be ${COMMAND_LIMITS.sessionCharacters} characters or fewer.`,
+    );
+  }
+}
+
+function requireSubscription(subscriptionId: string): void {
+  if (
+    subscriptionId.length > COMMAND_LIMITS.subscriptionIdCharacters ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(subscriptionId)
+  ) {
+    throw new CommandValidationError(
+      "invalid_subscription",
+      "A valid terminal subscription id is required.",
     );
   }
 }
@@ -121,6 +160,27 @@ export function validateCommand(command: ClientCommand): void {
       return;
     case "session.answerDecision":
       requireSession(command.payload.session);
+      return;
+    case "session.terminal.open":
+    case "session.terminal.close":
+      requireSession(command.payload.session);
+      requireSubscription(command.payload.subscriptionId);
+      return;
+    case "session.terminal.input":
+      requireSession(command.payload.session);
+      requireSubscription(command.payload.subscriptionId);
+      if (!command.payload.input) {
+        throw new CommandValidationError(
+          "invalid_terminal_input",
+          "Terminal input cannot be empty.",
+        );
+      }
+      if (utf8ByteLength(command.payload.input) > COMMAND_LIMITS.terminalInputBytes) {
+        throw new CommandValidationError(
+          "terminal_input_too_large",
+          `Terminal input must be ${COMMAND_LIMITS.terminalInputBytes.toLocaleString("en-US")} UTF-8 bytes or fewer.`,
+        );
+      }
       return;
     case "relay.resume":
     case "relay.ping":

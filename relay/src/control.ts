@@ -19,6 +19,7 @@ const MOBILE_SCOPES = [
   "sessions:read",
   "sessions:write",
   "sessions:stream",
+  "sessions:terminal",
   "projects:read",
   "decisions:answer",
 ] as const;

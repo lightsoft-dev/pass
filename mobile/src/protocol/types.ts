@@ -8,6 +8,7 @@ export type Capability =
   | "sessions:read"
   | "sessions:write"
   | "sessions:stream"
+  | "sessions:terminal"
   | "projects:read"
   | "voice:use"
   | "decisions:answer";
@@ -88,6 +89,17 @@ export interface ClientCommandPayloadMap {
     session: string;
     decision: "allowOnce" | "allowAll" | "deny";
   };
+  "session.terminal.open": {
+    session: string;
+    subscriptionId: string;
+    previousRevision?: string;
+  };
+  "session.terminal.input": {
+    session: string;
+    subscriptionId: string;
+    input: string;
+  };
+  "session.terminal.close": { session: string; subscriptionId: string };
   "project.list": Record<string, never>;
 }
 
@@ -155,6 +167,7 @@ export type ServerEventPayloadMap = {
   "session.message.started": SessionMessageStreamPayload;
   "session.message.updated": SessionMessageStreamPayload;
   "session.message.completed": SessionMessageStreamPayload;
+  "session.terminal.snapshot": SessionTerminalSnapshotPayload;
 };
 
 export interface SessionMessageStreamPayload {
@@ -162,6 +175,18 @@ export interface SessionMessageStreamPayload {
   messageID: string;
   sequence: number;
   text: string;
+  truncated: boolean;
+}
+
+export interface SessionTerminalSnapshotPayload {
+  session: string;
+  subscriptionId: string;
+  revision: string;
+  content?: string | null;
+  columns: number;
+  rows: number;
+  cursorX: number;
+  cursorY: number;
   truncated: boolean;
 }
 

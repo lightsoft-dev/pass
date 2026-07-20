@@ -11,6 +11,7 @@ import {
 import { utf8ByteLength } from "./commands.ts";
 
 const STREAM_MESSAGE_BYTES = 64 * 1_024;
+const TERMINAL_SNAPSHOT_BYTES = 512 * 1_024;
 
 export type ProtocolParseErrorCode =
   | "invalid_json"
@@ -36,6 +37,7 @@ const SERVER_EVENT_TYPES = new Set<ServerEventType>([
   "session.message.started",
   "session.message.updated",
   "session.message.completed",
+  "session.terminal.snapshot",
 ]);
 
 const RECEIPT_STATUSES = new Set([
@@ -58,6 +60,7 @@ const CAPABILITIES = new Set<Capability>([
   "sessions:read",
   "sessions:write",
   "sessions:stream",
+  "sessions:terminal",
   "projects:read",
   "voice:use",
   "decisions:answer",
@@ -235,6 +238,25 @@ function validPayload(type: ServerEventType, payload: unknown): boolean {
         isNonNegativeInteger(payload.sequence) &&
         typeof payload.text === "string" &&
         utf8ByteLength(payload.text) <= STREAM_MESSAGE_BYTES &&
+        typeof payload.truncated === "boolean"
+      );
+    case "session.terminal.snapshot":
+      return (
+        isString(payload.session, 300) &&
+        isString(payload.subscriptionId, 128) &&
+        isString(payload.revision, 128) &&
+        (payload.content === undefined ||
+          payload.content === null ||
+          (typeof payload.content === "string" &&
+            utf8ByteLength(payload.content) <= TERMINAL_SNAPSHOT_BYTES)) &&
+        isNonNegativeInteger(payload.columns) &&
+        payload.columns >= 1 && payload.columns <= 1_000 &&
+        isNonNegativeInteger(payload.rows) &&
+        payload.rows >= 1 && payload.rows <= 1_000 &&
+        isNonNegativeInteger(payload.cursorX) &&
+        payload.cursorX < payload.columns &&
+        isNonNegativeInteger(payload.cursorY) &&
+        payload.cursorY < payload.rows &&
         typeof payload.truncated === "boolean"
       );
   }
