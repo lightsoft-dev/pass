@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 
@@ -13,6 +14,7 @@ final class ExtensionStore {
         var manifest: ExtensionManifest
         var directory: URL
         var problems: [String]
+        var fingerprint: String
         var id: String { manifest.id }
         var isValid: Bool { problems.isEmpty }
     }
@@ -39,6 +41,7 @@ final class ExtensionStore {
     private(set) var loaded: [Loaded] = []
     private(set) var loadErrors: [LoadError] = []
     private(set) var enabledIds: Set<String>
+    private(set) var changedIds: Set<String>
     /// Example extensions shipped inside the app that aren't installed yet. Cached (bundle
     /// contents can't change mid-run) — computing it does disk I/O, and Settings reads it
     /// from its body.
@@ -47,6 +50,14 @@ final class ExtensionStore {
     private let directory: URL
     private let defaults: UserDefaults
     private static let enabledKey = "extensions.enabled"
+    private static let fingerprintsKey = "extensions.approvedFingerprints"
+    private static let changedKey = "extensions.changedSinceApproval"
+    private var approvedFingerprints: [String: String]
+
+    /// UI windows hold executable web content. Reloading or disabling an extension invalidates
+    /// those windows so reviewed content can never be silently replaced underneath a live view.
+    var onReload: (() -> Void)?
+    var onDisabled: ((String) -> Void)?
 
     nonisolated static var defaultDirectory: URL {
         PassConfig.stateDirectory.appendingPathComponent("extensions", isDirectory: true)
@@ -56,6 +67,8 @@ final class ExtensionStore {
         self.directory = directory
         self.defaults = defaults
         enabledIds = Set(defaults.stringArray(forKey: Self.enabledKey) ?? [])
+        changedIds = Set(defaults.stringArray(forKey: Self.changedKey) ?? [])
+        approvedFingerprints = defaults.dictionary(forKey: Self.fingerprintsKey) as? [String: String] ?? [:]
         reload()
     }
 
@@ -74,7 +87,8 @@ final class ExtensionStore {
             do {
                 let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: Data(contentsOf: file))
                 found.append(Loaded(manifest: manifest, directory: dir,
-                                    problems: manifest.problems(directory: dir, fileManager: fm)))
+                                    problems: manifest.problems(directory: dir, fileManager: fm),
+                                    fingerprint: Self.fingerprint(directory: dir, fileManager: fm)))
             } catch {
                 errors.append(LoadError(folder: dir.lastPathComponent,
                                         message: "extension.json: \(error.localizedDescription)"))
@@ -82,21 +96,50 @@ final class ExtensionStore {
         }
         loaded = found
         loadErrors = errors
+        var changed: Set<String> = []
+        for ext in found where enabledIds.contains(ext.id) {
+            if let approved = approvedFingerprints[ext.id] {
+                if approved != ext.fingerprint {
+                    enabledIds.remove(ext.id)
+                    changed.insert(ext.id)
+                }
+            } else {
+                // One-time migration for extensions enabled before content approvals existed.
+                approvedFingerprints[ext.id] = ext.fingerprint
+            }
+        }
+        changedIds.formUnion(changed)
+        persistApprovals()
         bundledInstallable = computeBundledInstallable()
+        onReload?()
         Log.ext.info("loaded \(found.count) extension(s), \(errors.count) broken")
     }
 
     func isEnabled(_ id: String) -> Bool { enabledIds.contains(id) }
 
     func setEnabled(_ id: String, _ on: Bool) {
-        if on { enabledIds.insert(id) } else { enabledIds.remove(id) }
-        defaults.set(Array(enabledIds).sorted(), forKey: Self.enabledKey)
+        if on {
+            guard let ext = loaded.first(where: { $0.id == id && $0.isValid }) else { return }
+            approvedFingerprints[id] = ext.fingerprint
+            changedIds.remove(id)
+            enabledIds.insert(id)
+        } else {
+            enabledIds.remove(id)
+        }
+        persistApprovals()
+        if !on { onDisabled?(id) }
     }
 
     /// Extensions that actually run: enabled AND valid.
     private var active: [Loaded] {
         loaded.filter { $0.isValid && enabledIds.contains($0.id) }
     }
+
+    func activeExtension(id: String) -> Loaded? {
+        active.first { $0.id == id }
+    }
+
+    func wasDisabledAfterChange(_ id: String) -> Bool { changedIds.contains(id) }
 
     /// Commands the ⌘P palette offers (`>id`).
     var paletteCommands: [PaletteCommand] {
@@ -149,5 +192,48 @@ final class ExtensionStore {
             try fm.copyItem(at: src, to: dst)
         }
         reload()
+    }
+
+    private func persistApprovals() {
+        defaults.set(Array(enabledIds).sorted(), forKey: Self.enabledKey)
+        defaults.set(approvedFingerprints, forKey: Self.fingerprintsKey)
+        defaults.set(Array(changedIds).sorted(), forKey: Self.changedKey)
+    }
+
+    /// Stable digest of every non-.git file. Approval follows reviewed content, not just an id;
+    /// changing HTML/JS/scripts/manifest disables the extension on the next reload.
+    private static func fingerprint(directory: URL, fileManager: FileManager) -> String {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
+        guard let enumerator = fileManager.enumerator(at: directory,
+                                                      includingPropertiesForKeys: keys,
+                                                      options: []) else { return "unreadable" }
+        var files: [URL] = []
+        for case let url as URL in enumerator {
+            if url.lastPathComponent == ".git" {
+                enumerator.skipDescendants()
+                continue
+            }
+            if let values = try? url.resourceValues(forKeys: Set(keys)),
+               values.isRegularFile == true || values.isSymbolicLink == true {
+                files.append(url)
+            }
+        }
+        files.sort { $0.path < $1.path }
+        var hasher = SHA256()
+        let root = directory.standardizedFileURL.path + "/"
+        for file in files {
+            let path = file.standardizedFileURL.path
+            let relative = path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path
+            hasher.update(data: Data(relative.utf8))
+            hasher.update(data: Data([0]))
+            if (try? file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+                let destination = (try? fileManager.destinationOfSymbolicLink(atPath: file.path)) ?? "?"
+                hasher.update(data: Data(destination.utf8))
+            } else if let data = try? Data(contentsOf: file, options: [.mappedIfSafe]) {
+                hasher.update(data: data)
+            }
+            hasher.update(data: Data([0]))
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

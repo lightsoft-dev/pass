@@ -181,7 +181,7 @@ struct SettingsView: View {
                     if let dir = store?.revealDirectory() { NSWorkspace.shared.open(dir) }
                 }
             }
-            Text("Extensions run scripts with your user permissions — enable only what you trust. Commands appear in the quick command as >name.")
+            Text("Extensions can run scripts and local Web UI with your user permissions — enable only what you trust. Commands appear in the quick command as >name.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         let log = appModel.extensionRuntime?.recentLog ?? []
@@ -655,6 +655,10 @@ private struct ExtensionRow: View {
                 if let perms = ext.manifest.permissions, !perms.isEmpty {
                     Text("permissions: " + perms.sorted().joined(separator: ", "))
                         .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                }
+                if appModel.extensions?.wasDisabledAfterChange(ext.id) == true {
+                    Text("⚠ Files changed since approval — review and enable again")
+                        .font(.system(size: 10)).foregroundStyle(.orange)
                 }
                 ForEach(ext.problems, id: \.self) { p in
                     Text("⚠ \(p)").font(.system(size: 10)).foregroundStyle(.orange)

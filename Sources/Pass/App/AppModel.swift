@@ -70,6 +70,7 @@ final class AppModel {
     private(set) var webViews: WebViewPool!
     private(set) var extensions: ExtensionStore!
     private(set) var extensionRuntime: ExtensionRuntime!
+    private(set) var extensionWindows: ExtensionWindowManager!
 
     /// Outbound-only mobile control plane. The gateway is disabled unless its feature flag is
     /// enabled, so normal desktop launches never make a relay connection.
@@ -111,7 +112,11 @@ final class AppModel {
         // Session died → its tab/webview go with it (same lifecycle as the terminal pool).
         sessions.onReconciled = { [weak self] live in self?.browser?.pruneSessions(alive: live) }
         extensions = ExtensionStore()
-        extensionRuntime = ExtensionRuntime(store: extensions, appModel: self)
+        extensionWindows = ExtensionWindowManager(store: extensions)
+        extensionRuntime = ExtensionRuntime(store: extensions, windows: extensionWindows, appModel: self)
+        extensionWindows.runtime = extensionRuntime
+        extensions.onReload = { [weak self] in self?.extensionWindows?.closeAll() }
+        extensions.onDisabled = { [weak self] id in self?.extensionWindows?.close(extensionId: id) }
         sessions.onSessionsChanged = { [weak self] created, ended in
             self?.extensionRuntime?.sessionsCreated(created)
             self?.extensionRuntime?.sessionsEnded(ended)
