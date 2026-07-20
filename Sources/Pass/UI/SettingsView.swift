@@ -6,6 +6,7 @@ import KeyboardShortcuts
 /// launch-at-login, and one-time setup (hooks, notifications) live.
 struct SettingsView: View {
     @Environment(AppModel.self) private var appModel
+    @State private var selection: SettingsSection = .general
     @State private var launchAtLogin = LoginItemService.isEnabled
     @State private var floating = true
     @State private var cliLinked = false
@@ -16,197 +17,21 @@ struct SettingsView: View {
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
 
     var body: some View {
-        Form {
-            Section("Shortcut") {
-                KeyboardShortcuts.Recorder("Summon pass:", name: .summonPass)
+        HStack(spacing: 0) {
+            SettingsSidebar(selection: $selection)
+                .frame(width: 184)
+            Divider()
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsHeader(section: selection)
+                Form {
+                    detailSections
+                }
+                .formStyle(.grouped)
+                .scrollContentBackground(.hidden)
             }
-
-            Section("Home") {
-                Picker("Layout", selection: $homeModeRaw) {
-                    ForEach(HomeMode.allCases, id: \.rawValue) { mode in
-                        Text(mode.label).tag(mode.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                Text("Card stack: the focused session shown large with its own input, others small. Compact list: uniform rows with one input at the bottom.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Picker("Terminal theme", selection: $terminalThemeRaw) {
-                    ForEach(TerminalTheme.allCases, id: \.rawValue) { theme in
-                        Text(theme.label).tag(theme.rawValue)
-                    }
-                }
-                .onChange(of: terminalThemeRaw) { _, _ in
-                    // Every live terminal (home pool + detail) restyles immediately.
-                    NotificationCenter.default.post(name: .passTerminalThemeChanged, object: nil)
-                }
-            }
-
-            Section("Projects") {
-                let projects = appModel.projects?.projects ?? []
-                if projects.isEmpty {
-                    Text("No projects yet — add some to jump to them with @.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    ForEach(projects) { p in
-                        ProjectRow(project: p)
-                    }
-                }
-                HStack {
-                    Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
-                    if let msg = appModel.lastProjectAddMessage {
-                        Text(msg).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Text("Tip: click the dot at the front of a session card to give its project an emoji.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Backup") {
-                Toggle("Optimize git repos (store remote URL only)", isOn: $backupOptimizeGit)
-                HStack(spacing: 8) {
-                    Button("Export backup…") { appModel.exportAllProjects(optimizeGit: backupOptimizeGit) }
-                        .disabled(appModel.isExporting || (appModel.projects?.projects.isEmpty ?? true))
-                    if appModel.isExporting { ProgressView().controlSize(.small) }
-                    if let msg = appModel.lastExportMessage {
-                        Text(msg).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Text("Bundles every registered project + settings into one .tar.gz you can move to another Mac. Build artifacts (node_modules, .build, …) are excluded. With optimize on, git repos that have a remote are stored as URL + commit instead of copied.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Agent commands") {
-                ForEach(AgentKind.launchable, id: \.self) { agent in
-                    AgentCommandRow(agent: agent)
-                }
-                Text("The command pass types into a new session for each agent (e.g. add flags like --dangerously-skip-permissions). Leave a field at its default to keep the built-in.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Extensions") {
-                let store = appModel.extensions
-                let loaded = store?.loaded ?? []
-                let errors = store?.loadErrors ?? []
-                if loaded.isEmpty && errors.isEmpty {
-                    Text("No extensions yet — one folder per extension in ~/.pass/extensions (manifest schema: docs/EXTENSIONS.md).")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                ForEach(loaded) { ext in
-                    ExtensionRow(ext: ext)
-                }
-                ForEach(errors) { err in
-                    Label("\(err.folder): \(err.message)", systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-                ForEach(store?.bundledInstallable ?? [], id: \.self) { id in
-                    HStack {
-                        Text("\(id) (bundled example)").font(.system(size: 12))
-                        Spacer()
-                        Button("Install") { try? store?.installBundled(id: id) }
-                            .controlSize(.small)
-                    }
-                }
-                HStack {
-                    Button("Reload") { store?.reload() }
-                    Button("Open folder…") {
-                        if let dir = store?.revealDirectory() { NSWorkspace.shared.open(dir) }
-                    }
-                }
-                Text("Extensions run scripts with your user permissions — enable only what you trust. Commands appear in the quick command as >name.")
-                    .font(.caption).foregroundStyle(.secondary)
-                let log = appModel.extensionRuntime?.recentLog ?? []
-                if !log.isEmpty {
-                    DisclosureGroup("Recent activity (\(log.count))") {
-                        ForEach(log.prefix(8)) { entry in
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("\(entry.ok ? "✓" : "✕") \(entry.extensionId) — \(entry.summary)")
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(entry.ok ? Color.secondary : .orange)
-                                if let detail = entry.detail {
-                                    Text(detail).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(2)
-                                }
-                            }
-                        }
-                    }
-                    .font(.caption)
-                }
-            }
-
-            Section("General") {
-                Toggle("Launch pass at login", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, on in
-                        if !LoginItemService.setEnabled(on) { launchAtLogin = LoginItemService.isEnabled }
-                    }
-                Toggle("Float above other windows", isOn: $floating)
-                    .onChange(of: floating) { _, on in appModel.setPanelFloating(on) }
-                Text("Off: pass behaves like a normal window you can put beside your editor (⌘⇧F toggles).")
-                    .font(.caption).foregroundStyle(.secondary)
-                Toggle("Restore sessions after a restart", isOn: $restoreSessions)
-                Text("If tmux was restarted (e.g. after a reboot), recreates your sessions with the same project and agent on launch — Claude resumes with --continue.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Claude Code hooks") {
-                LabeledContent("Status") {
-                    Text(appModel.needsHookInstall ? "Not installed" : "Installed")
-                        .foregroundStyle(appModel.needsHookInstall ? .orange : .green)
-                }
-                Button(appModel.needsHookInstall ? "Install hooks" : "Reinstall hooks") {
-                    appModel.installHooks()
-                }
-                Text("Merges into ~/.claude/settings.json (backed up first, never overwrites your other hooks). New Claude sessions pick them up.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section("Embedded browser · passcli") {
-                LabeledContent("Agent CLI") {
-                    Text(PassConfig.cliSymlinkPath)
-                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.head)
-                }
-                LabeledContent("Status") {
-                    Text(cliLinked ? "Linked" : "Not linked")
-                        .foregroundStyle(cliLinked ? .green : .orange)
-                }
-                if !cliLinked {
-                    Button("Link CLI") {
-                        CLIInstaller.refreshSymlink()
-                        cliLinked = CLIInstaller.isLinked
-                    }
-                }
-                Toggle("Tell agents about passcli (SessionStart hook)", isOn: $advertiseOn)
-                    .onChange(of: advertiseOn) { _, on in
-                        if on { ClaudeHooksInstaller.installAdvertise() }
-                        else { ClaudeHooksInstaller.removeAdvertise() }
-                        advertiseOn = ClaudeHooksInstaller.isAdvertiseInstalled()
-                    }
-                Text("Agents open pages beside their terminal (passcli browser open) and can read them back (screenshot/read). Note: whatever the embedded browser shows is readable by that session's agent.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Clear browser website data") {
-                    Task { await WebViewPool.clearWebsiteData() }
-                }
-            }
-
-            Section("Notifications") {
-                LabeledContent("Status") {
-                    Text(appModel.notificationsBlocked ? "Blocked" : "On")
-                        .foregroundStyle(appModel.notificationsBlocked ? .orange : .green)
-                }
-                if appModel.notificationsBlocked {
-                    Button("Open System Settings…") { NotificationService.openSystemSettings() }
-                }
-            }
-
-            Section("Hook listener") {
-                LabeledContent("Address", value: "127.0.0.1:\(String(PassConfig.hookPort))")
-                LabeledContent("Status") {
-                    Text(appModel.hookServerFailed ? "Failed (port busy)" : "Listening")
-                        .foregroundStyle(appModel.hookServerFailed ? .red : .green)
-                }
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .formStyle(.grouped)
-        .frame(width: 420, height: 520)
+        .frame(width: 820, height: 640)
         .onAppear {
             floating = appModel.panelFloating
             cliLinked = CLIInstaller.isLinked
@@ -216,6 +41,345 @@ struct SettingsView: View {
             appModel.hidePanel()
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    @ViewBuilder
+    private var detailSections: some View {
+        switch selection {
+        case .general:
+            shortcutSection
+            generalSection
+        case .home:
+            homeSection
+        case .projects:
+            projectsSection
+        case .backup:
+            backupSection
+        case .agents:
+            agentCommandsSection
+        case .extensions:
+            extensionsSection
+        case .integrations:
+            claudeHooksSection
+            browserCLISection
+        case .system:
+            notificationsSection
+            hookListenerSection
+        }
+    }
+
+    private var shortcutSection: some View {
+        Section("Shortcut") {
+            KeyboardShortcuts.Recorder("Summon pass:", name: .summonPass)
+        }
+    }
+
+    private var homeSection: some View {
+        Section("Home") {
+            Picker("Layout", selection: $homeModeRaw) {
+                ForEach(HomeMode.allCases, id: \.rawValue) { mode in
+                    Text(mode.label).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            Text("Card stack: the focused session shown large with its own input, others small. Compact list: uniform rows with one input at the bottom.")
+                .font(.caption).foregroundStyle(.secondary)
+            Picker("Terminal theme", selection: $terminalThemeRaw) {
+                ForEach(TerminalTheme.allCases, id: \.rawValue) { theme in
+                    Text(theme.label).tag(theme.rawValue)
+                }
+            }
+            .onChange(of: terminalThemeRaw) { _, _ in
+                // Every live terminal (home pool + detail) restyles immediately.
+                NotificationCenter.default.post(name: .passTerminalThemeChanged, object: nil)
+            }
+        }
+    }
+
+    private var projectsSection: some View {
+        Section("Projects") {
+            let projects = appModel.projects?.projects ?? []
+            if projects.isEmpty {
+                Text("No projects yet — add some to jump to them with @.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(projects) { p in
+                    ProjectRow(project: p)
+                }
+            }
+            HStack {
+                Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
+                if let msg = appModel.lastProjectAddMessage {
+                    Text(msg).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text("Tip: click the dot at the front of a session card to give its project an emoji.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var backupSection: some View {
+        Section("Backup") {
+            Toggle("Optimize git repos (store remote URL only)", isOn: $backupOptimizeGit)
+            HStack(spacing: 8) {
+                Button("Export backup…") { appModel.exportAllProjects(optimizeGit: backupOptimizeGit) }
+                    .disabled(appModel.isExporting || (appModel.projects?.projects.isEmpty ?? true))
+                if appModel.isExporting { ProgressView().controlSize(.small) }
+                if let msg = appModel.lastExportMessage {
+                    Text(msg).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text("Bundles every registered project + settings into one .tar.gz you can move to another Mac. Build artifacts (node_modules, .build, …) are excluded. With optimize on, git repos that have a remote are stored as URL + commit instead of copied.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var agentCommandsSection: some View {
+        Section("Agent commands") {
+            ForEach(AgentKind.launchable, id: \.self) { agent in
+                AgentCommandRow(agent: agent)
+            }
+            Text("The command pass types into a new session for each agent (e.g. add flags like --dangerously-skip-permissions). Leave a field at its default to keep the built-in.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var extensionsSection: some View {
+        Section("Extensions") {
+            let store = appModel.extensions
+            let loaded = store?.loaded ?? []
+            let errors = store?.loadErrors ?? []
+            if loaded.isEmpty && errors.isEmpty {
+                Text("No extensions yet — one folder per extension in ~/.pass/extensions (manifest schema: docs/EXTENSIONS.md).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(loaded) { ext in
+                ExtensionRow(ext: ext)
+            }
+            ForEach(errors) { err in
+                Label("\(err.folder): \(err.message)", systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            ForEach(store?.bundledInstallable ?? [], id: \.self) { id in
+                HStack {
+                    Text("\(id) (bundled example)").font(.system(size: 12))
+                    Spacer()
+                    Button("Install") { try? store?.installBundled(id: id) }
+                        .controlSize(.small)
+                }
+            }
+            HStack {
+                Button("Reload") { store?.reload() }
+                Button("Open folder…") {
+                    if let dir = store?.revealDirectory() { NSWorkspace.shared.open(dir) }
+                }
+            }
+            Text("Extensions run scripts with your user permissions — enable only what you trust. Commands appear in the quick command as >name.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        let log = appModel.extensionRuntime?.recentLog ?? []
+        if !log.isEmpty {
+            Section("Recent activity") {
+                DisclosureGroup("Recent activity (\(log.count))") {
+                    ForEach(log.prefix(8)) { entry in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(entry.ok ? "✓" : "✕") \(entry.extensionId) — \(entry.summary)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(entry.ok ? Color.secondary : .orange)
+                            if let detail = entry.detail {
+                                Text(detail).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(2)
+                            }
+                        }
+                    }
+                }
+                .font(.caption)
+            }
+        }
+    }
+
+    private var generalSection: some View {
+        Section("General") {
+            Toggle("Launch pass at login", isOn: $launchAtLogin)
+                .onChange(of: launchAtLogin) { _, on in
+                    if !LoginItemService.setEnabled(on) { launchAtLogin = LoginItemService.isEnabled }
+                }
+            Toggle("Float above other windows", isOn: $floating)
+                .onChange(of: floating) { _, on in appModel.setPanelFloating(on) }
+            Text("Off: pass behaves like a normal window you can put beside your editor (⌘⇧F toggles).")
+                .font(.caption).foregroundStyle(.secondary)
+            Toggle("Restore sessions after a restart", isOn: $restoreSessions)
+            Text("If tmux was restarted (e.g. after a reboot), recreates your sessions with the same project and agent on launch — Claude resumes with --continue.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var claudeHooksSection: some View {
+        Section("Claude Code hooks") {
+            LabeledContent("Status") {
+                Text(appModel.needsHookInstall ? "Not installed" : "Installed")
+                    .foregroundStyle(appModel.needsHookInstall ? .orange : .green)
+            }
+            Button(appModel.needsHookInstall ? "Install hooks" : "Reinstall hooks") {
+                appModel.installHooks()
+            }
+            Text("Merges into ~/.claude/settings.json (backed up first, never overwrites your other hooks). New Claude sessions pick them up.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var browserCLISection: some View {
+        Section("Embedded browser · passcli") {
+            LabeledContent("Agent CLI") {
+                Text(PassConfig.cliSymlinkPath)
+                    .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.head)
+            }
+            LabeledContent("Status") {
+                Text(cliLinked ? "Linked" : "Not linked")
+                    .foregroundStyle(cliLinked ? .green : .orange)
+            }
+            if !cliLinked {
+                Button("Link CLI") {
+                    CLIInstaller.refreshSymlink()
+                    cliLinked = CLIInstaller.isLinked
+                }
+            }
+            Toggle("Tell agents about passcli (SessionStart hook)", isOn: $advertiseOn)
+                .onChange(of: advertiseOn) { _, on in
+                    if on { ClaudeHooksInstaller.installAdvertise() }
+                    else { ClaudeHooksInstaller.removeAdvertise() }
+                    advertiseOn = ClaudeHooksInstaller.isAdvertiseInstalled()
+                }
+            Text("Agents open pages beside their terminal (passcli browser open) and can read them back (screenshot/read). Note: whatever the embedded browser shows is readable by that session's agent.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Clear browser website data") {
+                Task { await WebViewPool.clearWebsiteData() }
+            }
+        }
+    }
+
+    private var notificationsSection: some View {
+        Section("Notifications") {
+            LabeledContent("Status") {
+                Text(appModel.notificationsBlocked ? "Blocked" : "On")
+                    .foregroundStyle(appModel.notificationsBlocked ? .orange : .green)
+            }
+            if appModel.notificationsBlocked {
+                Button("Open System Settings…") { NotificationService.openSystemSettings() }
+            }
+        }
+    }
+
+    private var hookListenerSection: some View {
+        Section("Hook listener") {
+            LabeledContent("Address", value: "127.0.0.1:\(String(PassConfig.hookPort))")
+            LabeledContent("Status") {
+                Text(appModel.hookServerFailed ? "Failed (port busy)" : "Listening")
+                    .foregroundStyle(appModel.hookServerFailed ? .red : .green)
+            }
+        }
+    }
+}
+
+private enum SettingsSection: String, CaseIterable, Identifiable {
+    case general
+    case home
+    case projects
+    case backup
+    case agents
+    case extensions
+    case integrations
+    case system
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .general: return "General"
+        case .home: return "Home"
+        case .projects: return "Projects"
+        case .backup: return "Backup"
+        case .agents: return "Agents"
+        case .extensions: return "Extensions"
+        case .integrations: return "Integrations"
+        case .system: return "System"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general: return "gearshape"
+        case .home: return "rectangle.grid.1x2"
+        case .projects: return "folder"
+        case .backup: return "archivebox"
+        case .agents: return "terminal"
+        case .extensions: return "puzzlepiece.extension"
+        case .integrations: return "point.3.connected.trianglepath.dotted"
+        case .system: return "server.rack"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .general: return "Shortcut and window behavior"
+        case .home: return "Home layout and terminal theme"
+        case .projects: return "Registered project folders"
+        case .backup: return "Export project and settings bundle"
+        case .agents: return "Default launch commands"
+        case .extensions: return "Installed extension scripts"
+        case .integrations: return "Hooks, CLI, and browser"
+        case .system: return "Notifications and local listener"
+        }
+    }
+}
+
+private struct SettingsSidebar: View {
+    @Binding var selection: SettingsSection
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(SettingsSection.allCases) { section in
+                Button {
+                    selection = section
+                } label: {
+                    Label(section.title, systemImage: section.systemImage)
+                        .font(.system(size: 13, weight: selection == section ? .semibold : .regular))
+                        .foregroundStyle(selection == section ? Color.primary : .secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 7)
+                        .padding(.horizontal, 10)
+                        .background {
+                            if selection == section {
+                                RoundedRectangle(cornerRadius: 7)
+                                    .fill(Color.accentColor.opacity(0.16))
+                            }
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+private struct SettingsHeader: View {
+    let section: SettingsSection
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(section.title)
+                .font(.system(size: 22, weight: .semibold))
+            Text(section.subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 24)
+        .padding(.top, 22)
+        .padding(.bottom, 8)
     }
 }
 
