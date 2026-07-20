@@ -195,6 +195,62 @@ test("parses a correlated Swift v1 snapshot", () => {
   }
 });
 
+test("parses bounded session message stream events", () => {
+  const parsed = parseServerEvent({
+    version: 1,
+    id: "evt_stream",
+    type: "session.message.updated",
+    sentAt: "2026-07-16T10:01:01Z",
+    payload: {
+      session: "pass-my-app",
+      messageID: "msg_1",
+      sequence: 4,
+      text: "Running tests",
+      truncated: false,
+    },
+  });
+
+  assert.equal(parsed.ok, true);
+  if (parsed.ok && parsed.event.type === "session.message.updated") {
+    assert.equal(parsed.event.payload.sequence, 4);
+    assert.equal(parsed.event.payload.text, "Running tests");
+  }
+
+  const oversized = parseServerEvent({
+    version: 1,
+    id: "evt_stream_large",
+    type: "session.message.updated",
+    sentAt: "2026-07-16T10:01:02Z",
+    payload: {
+      session: "pass-my-app",
+      messageID: "msg_1",
+      sequence: 5,
+      text: "🙂".repeat(16_385),
+      truncated: true,
+    },
+  });
+  assert.equal(oversized.ok, false);
+  if (!oversized.ok) assert.equal(oversized.code, "invalid_payload");
+});
+
+test("rejects an oversized live message in a recovery snapshot", () => {
+  const parsed = parseServerEvent({
+    version: 1,
+    id: "evt_snapshot_large_stream",
+    type: "session.snapshot",
+    sentAt: "2026-07-16T10:01:02Z",
+    payload: {
+      generatedAt: "2026-07-16T10:01:02Z",
+      sessions: [{ ...session, liveMessage: "🙂".repeat(16_385) }],
+      projects: [],
+      capabilities: ["sessions:read", "sessions:stream"],
+    },
+  });
+
+  assert.equal(parsed.ok, false);
+  if (!parsed.ok) assert.equal(parsed.code, "invalid_payload");
+});
+
 test("rejects the pre-alignment v field", () => {
   const parsed = parseServerEvent({
     v: 1,
@@ -219,11 +275,50 @@ test("accepts authorizationToken and legacy pairingToken JSON fields", () => {
       }),
     );
     assert.equal(parsed.ok, true);
-    if (parsed.ok) {
+    if (parsed.ok && parsed.value.v === 1) {
       assert.equal(parsed.value.authorizationToken, "shared-dev-token");
       assert.equal(parsed.value.relayUrl, "https://relay.example.com");
     }
   }
+});
+
+test("accepts an unexpired one-time v2 pairing payload without a bearer token", () => {
+  const parsed = parsePairingPayload(
+    JSON.stringify({
+      v: 2,
+      relayUrl: "https://relay.example.com/",
+      desktopId: "desk_123",
+      pairingId: "pair_456",
+      pairingSecret: "one-time-secret",
+      expiresAt: "2026-07-18T12:05:00Z",
+    }),
+    { now: () => new Date("2026-07-18T12:00:00Z") },
+  );
+
+  assert.equal(parsed.ok, true);
+  if (parsed.ok && parsed.value.v === 2) {
+    assert.equal(parsed.value.pairingId, "pair_456");
+    assert.equal(parsed.value.relayUrl, "https://relay.example.com");
+    assert.equal(parsed.value.expiresAt, "2026-07-18T12:05:00.000Z");
+    assert.equal("authorizationToken" in parsed.value, false);
+  }
+});
+
+test("rejects an expired one-time v2 pairing payload", () => {
+  const parsed = parsePairingPayload(
+    JSON.stringify({
+      v: 2,
+      relayUrl: "https://relay.example.com",
+      desktopId: "desk_123",
+      pairingId: "pair_456",
+      pairingSecret: "one-time-secret",
+      expiresAt: "2026-07-18T11:59:59Z",
+    }),
+    { now: () => new Date("2026-07-18T12:00:00Z") },
+  );
+
+  assert.equal(parsed.ok, false);
+  if (!parsed.ok) assert.match(parsed.error, /expired/i);
 });
 
 test("rejects insecure relay URLs outside explicit development mode", () => {

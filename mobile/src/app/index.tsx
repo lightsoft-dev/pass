@@ -2,11 +2,12 @@ import { Redirect } from "expo-router";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 
 import { Screen } from "../components/Screen";
+import { publicOIDCConfiguration } from "../services/authService";
 import { useRemote } from "../state/RemoteProvider";
 import { colors, spacing } from "../theme/theme";
 
 export default function EntryRoute() {
-  const { hydrated, pairedDesktop } = useRemote();
+  const { hydrated, pairedDesktop, userSession } = useRemote();
   if (!hydrated) {
     return (
       <Screen style={styles.loading} edges={["top", "bottom", "left", "right"]}>
@@ -16,7 +17,11 @@ export default function EntryRoute() {
       </Screen>
     );
   }
-  return <Redirect href={pairedDesktop ? "/(tabs)" : "/pair"} />;
+  if (pairedDesktop) return <Redirect href="/(tabs)" />;
+  if (publicOIDCConfiguration() && !userSession) {
+    return <Redirect href="/login" />;
+  }
+  return <Redirect href="/pair" />;
 }
 
 const styles = StyleSheet.create({

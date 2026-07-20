@@ -1,5 +1,5 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { useRouter } from "expo-router";
+import { Redirect, useRouter } from "expo-router";
 import { useState } from "react";
 import {
   KeyboardAvoidingView,
@@ -13,6 +13,7 @@ import {
 
 import { AppButton } from "../components/AppButton";
 import { Screen } from "../components/Screen";
+import { publicOIDCConfiguration } from "../services/authService";
 import { useRemote } from "../state/RemoteProvider";
 import { colors, radius, spacing } from "../theme/theme";
 
@@ -20,7 +21,8 @@ const sampleRelay = process.env.EXPO_PUBLIC_PASS_RELAY_URL ?? "https://relay.exa
 
 export default function PairScreen() {
   const router = useRouter();
-  const { pair, pairingBusy, pairingError } = useRemote();
+  const { pair, pairingBusy, pairingError, userSession } = useRemote();
+  const publicMode = publicOIDCConfiguration() !== null;
   const [permission, requestPermission] = useCameraPermissions();
   const [showScanner, setShowScanner] = useState(false);
   const [scanned, setScanned] = useState(false);
@@ -46,6 +48,8 @@ export default function PairScreen() {
     setShowScanner(true);
   };
 
+  if (publicMode && !userSession) return <Redirect href="/login" />;
+
   return (
     <Screen edges={["top", "bottom", "left", "right"]}>
       <KeyboardAvoidingView
@@ -59,19 +63,22 @@ export default function PairScreen() {
           <View style={styles.hero}>
             <View style={styles.mark}><Text style={styles.markText}>P</Text></View>
             <Text style={styles.eyebrow}>PASS REMOTE</Text>
-            <Text style={styles.title}>Pair this phone</Text>
+            <Text style={styles.title}>Pair your Mac</Text>
             <Text style={styles.subtitle}>
-              Scan a developer pairing JSON payload, or paste the JSON directly.
+              {publicMode
+                ? "Open Pass settings on your Mac and scan its one-time code."
+                : "Scan a development pairing code from Pass on your Mac."}
             </Text>
           </View>
 
-          <View style={styles.warning}>
-            <Text style={styles.warningTitle}>Developer payload only</Text>
-            <Text style={styles.warningText}>
-              This QR is only the shared relay values encoded as JSON, not a one-time
-              device registration. The token is stored in SecureStore for this MVP.
-            </Text>
-          </View>
+          {!publicMode ? (
+            <View style={styles.warning}>
+              <Text style={styles.warningTitle}>Development mode</Text>
+              <Text style={styles.warningText}>
+                This build accepts the reusable relay token from a v1 pairing code.
+              </Text>
+            </View>
+          ) : null}
 
           {showScanner ? (
             <View style={styles.scannerShell}>
@@ -89,7 +96,7 @@ export default function PairScreen() {
               />
               <View style={styles.scannerFooter}>
                 <Text style={styles.scannerHint}>
-                  Scan a QR containing the developer JSON payload
+                  Align the Pass pairing code inside the frame
                 </Text>
                 <AppButton
                   compact
@@ -100,12 +107,12 @@ export default function PairScreen() {
               </View>
             </View>
           ) : (
-            <AppButton label="Scan developer payload" onPress={openScanner} />
+            <AppButton label="Scan pairing code" onPress={openScanner} />
           )}
 
           <View style={styles.dividerRow}>
             <View style={styles.divider} />
-            <Text style={styles.or}>OR PASTE JSON</Text>
+            <Text style={styles.or}>OR ENTER CODE</Text>
             <View style={styles.divider} />
           </View>
 
@@ -116,22 +123,27 @@ export default function PairScreen() {
             multiline
             numberOfLines={7}
             onChangeText={setRawPayload}
-            placeholder={`{"v":1,"relayUrl":"${sampleRelay}","desktopId":"desk_...","authorizationToken":"..."}`}
+            placeholder={
+              publicMode
+                ? `{"v":2,"relayUrl":"${sampleRelay}","desktopId":"desk_...","pairingId":"pair_...","pairingSecret":"...","expiresAt":"..."}`
+                : `{"v":1,"relayUrl":"${sampleRelay}","desktopId":"desk_...","authorizationToken":"..."}`
+            }
             placeholderTextColor={colors.subtle}
             style={styles.input}
             value={rawPayload}
           />
           {pairingError ? <Text style={styles.error}>{pairingError}</Text> : null}
           <AppButton
-            label="Save and connect"
+            label="Pair and connect"
             loading={pairingBusy}
             disabled={!rawPayload.trim()}
             onPress={() => void submit()}
           />
 
           <Text style={styles.footnote}>
-            Credentials are sent only in the TLS WebSocket Authorization header, never in
-            the URL. HTTP relay URLs are accepted only in development builds.
+            {publicMode
+              ? "The code expires after five minutes and can be claimed only once."
+              : "HTTP relay URLs are accepted only in development builds."}
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>

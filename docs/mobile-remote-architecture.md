@@ -5,28 +5,35 @@ instance: send messages to agent sessions, list/create sessions, observe state, 
 voice agent that speaks as a management layer instead of merely transcribing text into the
 existing chat box.
 
-## Implementation status (2026-07-17)
+## Implementation status (2026-07-18)
 
-The repository now contains a working **developer control-plane MVP**:
+The repository now contains a working control plane with a development compatibility mode and a
+public-account implementation:
 
 - `Sources/Pass/Remote/` implements the versioned Swift DTOs, the narrow command handler, and an
   outbound-only reconnecting `RemoteGateway`. `AppModel`, `SessionStore`, and `ProjectStore`
   publish full snapshots without exposing the loopback hook listener.
-- `relay/` implements the Cloudflare Worker and one SQLite-backed, hibernation-capable Durable
-  Object per desktop id. It authenticates header bearer tokens, forwards the original v1
-  envelopes, rejects offline mutations, and stores only short-lived delivery metadata.
-- `mobile/` implements the Expo Router client, development pairing in SecureStore, reconnect and
-  presence handling, inbox/detail/create/settings screens, typed message and decision actions,
-  and a capability-gated voice placeholder.
+- `relay/` implements OIDC account verification, a D1 account/desktop/device registry, one-time
+  pairing, rotating scoped credentials, revocation, and one hibernation-capable Durable Object per
+  desktop id. The original shared-token path remains behind an explicit development flag.
+- `mobile/` implements OIDC Authorization Code + PKCE, one-time QR claiming, rotating credentials
+  in SecureStore, reconnect and presence handling, inbox/detail/create/settings screens, typed
+  message and decision actions, and a capability-gated voice placeholder.
+- The macOS app implements the same PKCE account login, Keychain credential storage and rotation,
+  desktop registration, and server-generated five-minute one-time pairing QR codes.
 - Snapshot strings and complete frames are bounded. If the 900 KB desktop budget requires
   reducing a snapshot, the payload reports `truncated`, `totalSessionCount`, and
   `totalProjectCount` instead of silently pretending it is complete.
+- Active assistant responses stream per session through `session.message.started`,
+  `session.message.updated`, and `session.message.completed`. The desktop samples the current
+  transcript or pane every 750 ms and sends the complete current text, bounded to 64 KiB UTF-8.
+  Stream events are ephemeral at the relay; a fresh snapshot includes `liveMessage` so reconnects
+  can recover the current response.
 
-This is not the production pairing design described below. The current relay uses one shared
-`RELAY_AUTH_TOKEN`, so any trusted development client holding it can claim either role. One-time
-QR registration, device-bound signed credentials, revocation, rate limits, push delivery, and the
-realtime voice agent remain later phases. See [`relay/README.md`](../relay/README.md) and
-[`mobile/README.md`](../mobile/README.md) for local setup once both packages are installed.
+The public path no longer puts a reusable relay bearer in the QR. Remaining launch hardening is
+edge rate limiting, managed OIDC deployment values, provider-side account deletion, abuse and
+retention controls, push delivery, and the realtime voice agent. See
+[`relay/README.md`](../relay/README.md) and [`mobile/README.md`](../mobile/README.md).
 
 ## Goals
 
@@ -172,13 +179,16 @@ Use one versioned JSON protocol over WebSocket for the control plane. Every comm
 
 ### Desktop-to-mobile events
 
-The developer MVP currently emits `ack`, `error`, `session.snapshot`, and
-`message.delivered`. The incremental and voice events in this table remain the target contract for
-later phases; full snapshots are the source of truth today.
+The developer MVP currently emits `ack`, `error`, `session.snapshot`, `message.delivered`, and the
+three `session.message.*` streaming events. Other incremental and voice events in this table remain
+the target contract for later phases; full snapshots remain the source of truth.
 
 | Event | Payload |
 | --- | --- |
 | `session.snapshot` | Full session list, project list, selected app capabilities. |
+| `session.message.started` | First sampled text for an in-progress assistant response. |
+| `session.message.updated` | New complete sampled text for the same message id and a higher sequence. |
+| `session.message.completed` | Final complete text when the response stops streaming. |
 | `session.updated` | One changed session: name, display name, agent, project root, git branch, attention, last message, activity. |
 | `session.removed` | Removed tmux session name. |
 | `attention.changed` | Pending decision/input/working/idle state and optional prompt preview. |
@@ -250,7 +260,7 @@ confirmation so voice and text control share the same audit trail.
 - **Authentication:** Use device-scoped key pairs and signed WebSocket handshakes. Expire pairing
   tokens quickly.
 - **Authorization:** Gate actions with capability scopes such as `sessions:read`,
-  `sessions:write`, `projects:read`, `voice:use`, and `decisions:answer`.
+  `sessions:write`, `sessions:stream`, `projects:read`, `voice:use`, and `decisions:answer`.
 - **Local-first execution:** The desktop app remains the authority for tmux, repo paths, and
   injections.
 - **Transport:** Desktop dials out to the relay over TLS. Do not expose the existing hook server

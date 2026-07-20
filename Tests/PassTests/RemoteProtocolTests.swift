@@ -182,4 +182,36 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(snapshot.totalProjectCount, RemoteWireLimits.maximumSnapshotItems + 1)
         XCTAssertEqual(snapshot.totalSessionCount, 0)
     }
+
+    func testSessionMessageStreamEventRoundTripsWithSelfContainedText() throws {
+        let original = RemoteEventEnvelope(
+            id: "evt_stream",
+            sentAt: timestamp,
+            event: .sessionMessageUpdated(.init(
+                session: "pass-app",
+                messageID: "msg_turn",
+                sequence: 4,
+                text: "Building the mobile bundle…",
+                truncated: false
+            ))
+        )
+
+        let decoded = try RemoteWireCodec.decodeEvent(from: RemoteWireCodec.encode(original))
+
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.type, RemoteEventType.sessionMessageUpdated)
+    }
+
+    func testSessionMessageStreamTextIsBoundedByUTF8Bytes() throws {
+        let payload = RemoteSessionMessageStream(
+            session: "pass-app",
+            messageID: "msg_large",
+            sequence: 1,
+            text: String(repeating: "🙂", count: RemoteWireLimits.streamMessageBytes),
+            truncated: false
+        )
+
+        XCTAssertLessThanOrEqual(payload.text.utf8.count, RemoteWireLimits.streamMessageBytes)
+        XCTAssertTrue(payload.truncated)
+    }
 }

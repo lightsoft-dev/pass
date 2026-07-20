@@ -1,6 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 
 import {
+  authenticateDeviceCredential,
+  extractBearerToken,
+  tokensMatch,
+} from "./auth";
+import { handleControlRequest } from "./control";
+
+import {
   COMMAND_RETENTION_MS,
   MAX_FRAME_BYTES,
   MAX_RESUME_COMMANDS,
@@ -23,7 +30,27 @@ import {
 const INTERNAL_DESKTOP_ID_HEADER = "X-Pass-Internal-Desktop-ID";
 const INTERNAL_ROLE_HEADER = "X-Pass-Internal-Role";
 const INTERNAL_DEVICE_ID_HEADER = "X-Pass-Internal-Device-ID";
+const INTERNAL_ACCOUNT_ID_HEADER = "X-Pass-Internal-Account-ID";
+const INTERNAL_AUTHORIZATION_HEADER = "X-Pass-Internal-Authorization";
+const INTERNAL_SCOPES_HEADER = "X-Pass-Internal-Scopes";
+const INTERNAL_CREDENTIAL_EXPIRES_AT_HEADER = "X-Pass-Internal-Credential-Expires-At";
 const OPEN = 1;
+
+const DEVELOPMENT_SCOPES = [
+  "sessions:read",
+  "sessions:write",
+  "sessions:stream",
+  "projects:read",
+  "decisions:answer",
+] as const;
+
+type RelayEnv = Env & {
+  ALLOW_DEVELOPMENT_AUTH?: string;
+  DEVICE_CREDENTIAL_PEPPER?: string;
+  OIDC_ISSUER?: string;
+  OIDC_AUDIENCE?: string;
+  OIDC_JWKS_URL?: string;
+};
 
 type ConnectionAttachment = {
   version: typeof PROTOCOL_VERSION;
@@ -32,6 +59,10 @@ type ConnectionAttachment = {
   deviceId: string;
   connectionId: string;
   connectedAt: number;
+  accountId?: string;
+  authorization?: "development" | "device";
+  scopes?: string[];
+  credentialExpiresAt?: number;
 };
 
 type CommandRow = {
@@ -82,29 +113,29 @@ function structuredLog(
   }
 }
 
-function extractBearerToken(request: Request): string | null {
-  const authorization = request.headers.get("Authorization");
-  if (authorization === null || authorization.length > 4_096) return null;
-  const match = /^Bearer ([^\s]+)$/.exec(authorization);
-  return match?.[1] ?? null;
+async function rateLimitKey(request: Request): Promise<string> {
+  const token = extractBearerToken(request);
+  if (token !== null) {
+    const digest = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)),
+    );
+    return `credential:${Array.from(digest.slice(0, 16), (byte) =>
+      byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+  return `anonymous:${request.headers.get("CF-Connecting-IP") ?? "unknown"}`;
 }
 
-async function tokensMatch(provided: string, expected: string): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const [providedHash, expectedHash] = await Promise.all([
-    crypto.subtle.digest("SHA-256", encoder.encode(provided)),
-    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
-  ]);
-  // SHA-256 gives fixed-length inputs. Compare every byte without an early
-  // return so token content does not affect comparison work.
-  const providedBytes = new Uint8Array(providedHash);
-  const expectedBytes = new Uint8Array(expectedHash);
-  let difference = 0;
-  for (let index = 0; index < providedBytes.length; index += 1) {
-    difference |=
-      (providedBytes.at(index) ?? 0) ^ (expectedBytes.at(index) ?? 0);
-  }
-  return difference === 0;
+async function enforceRateLimit(
+  request: Request,
+  limiter: RateLimit,
+): Promise<Response | null> {
+  const result = await limiter.limit({ key: await rateLimitKey(request) });
+  if (result.success) return null;
+  return jsonResponse(
+    { error: { code: "rate_limited", message: "Too many requests. Try again shortly." } },
+    429,
+    { "Retry-After": "60" },
+  );
 }
 
 function isConnectionAttachment(value: unknown): value is ConnectionAttachment {
@@ -116,8 +147,52 @@ function isConnectionAttachment(value: unknown): value is ConnectionAttachment {
     isValidIdentifier(value.deviceId) &&
     isValidIdentifier(value.connectionId) &&
     typeof value.connectedAt === "number" &&
-    Number.isSafeInteger(value.connectedAt)
+    Number.isSafeInteger(value.connectedAt) &&
+    (value.accountId === undefined || isValidIdentifier(value.accountId)) &&
+    (value.authorization === undefined ||
+      value.authorization === "development" ||
+      value.authorization === "device") &&
+    (value.scopes === undefined ||
+      (Array.isArray(value.scopes) &&
+        value.scopes.length <= 32 &&
+        value.scopes.every((scope) => typeof scope === "string" && scope.length <= 128)))
+    && (value.credentialExpiresAt === undefined ||
+      (typeof value.credentialExpiresAt === "number" &&
+        Number.isSafeInteger(value.credentialExpiresAt)))
   );
+}
+
+function parseInternalScopes(raw: string | null): string[] | null {
+  if (raw === null || raw.length > 4_096) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (
+      !Array.isArray(value) ||
+      value.length > 32 ||
+      value.some((scope) => typeof scope !== "string" || scope.length === 0 || scope.length > 128)
+    ) {
+      return null;
+    }
+    return [...new Set(value)];
+  } catch {
+    return null;
+  }
+}
+
+function requiredCommandScope(commandType: string): string | null {
+  switch (commandType) {
+    case "session.list":
+      return "sessions:read";
+    case "project.list":
+      return "projects:read";
+    case "session.create":
+    case "session.sendMessage":
+      return "sessions:write";
+    case "session.answerDecision":
+      return "decisions:answer";
+    default:
+      return null;
+  }
 }
 
 function makeRelayEvent<
@@ -225,13 +300,39 @@ export class DesktopRoom extends DurableObject<Env> {
     const desktopId = request.headers.get(INTERNAL_DESKTOP_ID_HEADER);
     const role = request.headers.get(INTERNAL_ROLE_HEADER);
     const deviceId = request.headers.get(INTERNAL_DEVICE_ID_HEADER);
+    const accountId = request.headers.get(INTERNAL_ACCOUNT_ID_HEADER);
+    const authorization = request.headers.get(INTERNAL_AUTHORIZATION_HEADER);
+    const scopes = parseInternalScopes(request.headers.get(INTERNAL_SCOPES_HEADER));
+    const rawCredentialExpiry = request.headers.get(INTERNAL_CREDENTIAL_EXPIRES_AT_HEADER);
+    const credentialExpiresAt = rawCredentialExpiry === null
+      ? undefined
+      : Number(rawCredentialExpiry);
+
+    if (url.pathname === "/disconnect" && request.method === "POST") {
+      if (!isValidIdentifier(desktopId)) {
+        return jsonResponse({ error: "Invalid disconnect request." }, 400);
+      }
+      const closed = this.disconnectSockets(
+        request.headers.get(INTERNAL_DEVICE_ID_HEADER),
+      );
+      this.broadcastPresence();
+      await this.scheduleCredentialExpiry();
+      return jsonResponse({ closed });
+    }
 
     if (
       url.pathname !== "/connect" ||
       request.headers.get("Upgrade")?.toLowerCase() !== "websocket" ||
       !isValidIdentifier(desktopId) ||
       !isRole(role) ||
-      !isValidIdentifier(deviceId)
+      !isValidIdentifier(deviceId) ||
+      (accountId !== null && !isValidIdentifier(accountId)) ||
+      (authorization !== "development" && authorization !== "device") ||
+      scopes === null ||
+      (authorization === "device" &&
+        (credentialExpiresAt === undefined ||
+          !Number.isSafeInteger(credentialExpiresAt) ||
+          credentialExpiresAt <= Date.now()))
     ) {
       return jsonResponse({ error: "Invalid internal relay request." }, 400);
     }
@@ -252,6 +353,10 @@ export class DesktopRoom extends DurableObject<Env> {
       deviceId,
       connectionId: crypto.randomUUID(),
       connectedAt: Date.now(),
+      ...(accountId === null ? {} : { accountId }),
+      authorization,
+      scopes,
+      ...(credentialExpiresAt === undefined ? {} : { credentialExpiresAt }),
     };
 
     this.ctx.acceptWebSocket(server, [
@@ -260,6 +365,7 @@ export class DesktopRoom extends DurableObject<Env> {
       `connection:${attachment.connectionId}`,
     ]);
     server.serializeAttachment(attachment);
+    await this.scheduleCredentialExpiry();
 
     if (role === "mobile") {
       const ready: MobileRelayMessage = makeRelayEvent("relay.ready", {
@@ -283,6 +389,22 @@ export class DesktopRoom extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  override async alarm(): Promise<void> {
+    const now = Date.now();
+    for (const socket of this.openSockets()) {
+      const attachment = this.attachment(socket);
+      if (
+        attachment?.authorization === "device" &&
+        attachment.credentialExpiresAt !== undefined &&
+        attachment.credentialExpiresAt <= now
+      ) {
+        socket.close(4003, "Credential expired.");
+      }
+    }
+    this.broadcastPresence();
+    await this.scheduleCredentialExpiry();
+  }
+
   override async webSocketMessage(
     socket: WebSocket,
     raw: string | ArrayBuffer,
@@ -290,6 +412,14 @@ export class DesktopRoom extends DurableObject<Env> {
     const attachment = this.attachment(socket);
     if (attachment === null) {
       socket.close(1011, "Missing connection state.");
+      return;
+    }
+    if (
+      attachment.authorization === "device" &&
+      attachment.credentialExpiresAt !== undefined &&
+      attachment.credentialExpiresAt <= Date.now()
+    ) {
+      socket.close(4003, "Credential expired.");
       return;
     }
 
@@ -331,6 +461,13 @@ export class DesktopRoom extends DurableObject<Env> {
     const parsedMessage = parsed.value;
     if (attachment.role === "mobile") {
       if (parsedMessage.kind === "resume") {
+        if (!this.hasScope(attachment, "sessions:read")) {
+          this.send(
+            socket,
+            makeErrorEvent("scope.denied", "Credential cannot resume session commands.", false, parsedMessage.message.id),
+          );
+          return;
+        }
         this.handleResume(
           socket,
           attachment,
@@ -426,6 +563,23 @@ export class DesktopRoom extends DurableObject<Env> {
   ): void {
     this.pruneExpiredCommands();
 
+    const requiredScope = requiredCommandScope(command.type);
+    if (
+      (requiredScope === null && attachment.authorization === "device") ||
+      (requiredScope !== null && !this.hasScope(attachment, requiredScope))
+    ) {
+      this.send(
+        mobile,
+        makeErrorEvent(
+          "scope.denied",
+          "Credential is not authorized for this command.",
+          false,
+          command.id,
+        ),
+      );
+      return;
+    }
+
     const existing = this.findCommand(command.id);
     if (existing !== null) {
       if (existing.origin_device_id !== attachment.deviceId) {
@@ -513,7 +667,12 @@ export class DesktopRoom extends DurableObject<Env> {
     this.pruneExpiredCommands();
 
     if (event.replyTo === undefined) {
-      if (event.type === "session.snapshot") {
+      if (
+        event.type === "session.snapshot" ||
+        event.type === "session.message.started" ||
+        event.type === "session.message.updated" ||
+        event.type === "session.message.completed"
+      ) {
         this.sendToMobiles(event);
       } else {
         structuredLog("warn", "ignored uncorrelated desktop event", {
@@ -685,9 +844,42 @@ export class DesktopRoom extends DurableObject<Env> {
       .filter((socket) => socket.readyState === OPEN);
   }
 
+  private disconnectSockets(deviceId: string | null): number {
+    let closed = 0;
+    for (const socket of this.openSockets()) {
+      const attachment = this.attachment(socket);
+      if (attachment === null || (deviceId !== null && attachment.deviceId !== deviceId)) {
+        continue;
+      }
+      socket.close(4003, "Credential revoked.");
+      closed += 1;
+    }
+    return closed;
+  }
+
+  private async scheduleCredentialExpiry(): Promise<void> {
+    const now = Date.now();
+    let nextExpiry: number | null = null;
+    for (const socket of this.openSockets()) {
+      const expiry = this.attachment(socket)?.credentialExpiresAt;
+      if (expiry === undefined || expiry <= now) continue;
+      if (nextExpiry === null || expiry < nextExpiry) nextExpiry = expiry;
+    }
+    if (nextExpiry === null) {
+      await this.ctx.storage.deleteAlarm();
+    } else {
+      await this.ctx.storage.setAlarm(nextExpiry);
+    }
+  }
+
   private attachment(socket: WebSocket): ConnectionAttachment | null {
     const value: unknown = socket.deserializeAttachment();
     return isConnectionAttachment(value) ? value : null;
+  }
+
+  private hasScope(attachment: ConnectionAttachment, scope: string): boolean {
+    const scopes: readonly string[] = attachment.scopes ?? DEVELOPMENT_SCOPES;
+    return scopes.includes(scope);
   }
 
   private findCommand(commandId: string): CommandRow | null {
@@ -735,7 +927,7 @@ export class DesktopRoom extends DurableObject<Env> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: RelayEnv): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/health" && request.method === "GET") {
@@ -745,6 +937,15 @@ export default {
         protocolVersion: PROTOCOL_VERSION,
       });
     }
+    if (url.pathname === "/connect" || url.pathname === "/v2" || url.pathname.startsWith("/v2/")) {
+      const limiter = url.pathname.startsWith("/v2/pairings")
+        ? env.PAIRING_RATE_LIMITER
+        : env.AUTH_RATE_LIMITER;
+      const limited = await enforceRateLimit(request, limiter);
+      if (limited !== null) return limited;
+    }
+    const controlResponse = await handleControlRequest(request, env);
+    if (controlResponse !== null) return controlResponse;
     if (url.pathname !== "/connect") {
       return jsonResponse({ error: "Not found." }, 404);
     }
@@ -763,19 +964,7 @@ export default {
       );
     }
 
-    if (env.RELAY_AUTH_TOKEN.length === 0) {
-      structuredLog("error", "required relay auth secret is empty");
-      return jsonResponse({ error: "Relay authentication is unavailable." }, 500);
-    }
     const token = extractBearerToken(request);
-    if (token === null || !(await tokensMatch(token, env.RELAY_AUTH_TOKEN))) {
-      return jsonResponse(
-        { error: "Unauthorized." },
-        401,
-        { "WWW-Authenticate": "Bearer" },
-      );
-    }
-
     const protocolVersion =
       request.headers.get("X-Pass-Protocol-Version") ??
       url.searchParams.get("version");
@@ -789,33 +978,80 @@ export default {
       );
     }
 
-    const desktopId =
-      request.headers.get("X-Pass-Desktop-ID") ??
-      url.searchParams.get("desktopId");
-    const roleValue =
-      request.headers.get("X-Pass-Role") ?? url.searchParams.get("role");
-    if (!isValidIdentifier(desktopId) || !isRole(roleValue)) {
-      return jsonResponse({ error: "Invalid desktop id or role." }, 400);
-    }
+    let desktopId: string;
+    let roleValue: Role;
+    let deviceId: string;
+    let accountId: string | null = null;
+    let authorization: "development" | "device";
+    let scopes: readonly string[];
+    let credentialExpiresAt: number | null = null;
 
-    const deviceId =
-      roleValue === "desktop"
-        ? desktopId
-        : (request.headers.get("X-Pass-Device-ID") ??
-          url.searchParams.get("deviceId"));
-    if (!isValidIdentifier(deviceId)) {
-      return jsonResponse({ error: "Mobile device id is required." }, 400);
+    if (token?.startsWith("pass_at_") === true) {
+      const authenticated = await authenticateDeviceCredential(request, env, "access");
+      if (!authenticated.ok) {
+        return jsonResponse(
+          { error: authenticated.message, code: authenticated.code },
+          authenticated.status,
+          { "WWW-Authenticate": "Bearer" },
+        );
+      }
+      desktopId = authenticated.value.desktopId;
+      roleValue = authenticated.value.role;
+      deviceId = authenticated.value.subjectId;
+      accountId = authenticated.value.accountId;
+      authorization = "device";
+      scopes = authenticated.value.scopes;
+      credentialExpiresAt = authenticated.value.expiresAt;
+    } else {
+      if (
+        env.ALLOW_DEVELOPMENT_AUTH !== "true" ||
+        env.RELAY_AUTH_TOKEN.length === 0 ||
+        token === null ||
+        !(await tokensMatch(token, env.RELAY_AUTH_TOKEN))
+      ) {
+        return jsonResponse(
+          { error: "Unauthorized." },
+          401,
+          { "WWW-Authenticate": "Bearer" },
+        );
+      }
+      const requestedDesktopId =
+        request.headers.get("X-Pass-Desktop-ID") ??
+        url.searchParams.get("desktopId");
+      const requestedRole =
+        request.headers.get("X-Pass-Role") ?? url.searchParams.get("role");
+      if (!isValidIdentifier(requestedDesktopId) || !isRole(requestedRole)) {
+        return jsonResponse({ error: "Invalid desktop id or role." }, 400);
+      }
+      const requestedDeviceId = requestedRole === "desktop"
+        ? requestedDesktopId
+        : (request.headers.get("X-Pass-Device-ID") ?? url.searchParams.get("deviceId"));
+      if (!isValidIdentifier(requestedDeviceId)) {
+        return jsonResponse({ error: "Mobile device id is required." }, 400);
+      }
+      desktopId = requestedDesktopId;
+      roleValue = requestedRole;
+      deviceId = requestedDeviceId;
+      authorization = "development";
+      scopes = DEVELOPMENT_SCOPES;
     }
 
     const room = env.DESKTOP_ROOMS.getByName(desktopId);
+    const internalHeaders = new Headers({
+      Upgrade: "websocket",
+      [INTERNAL_DESKTOP_ID_HEADER]: desktopId,
+      [INTERNAL_ROLE_HEADER]: roleValue,
+      [INTERNAL_DEVICE_ID_HEADER]: deviceId,
+      [INTERNAL_AUTHORIZATION_HEADER]: authorization,
+      [INTERNAL_SCOPES_HEADER]: JSON.stringify(scopes),
+    });
+    if (accountId !== null) internalHeaders.set(INTERNAL_ACCOUNT_ID_HEADER, accountId);
+    if (credentialExpiresAt !== null) {
+      internalHeaders.set(INTERNAL_CREDENTIAL_EXPIRES_AT_HEADER, String(credentialExpiresAt));
+    }
     const internalRequest = new Request("https://relay.internal/connect", {
       method: "GET",
-      headers: {
-        Upgrade: "websocket",
-        [INTERNAL_DESKTOP_ID_HEADER]: desktopId,
-        [INTERNAL_ROLE_HEADER]: roleValue,
-        [INTERNAL_DEVICE_ID_HEADER]: deviceId,
-      },
+      headers: internalHeaders,
     });
 
     try {
@@ -829,4 +1065,4 @@ export default {
       return jsonResponse({ error: "Relay temporarily unavailable." }, 503);
     }
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<RelayEnv>;

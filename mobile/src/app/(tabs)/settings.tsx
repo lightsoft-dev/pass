@@ -39,23 +39,36 @@ export default function SettingsScreen() {
   const {
     state,
     pairedDesktop,
+    userSession,
     preferences,
     reconnect,
     updatePreferences,
     forgetPairing,
+    signOut,
   } = useRemote();
+
+  const deviceCredential = pairedDesktop?.authenticationMode === "device";
 
   const unpair = () => {
     Alert.alert(
       "Forget paired desktop?",
-      "This removes the shared relay token from SecureStore on this device.",
+      deviceCredential
+        ? "This removes this phone's credentials from local secure storage."
+        : "This removes the shared relay token from SecureStore on this device.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Forget",
           style: "destructive",
           onPress: () => {
-            void forgetPairing().then(() => router.replace("/pair"));
+            void forgetPairing()
+              .then(() => router.replace("/pair"))
+              .catch((error: unknown) => {
+                Alert.alert(
+                  "Could not forget desktop",
+                  error instanceof Error ? error.message : "Device revocation failed.",
+                );
+              });
           },
         },
       ],
@@ -88,7 +101,9 @@ export default function SettingsScreen() {
             </View>
             <View style={styles.valueRow}>
               <Text style={styles.valueLabel}>Credential</Text>
-              <Text style={styles.secureValue}>Stored in SecureStore</Text>
+              <Text style={styles.secureValue}>
+                {deviceCredential ? "Device-scoped" : "Shared development token"}
+              </Text>
             </View>
           </View>
           <View style={styles.buttonRow}>
@@ -97,13 +112,34 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        <View style={styles.devWarning}>
-          <Text style={styles.devTitle}>Shared-token development mode</Text>
-          <Text style={styles.devText}>
-            The current relay uses one RELAY_AUTH_TOKEN for desktop and mobile. Rotate it if
-            exposed. One-time QR registration and device-key revocation remain hardening work.
-          </Text>
-        </View>
+        {!deviceCredential ? (
+          <View style={styles.devWarning}>
+            <Text style={styles.devTitle}>Shared-token development mode</Text>
+            <Text style={styles.devText}>
+              This connection uses one reusable relay credential. Rotate it if exposed.
+            </Text>
+          </View>
+        ) : null}
+
+        {userSession ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Account</Text>
+            <AppButton
+              variant="danger"
+              label="Sign out"
+              onPress={() => {
+                void signOut()
+                  .then(() => router.replace("/login"))
+                  .catch((error: unknown) => {
+                    Alert.alert(
+                      "Could not sign out",
+                      error instanceof Error ? error.message : "Device revocation failed.",
+                    );
+                  });
+              }}
+            />
+          </View>
+        ) : null}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Notification preferences</Text>

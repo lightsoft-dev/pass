@@ -7,6 +7,7 @@ export type AgentKind = "claude" | "codex" | "pi" | "shell" | "generic";
 export type Capability =
   | "sessions:read"
   | "sessions:write"
+  | "sessions:stream"
   | "projects:read"
   | "voice:use"
   | "decisions:answer";
@@ -34,6 +35,8 @@ export interface RemoteSession {
   gitBranch?: string | null;
   attention: RemoteAttention;
   lastMessage?: string | null;
+  liveMessage?: string | null;
+  liveMessageTruncated?: boolean;
   lastActivity: string;
   isAttached: boolean;
   unacknowledged: boolean;
@@ -149,7 +152,18 @@ export type ServerEventPayloadMap = {
     totalProjectCount?: number;
   };
   "message.delivered": { session: string };
+  "session.message.started": SessionMessageStreamPayload;
+  "session.message.updated": SessionMessageStreamPayload;
+  "session.message.completed": SessionMessageStreamPayload;
 };
+
+export interface SessionMessageStreamPayload {
+  session: string;
+  messageID: string;
+  sequence: number;
+  text: string;
+  truncated: boolean;
+}
 
 export type ServerEventType = keyof ServerEventPayloadMap;
 
@@ -161,14 +175,27 @@ export type ServerEvent<K extends ServerEventType = ServerEventType> =
       }
     : never;
 
-export interface PairingQrPayload {
-  v: ProtocolVersion;
+export interface DevelopmentPairingQrPayload {
+  v: 1;
   relayUrl: string;
   desktopId: string;
   authorizationToken: string;
   desktopName?: string;
   desktopPublicKey?: string;
 }
+
+export interface DevicePairingQrPayload {
+  v: 2;
+  relayUrl: string;
+  desktopId: string;
+  pairingId: string;
+  pairingSecret: string;
+  expiresAt: string;
+}
+
+export type PairingQrPayload =
+  | DevelopmentPairingQrPayload
+  | DevicePairingQrPayload;
 
 export interface PairedDesktop {
   protocolVersion: ProtocolVersion;
@@ -178,8 +205,20 @@ export interface PairedDesktop {
   desktopPublicKey?: string;
   deviceId: string;
   credential: string;
+  authenticationMode?: "development" | "device";
+  credentialExpiresAt?: string;
+  refreshCredential?: string;
+  refreshExpiresAt?: string;
   scopes: Capability[];
   pairedAt: string;
+}
+
+export interface UserSession {
+  issuer: string;
+  clientId: string;
+  accessToken: string;
+  accessExpiresAt: string;
+  refreshToken?: string;
 }
 
 export interface UserPreferences {

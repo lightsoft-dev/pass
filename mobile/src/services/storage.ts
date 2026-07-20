@@ -5,15 +5,18 @@ import {
   PROTOCOL_VERSION,
   type Capability,
   type PairedDesktop,
+  type UserSession,
   type UserPreferences,
 } from "../protocol/types";
 
 const PAIRING_KEY = "pass.remote.pairing.v1";
 const PREFERENCES_KEY = "pass.remote.preferences.v1";
+const USER_SESSION_KEY = "pass.remote.user-session.v1";
 
 const CAPABILITIES = new Set<Capability>([
   "sessions:read",
   "sessions:write",
+  "sessions:stream",
   "projects:read",
   "voice:use",
   "decisions:answer",
@@ -44,7 +47,21 @@ function parseStoredPairing(raw: string | null): PairedDesktop | null {
     ) {
       return null;
     }
-    return value as unknown as PairedDesktop;
+    const authenticationMode = value.authenticationMode === "device"
+      ? "device"
+      : "development";
+    if (
+      authenticationMode === "device" &&
+      (!isString(value.credentialExpiresAt, 100) ||
+        !isString(value.refreshCredential) ||
+        !isString(value.refreshExpiresAt, 100))
+    ) {
+      return null;
+    }
+    return {
+      ...(value as unknown as PairedDesktop),
+      authenticationMode,
+    };
   } catch {
     return null;
   }
@@ -83,6 +100,34 @@ export async function savePairedDesktop(pairing: PairedDesktop): Promise<void> {
 
 export async function clearPairedDesktop(): Promise<void> {
   await SecureStore.deleteItemAsync(PAIRING_KEY);
+}
+
+export async function loadUserSession(): Promise<UserSession | null> {
+  const raw = await SecureStore.getItemAsync(USER_SESSION_KEY);
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (
+      !isString(value.issuer, 2048) ||
+      !isString(value.clientId, 500) ||
+      !isString(value.accessToken) ||
+      !isString(value.accessExpiresAt, 100) ||
+      (value.refreshToken !== undefined && !isString(value.refreshToken))
+    ) {
+      return null;
+    }
+    return value as unknown as UserSession;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveUserSession(session: UserSession): Promise<void> {
+  await SecureStore.setItemAsync(USER_SESSION_KEY, JSON.stringify(session), secureOptions);
+}
+
+export async function clearUserSession(): Promise<void> {
+  await SecureStore.deleteItemAsync(USER_SESSION_KEY);
 }
 
 export async function loadPreferences(): Promise<UserPreferences> {

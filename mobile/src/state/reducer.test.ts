@@ -89,6 +89,100 @@ test("stores optional snapshot truncation totals", () => {
   });
 });
 
+test("hydrates an in-progress message stream from a snapshot", () => {
+  const streamingSession: RemoteSession = {
+    ...makeSession("streaming", "working"),
+    liveMessage: "Compiling",
+    liveMessageTruncated: true,
+  };
+  const state = remoteReducer(initialRemoteState, {
+    type: "EVENT_RECEIVED",
+    event: {
+      version: 1,
+      id: "evt_snapshot_stream",
+      type: "session.snapshot",
+      sentAt: "2026-07-16T10:00:01Z",
+      payload: {
+        generatedAt: "2026-07-16T10:00:00Z",
+        sessions: [streamingSession],
+        projects: [],
+        capabilities: ["sessions:read", "sessions:stream"],
+      },
+    },
+  });
+
+  assert.deepEqual(state.messageStreamsBySession.streaming, {
+    messageID: "snapshot:evt_snapshot_stream:streaming",
+    sequence: 0,
+    text: "Compiling",
+    truncated: true,
+    phase: "streaming",
+    updatedAt: "2026-07-16T10:00:00Z",
+  });
+});
+
+test("applies ordered message stream updates and ignores stale frames", () => {
+  const snapshot: ServerEvent<"session.snapshot"> = {
+    version: 1,
+    id: "evt_snapshot",
+    type: "session.snapshot",
+    sentAt: "2026-07-16T10:00:00Z",
+    payload: {
+      generatedAt: "2026-07-16T10:00:00Z",
+      sessions: [makeSession("pass-app", "working")],
+      projects: [],
+      capabilities: ["sessions:read", "sessions:stream"],
+    },
+  };
+  let state = remoteReducer(initialRemoteState, {
+    type: "EVENT_RECEIVED",
+    event: snapshot,
+  });
+
+  const streamEvent = (
+    type: "session.message.started" | "session.message.updated" | "session.message.completed",
+    sequence: number,
+    text: string,
+  ): ServerEvent => ({
+    version: 1,
+    id: `evt_stream_${sequence}`,
+    type,
+    sentAt: `2026-07-16T10:00:0${sequence + 1}Z`,
+    payload: {
+      session: "pass-app",
+      messageID: "msg_1",
+      sequence,
+      text,
+      truncated: false,
+    },
+  } as ServerEvent);
+
+  state = remoteReducer(state, {
+    type: "EVENT_RECEIVED",
+    event: streamEvent("session.message.started", 0, "Running"),
+  });
+  state = remoteReducer(state, {
+    type: "EVENT_RECEIVED",
+    event: streamEvent("session.message.updated", 2, "Running all tests"),
+  });
+  state = remoteReducer(state, {
+    type: "EVENT_RECEIVED",
+    event: streamEvent("session.message.updated", 1, "Running tests"),
+  });
+
+  assert.equal(state.messageStreamsBySession["pass-app"]?.sequence, 2);
+  assert.equal(state.messageStreamsBySession["pass-app"]?.text, "Running all tests");
+  assert.equal(state.sessionsByName["pass-app"]?.liveMessage, "Running all tests");
+
+  state = remoteReducer(state, {
+    type: "EVENT_RECEIVED",
+    event: streamEvent("session.message.completed", 3, "All tests passed"),
+  });
+  assert.equal(state.messageStreamsBySession["pass-app"]?.phase, "completed");
+  assert.equal(state.sessionsByName["pass-app"]?.liveMessage, null);
+  assert.equal(state.sessionsByName["pass-app"]?.lastMessage, "All tests passed");
+});
+
 test("replyTo advances a sent message through ack and delivery", () => {
   const command = createCommand(
     "session.sendMessage",

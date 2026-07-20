@@ -8,6 +8,9 @@ import {
   type ServerEvent,
   type ServerEventType,
 } from "./types.ts";
+import { utf8ByteLength } from "./commands.ts";
+
+const STREAM_MESSAGE_BYTES = 64 * 1_024;
 
 export type ProtocolParseErrorCode =
   | "invalid_json"
@@ -30,6 +33,9 @@ const SERVER_EVENT_TYPES = new Set<ServerEventType>([
   "error",
   "session.snapshot",
   "message.delivered",
+  "session.message.started",
+  "session.message.updated",
+  "session.message.completed",
 ]);
 
 const RECEIPT_STATUSES = new Set([
@@ -51,6 +57,7 @@ const AGENTS = new Set<AgentKind>([
 const CAPABILITIES = new Set<Capability>([
   "sessions:read",
   "sessions:write",
+  "sessions:stream",
   "projects:read",
   "voice:use",
   "decisions:answer",
@@ -66,6 +73,16 @@ function isString(value: unknown, max = 100_000): value is string {
 
 function isOptionalString(value: unknown, max?: number): boolean {
   return value === undefined || value === null || isString(value, max);
+}
+
+function isOptionalUTF8String(value: unknown, maximumBytes: number): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" &&
+      value.length > 0 &&
+      utf8ByteLength(value) <= maximumBytes)
+  );
 }
 
 function isTimestamp(value: unknown): value is string {
@@ -126,6 +143,9 @@ export function isRemoteSession(value: unknown): value is RemoteSession {
     isOptionalString(value.gitBranch, 500) &&
     isRemoteAttention(value.attention) &&
     isOptionalString(value.lastMessage) &&
+    isOptionalUTF8String(value.liveMessage, STREAM_MESSAGE_BYTES) &&
+    (value.liveMessageTruncated === undefined ||
+      typeof value.liveMessageTruncated === "boolean") &&
     isTimestamp(value.lastActivity) &&
     typeof value.isAttached === "boolean" &&
     typeof value.unacknowledged === "boolean" &&
@@ -206,6 +226,17 @@ function validPayload(type: ServerEventType, payload: unknown): boolean {
       );
     case "message.delivered":
       return isString(payload.session, 300);
+    case "session.message.started":
+    case "session.message.updated":
+    case "session.message.completed":
+      return (
+        isString(payload.session, 300) &&
+        isString(payload.messageID, 200) &&
+        isNonNegativeInteger(payload.sequence) &&
+        typeof payload.text === "string" &&
+        utf8ByteLength(payload.text) <= STREAM_MESSAGE_BYTES &&
+        typeof payload.truncated === "boolean"
+      );
   }
 }
 

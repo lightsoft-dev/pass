@@ -6,7 +6,10 @@
     "orientation": "portrait",
     "scheme": "passremote",
     "userInterfaceStyle": "dark",
-    "platforms": ["ios", "android"],
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.lightsoft.pass.remote"
@@ -24,7 +27,8 @@
           "recordAudioAndroid": false,
           "barcodeScannerEnabled": true
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

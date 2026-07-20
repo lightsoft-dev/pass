@@ -85,6 +85,7 @@ export default function InboxScreen() {
               <SessionCard
                 key={session.name}
                 session={session}
+                stream={state.messageStreamsBySession[session.name]}
                 projectEmoji={state.projectsByRoot[session.projectRoot]?.emoji}
                 onPress={() => openSession(session.name)}
               />
@@ -115,6 +116,7 @@ export default function InboxScreen() {
               <SessionCard
                 key={session.name}
                 session={session}
+                stream={state.messageStreamsBySession[session.name]}
                 projectEmoji={state.projectsByRoot[session.projectRoot]?.emoji}
                 onPress={() => openSession(session.name)}
               />

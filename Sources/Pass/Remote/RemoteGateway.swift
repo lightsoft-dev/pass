@@ -4,7 +4,7 @@ enum RemoteGatewayPreferenceKey {
     static let enabled = "remoteAccess.enabled"
     static let relayURL = "remoteAccess.relayURL"
     static let desktopID = "remoteAccess.desktopID"
-    /// Phase 1 storage only. Pairing should move device credentials to Keychain in phase 2.
+    /// Legacy development credential. Public desktop credentials are stored in Keychain.
     static let authorizationToken = "remoteAccess.authorizationToken"
 }
 
@@ -81,8 +81,29 @@ struct RemoteGatewayConfiguration: Equatable, Sendable {
 
     static func load(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        secureRegistration: RemoteDesktopRegistration? = nil,
+        publicConfigurationAvailable: Bool = false
     ) -> RemoteGatewayConfiguration {
+        let hasDevelopmentOverride = [
+            RemoteGatewayEnvironmentKey.enabled,
+            RemoteGatewayEnvironmentKey.relayURL,
+            RemoteGatewayEnvironmentKey.desktopID,
+            RemoteGatewayEnvironmentKey.authorizationToken,
+        ].contains { environment[$0] != nil }
+
+        if !hasDevelopmentOverride, let secureRegistration {
+            return RemoteGatewayConfiguration(
+                isEnabled: true,
+                relayURL: Self.websocketURL(from: secureRegistration.relayURL),
+                desktopID: secureRegistration.id,
+                authorizationToken: secureRegistration.credentials.accessToken
+            )
+        }
+        if !hasDevelopmentOverride, publicConfigurationAvailable {
+            return .disabled
+        }
+
         let enabled = environment[RemoteGatewayEnvironmentKey.enabled].flatMap(parseBool)
             ?? defaults.bool(forKey: RemoteGatewayPreferenceKey.enabled)
 
@@ -117,6 +138,20 @@ struct RemoteGatewayConfiguration: Equatable, Sendable {
             relayURL: relayURL,
             desktopID: desktopID,
             authorizationToken: authorizationToken
+        )
+    }
+
+    static func loadSecure(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        defaults: UserDefaults = .standard
+    ) -> RemoteGatewayConfiguration {
+        load(
+            environment: environment,
+            defaults: defaults,
+            secureRegistration: try? RemoteCredentialStore.loadDesktopRegistration(),
+            publicConfigurationAvailable: RemotePublicConfiguration.load(
+                environment: environment
+            ) != nil
         )
     }
 
@@ -194,6 +229,19 @@ struct RemoteGatewayConfiguration: Equatable, Sendable {
         }
         components.path = "/connect"
         return components.url ?? url
+    }
+
+    private static func websocketURL(from relayURL: URL) -> URL? {
+        guard var components = URLComponents(url: relayURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.scheme = relayURL.scheme?.lowercased() == "https" ? "wss" : "ws"
+        if components.path.isEmpty || components.path == "/" {
+            components.path = "/connect"
+        }
+        components.query = nil
+        components.fragment = nil
+        return components.url
     }
 }
 
@@ -295,6 +343,26 @@ enum RemoteGatewayState: Equatable, Sendable {
 typealias RemoteGatewayTransportFactory = @Sendable () -> any RemoteGatewayTransport
 typealias RemoteGatewayStateObserver = @MainActor @Sendable (RemoteGatewayState) -> Void
 
+struct RemoteMessageStreamSource: Equatable, Sendable {
+    var session: String
+    var liveText: String?
+    var completedText: String?
+
+    init(_ session: Session) {
+        self.session = session.name
+        self.liveText = session.liveTail?.isEmpty == false ? session.liveTail : nil
+        self.completedText = session.lastMessage?.isEmpty == false ? session.lastMessage : nil
+    }
+}
+
+private struct ActiveRemoteMessageStream: Sendable {
+    var messageID: String
+    var sequence: Int
+    var text: String
+    var truncated: Bool
+    var completedTextAtStart: String?
+}
+
 actor RemoteGateway: RemoteSnapshotPublishing {
     static let maximumInboundFrameBytes = 1_048_576
     static let maximumOutboundFrameBytes = RemoteWireLimits.maximumOutboundFrameBytes
@@ -307,6 +375,7 @@ actor RemoteGateway: RemoteSnapshotPublishing {
     private var lifecycleTask: Task<Void, Never>?
     private var transport: (any RemoteGatewayTransport)?
     private var snapshotPending = true
+    private var activeMessageStreams: [String: ActiveRemoteMessageStream] = [:]
     private(set) var state: RemoteGatewayState = .stopped
 
     init(
@@ -358,6 +427,21 @@ actor RemoteGateway: RemoteSnapshotPublishing {
         do {
             try await sendSnapshot(using: transport)
             snapshotPending = false
+        } catch {
+            await transport.disconnect()
+        }
+    }
+
+    /// Publishes self-contained live response updates. The tracker advances even while offline;
+    /// reconnect recovery comes from `liveMessage` in the initial full snapshot rather than
+    /// replaying stale ephemeral stream frames.
+    func publishMessageStreams(_ sources: [RemoteMessageStreamSource]) async {
+        let events = makeMessageStreamEvents(from: sources)
+        guard !events.isEmpty, state == .connected, let transport else { return }
+        do {
+            for event in events {
+                try await send(event, using: transport)
+            }
         } catch {
             await transport.disconnect()
         }
@@ -456,6 +540,117 @@ actor RemoteGateway: RemoteSnapshotPublishing {
     private func sendSnapshot(using transport: any RemoteGatewayTransport) async throws {
         let event = await handler.makeSnapshotEvent(replyTo: nil)
         try await send(event, using: transport)
+    }
+
+    private func makeMessageStreamEvents(
+        from sources: [RemoteMessageStreamSource]
+    ) -> [RemoteEventEnvelope] {
+        let sourceBySession = Dictionary(uniqueKeysWithValues: sources.map { ($0.session, $0) })
+        var events: [RemoteEventEnvelope] = []
+
+        for source in sources {
+            guard let liveText = source.liveText else {
+                if let active = activeMessageStreams.removeValue(forKey: source.session) {
+                    let completed = source.completedText != active.completedTextAtStart
+                        ? source.completedText ?? active.text
+                        : active.text
+                    events.append(streamEvent(
+                        .completed,
+                        session: source.session,
+                        active: active,
+                        text: completed,
+                        sequence: active.sequence + 1
+                    ))
+                }
+                continue
+            }
+
+            let text = RemoteWireLimits.prefix(
+                liveText,
+                maximumUTF8Bytes: RemoteWireLimits.streamMessageBytes
+            )
+            let truncated = liveText.utf8.count > RemoteWireLimits.streamMessageBytes
+            if var active = activeMessageStreams[source.session] {
+                guard active.text != text || active.truncated != truncated else { continue }
+                active.sequence += 1
+                active.text = text
+                active.truncated = truncated
+                activeMessageStreams[source.session] = active
+                events.append(streamEvent(
+                    .updated,
+                    session: source.session,
+                    active: active,
+                    text: text,
+                    sequence: active.sequence
+                ))
+            } else {
+                // Claude's transcript can still expose the previous completed turn briefly after
+                // a new prompt starts. Wait until the observed text actually changes.
+                guard liveText != source.completedText else { continue }
+                let active = ActiveRemoteMessageStream(
+                    messageID: "msg_\(UUID().uuidString.lowercased())",
+                    sequence: 0,
+                    text: text,
+                    truncated: truncated,
+                    completedTextAtStart: source.completedText
+                )
+                activeMessageStreams[source.session] = active
+                events.append(streamEvent(
+                    .started,
+                    session: source.session,
+                    active: active,
+                    text: text,
+                    sequence: 0
+                ))
+            }
+        }
+
+        let removedSessions = activeMessageStreams.keys
+            .filter { sourceBySession[$0] == nil }
+            .sorted()
+        for session in removedSessions {
+            guard let active = activeMessageStreams.removeValue(forKey: session) else { continue }
+            events.append(streamEvent(
+                .completed,
+                session: session,
+                active: active,
+                text: active.text,
+                sequence: active.sequence + 1
+            ))
+        }
+        return events
+    }
+
+    private enum StreamEventKind {
+        case started
+        case updated
+        case completed
+    }
+
+    private func streamEvent(
+        _ kind: StreamEventKind,
+        session: String,
+        active: ActiveRemoteMessageStream,
+        text: String,
+        sequence: Int
+    ) -> RemoteEventEnvelope {
+        let payload = RemoteSessionMessageStream(
+            session: session,
+            messageID: active.messageID,
+            sequence: sequence,
+            text: text,
+            truncated: active.truncated
+        )
+        let event: RemoteEvent = switch kind {
+        case .started: .sessionMessageStarted(payload)
+        case .updated: .sessionMessageUpdated(payload)
+        case .completed: .sessionMessageCompleted(payload)
+        }
+        return RemoteEventEnvelope(
+            id: "evt_\(UUID().uuidString.lowercased())",
+            sentAt: Date(),
+            event: event
+        )
     }
 
     private func send(

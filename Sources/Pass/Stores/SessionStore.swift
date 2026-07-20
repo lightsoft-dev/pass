@@ -44,6 +44,9 @@ final class SessionStore {
     /// Remote control-plane tap. AppModel wires this to a debounced snapshot publisher so
     /// mobile clients see the same state transitions as the local UI without polling tmux.
     var onRemoteStateChanged: (@MainActor () -> Void)?
+    /// High-frequency live response tap. Kept separate from snapshots so stream refreshes do not
+    /// resend every session and project several times per second.
+    var onRemoteStreamChanged: (@MainActor () -> Void)?
     /// Names seen by the previous reconcile. nil until the first pass — adopting sessions
     /// that were already running at launch must not fire "created" events.
     private var knownNames: Set<String>?
@@ -66,6 +69,7 @@ final class SessionStore {
     private let tmux: TmuxClient
     private let projects: ProjectStore
     private var pollTask: Task<Void, Never>?
+    private var remoteStreamTask: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
 
     init(tmux: TmuxClient = .shared, projects: ProjectStore) {
@@ -107,7 +111,25 @@ final class SessionStore {
         }
     }
 
-    func stop() { pollTask?.cancel() }
+    func startRemoteStreaming() {
+        remoteStreamTask?.cancel()
+        remoteStreamTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshRemoteStreams()
+                try? await Task.sleep(for: .milliseconds(750))
+            }
+        }
+    }
+
+    func stopRemoteStreaming() {
+        remoteStreamTask?.cancel()
+        remoteStreamTask = nil
+    }
+
+    func stop() {
+        pollTask?.cancel()
+        stopRemoteStreaming()
+    }
 
     // MARK: Restore (survive a tmux server death — reboot / kill-server)
 
@@ -220,11 +242,7 @@ final class SessionStore {
             // over terminal scraping — for live (streaming) sessions too, not just settled ones.
             // Fall back to pane scraping only for non-Claude agents / when no transcript is found.
             if isStreaming(session) {
-                if let text = await lastAssistantText(cwd: r.cwd) {
-                    session.liveTail = text
-                } else {
-                    session.liveTail = PaneSummary.lastContentLine(await tmux.capturePane(r.name, colors: false))
-                }
+                session.liveTail = await liveText(for: session)
             } else if session.lastMessage == nil || session.needsUser {
                 // Waiting sessions refresh from the transcript too: the newest assistant text
                 // is usually the QUESTION being asked — far more useful on the card than a
@@ -286,9 +304,11 @@ final class SessionStore {
             if ap != bp { return ap }
             return a.lastActivity > b.lastActivity
         }
+        let previousStreams = activeRemoteStreams(in: sessions)
         let changed = sessions != sorted
         sessions = sorted
         if changed { onRemoteStateChanged?() }
+        if previousStreams != activeRemoteStreams(in: sorted) { onRemoteStreamChanged?() }
     }
 
     /// Is the session actively producing output right now? `.working` is the definitive signal
@@ -298,6 +318,52 @@ final class SessionStore {
         if case .working = s.attention { return true }
         if case .pending = s.attention { return false }
         return Date().timeIntervalSince(s.lastActivity) < 3
+    }
+
+    /// Refresh only active output between full tmux/git reconciles. This gives the remote UI a
+    /// responsive stream without multiplying the expensive full-session polling work.
+    private func refreshRemoteStreams() async {
+        guard onRemoteStreamChanged != nil, !sessions.isEmpty else { return }
+
+        let candidates = sessions.filter(isStreaming)
+        var textByName: [String: String] = [:]
+        for session in candidates {
+            if let text = await liveText(for: session), !text.isEmpty {
+                textByName[session.name] = text
+            }
+        }
+
+        var changed = false
+        for index in sessions.indices {
+            let next = textByName[sessions[index].name]
+            if sessions[index].liveTail != next {
+                sessions[index].liveTail = next
+                changed = true
+            }
+        }
+        if changed { onRemoteStreamChanged?() }
+    }
+
+    private func liveText(for session: Session) async -> String? {
+        let text: String?
+        if session.agent == .claude,
+           let transcript = await lastAssistantText(cwd: session.cwd),
+           !transcript.isEmpty {
+            text = transcript
+        } else {
+            text = PaneSummary.lastContentLine(
+                await tmux.capturePane(session.name, colors: false)
+            )
+        }
+        guard text != session.lastMessage else { return nil }
+        return text
+    }
+
+    private func activeRemoteStreams(in sessions: [Session]) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: sessions.compactMap { session in
+            guard let text = session.liveTail, !text.isEmpty else { return nil }
+            return (session.name, text)
+        })
     }
 
     private func agentKind(for r: RawSession) -> AgentKind {

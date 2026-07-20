@@ -10,7 +10,7 @@ import {
   type PropsWithChildren,
 } from "react";
 import * as Crypto from "expo-crypto";
-import { AppState } from "react-native";
+import { AppState, Platform } from "react-native";
 
 import { parsePairingPayload } from "../protocol/pairing";
 import type {
@@ -18,16 +18,32 @@ import type {
   ClientCommandPayloadMap,
   ClientCommandType,
   PairedDesktop,
+  UserSession,
   UserPreferences,
 } from "../protocol/types";
-import { createDevelopmentPairing } from "../services/pairingService";
+import {
+  claimDevicePairing,
+  createDevelopmentPairing,
+} from "../services/pairingService";
+import {
+  isUserSessionFresh,
+  refreshUserSession,
+} from "../services/authService";
+import {
+  refreshDeviceCredential,
+  revokeDevice,
+  shouldRefreshDeviceCredential,
+} from "../services/deviceCredentialService";
 import { RemoteClient } from "../services/remoteClient";
 import {
   clearPairedDesktop,
+  clearUserSession,
   loadPairedDesktop,
   loadPreferences,
+  loadUserSession,
   savePairedDesktop,
   savePreferences,
+  saveUserSession,
 } from "../services/storage";
 import { initialRemoteState, remoteReducer } from "./reducer";
 
@@ -41,11 +57,14 @@ type LaunchableAgent = Extract<AgentKind, "claude" | "codex" | "pi">;
 interface RemoteContextValue {
   state: ReturnType<typeof remoteReducer>;
   pairedDesktop: PairedDesktop | null;
+  userSession: UserSession | null;
   preferences: UserPreferences;
   hydrated: boolean;
   pairingBusy: boolean;
   pairingError: string | null;
   pair: (rawPayload: string) => Promise<CommandResult>;
+  completeSignIn: (session: UserSession) => Promise<void>;
+  signOut: () => Promise<void>;
   forgetPairing: () => Promise<void>;
   updatePreferences: (patch: Partial<UserPreferences>) => Promise<void>;
   reconnect: () => void;
@@ -68,6 +87,7 @@ function errorMessage(error: unknown): string {
 export function RemoteProvider({ children }: PropsWithChildren) {
   const [state, dispatch] = useReducer(remoteReducer, initialRemoteState);
   const [pairedDesktop, setPairedDesktop] = useState<PairedDesktop | null>(null);
+  const [userSession, setUserSession] = useState<UserSession | null>(null);
   const [preferences, setPreferences] = useState<UserPreferences>({
     notificationsEnabled: true,
     decisionAlerts: true,
@@ -80,12 +100,37 @@ export function RemoteProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     let active = true;
-    Promise.all([loadPairedDesktop(), loadPreferences()])
-      .then(([storedPairing, storedPreferences]) => {
+    Promise.all([loadPairedDesktop(), loadPreferences(), loadUserSession()])
+      .then(async ([storedPairing, storedPreferences, storedUserSession]) => {
         if (!active) return;
-        setPairedDesktop(storedPairing);
+        let effectiveUserSession = storedUserSession;
+        if (effectiveUserSession && !isUserSessionFresh(effectiveUserSession)) {
+          try {
+            effectiveUserSession = await refreshUserSession(effectiveUserSession);
+            await saveUserSession(effectiveUserSession);
+          } catch {
+            effectiveUserSession = null;
+            await clearUserSession();
+          }
+        }
+        let effectivePairing = storedPairing;
+        if (effectivePairing && shouldRefreshDeviceCredential(effectivePairing)) {
+          try {
+            effectivePairing = await refreshDeviceCredential(effectivePairing);
+            await savePairedDesktop(effectivePairing);
+          } catch (error) {
+            dispatch({
+              type: "CONNECTION_PHASE",
+              phase: "error",
+              error: errorMessage(error),
+            });
+          }
+        }
+        if (!active) return;
+        setUserSession(effectiveUserSession);
+        setPairedDesktop(effectivePairing);
         setPreferences(storedPreferences);
-        dispatch({ type: "RESET", configured: storedPairing !== null });
+        dispatch({ type: "RESET", configured: effectivePairing !== null });
       })
       .catch((error) => {
         if (!active) return;
@@ -102,6 +147,28 @@ export function RemoteProvider({ children }: PropsWithChildren) {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!pairedDesktop || pairedDesktop.authenticationMode !== "device") return;
+    const expiresAt = new Date(pairedDesktop.credentialExpiresAt ?? "").getTime();
+    if (!Number.isFinite(expiresAt)) return;
+    const delay = Math.max(0, expiresAt - Date.now() - 60_000);
+    const timer = setTimeout(() => {
+      void refreshDeviceCredential(pairedDesktop)
+        .then(async (refreshed) => {
+          await savePairedDesktop(refreshed);
+          setPairedDesktop(refreshed);
+        })
+        .catch((error) => {
+          dispatch({
+            type: "CONNECTION_PHASE",
+            phase: "error",
+            error: errorMessage(error),
+          });
+        });
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [pairedDesktop]);
 
   useEffect(() => {
     if (!hydrated || !pairedDesktop) return;
@@ -139,7 +206,25 @@ export function RemoteProvider({ children }: PropsWithChildren) {
         setPairingError(parsed.error);
         return { ok: false, error: parsed.error };
       }
-      const pairing = createDevelopmentPairing(parsed.value);
+      let pairing: PairedDesktop;
+      if (parsed.value.v === 2) {
+        if (!userSession) {
+          throw new Error("Sign in before claiming a one-time pairing code.");
+        }
+        let activeSession = userSession;
+        if (!isUserSessionFresh(activeSession)) {
+          activeSession = await refreshUserSession(activeSession);
+          await saveUserSession(activeSession);
+          setUserSession(activeSession);
+        }
+        pairing = await claimDevicePairing(parsed.value, {
+          userAccessToken: activeSession.accessToken,
+          deviceName: Platform.OS === "ios" ? "iPhone" : "Android device",
+          platform: Platform.OS === "ios" ? "ios" : "android",
+        });
+      } else {
+        pairing = createDevelopmentPairing(parsed.value);
+      }
       await savePairedDesktop(pairing);
       setPairedDesktop(pairing);
       dispatch({ type: "RESET", configured: true });
@@ -151,16 +236,45 @@ export function RemoteProvider({ children }: PropsWithChildren) {
     } finally {
       setPairingBusy(false);
     }
+  }, [userSession]);
+
+  const completeSignIn = useCallback(async (session: UserSession) => {
+    await saveUserSession(session);
+    setUserSession(session);
   }, []);
 
+  const revokeCurrentPairing = useCallback(async () => {
+    if (!pairedDesktop || pairedDesktop.authenticationMode !== "device") return;
+    if (!userSession) throw new Error("Sign in again to revoke this phone.");
+    let activeSession = userSession;
+    if (!isUserSessionFresh(activeSession)) {
+      activeSession = await refreshUserSession(activeSession);
+      await saveUserSession(activeSession);
+      setUserSession(activeSession);
+    }
+    await revokeDevice(pairedDesktop, activeSession.accessToken);
+  }, [pairedDesktop, userSession]);
+
   const forgetPairing = useCallback(async () => {
+    await revokeCurrentPairing();
     clientRef.current?.stop(false);
     clientRef.current = null;
     await clearPairedDesktop();
     setPairedDesktop(null);
     setPairingError(null);
     dispatch({ type: "RESET", configured: false });
-  }, []);
+  }, [revokeCurrentPairing]);
+
+  const signOut = useCallback(async () => {
+    await revokeCurrentPairing();
+    clientRef.current?.stop(false);
+    clientRef.current = null;
+    await Promise.all([clearPairedDesktop(), clearUserSession()]);
+    setPairedDesktop(null);
+    setUserSession(null);
+    setPairingError(null);
+    dispatch({ type: "RESET", configured: false });
+  }, [revokeCurrentPairing]);
 
   const updatePreferences = useCallback(
     async (patch: Partial<UserPreferences>) => {
@@ -191,11 +305,14 @@ export function RemoteProvider({ children }: PropsWithChildren) {
     () => ({
       state,
       pairedDesktop,
+      userSession,
       preferences,
       hydrated,
       pairingBusy,
       pairingError,
       pair,
+      completeSignIn,
+      signOut,
       forgetPairing,
       updatePreferences,
       reconnect: () => clientRef.current?.reconnect(),
@@ -223,10 +340,13 @@ export function RemoteProvider({ children }: PropsWithChildren) {
       pairedDesktop,
       pairingBusy,
       pairingError,
+      completeSignIn,
       preferences,
       send,
       state,
+      signOut,
       updatePreferences,
+      userSession,
     ],
   );
 

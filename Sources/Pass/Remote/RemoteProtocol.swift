@@ -17,6 +17,7 @@ enum RemoteWireLimits {
     static let branchBytes = 500
     static let attentionPreviewBytes = 4_096
     static let lastMessageBytes = 8_192
+    static let streamMessageBytes = 64 * 1_024
     static let projectNameBytes = 500
     static let emojiBytes = 32
 
@@ -67,6 +68,9 @@ enum RemoteEventType {
     static let error = "error"
     static let sessionSnapshot = "session.snapshot"
     static let messageDelivered = "message.delivered"
+    static let sessionMessageStarted = "session.message.started"
+    static let sessionMessageUpdated = "session.message.updated"
+    static let sessionMessageCompleted = "session.message.completed"
 }
 
 /// JSON fallback used to preserve an unknown command/event payload. Keeping unknown types
@@ -310,6 +314,10 @@ struct RemoteSessionDTO: Codable, Equatable, Sendable {
     var isAttached: Bool
     var unacknowledged: Bool
     var launching: Bool
+    /// Current in-progress assistant text. This makes a fresh mobile snapshot sufficient to
+    /// recover a stream even though ephemeral stream events are not retained by the relay.
+    var liveMessage: String?
+    var liveMessageTruncated: Bool?
 
     init(_ session: Session) {
         name = RemoteWireLimits.prefix(session.name, maximumUTF8Bytes: RemoteWireLimits.sessionNameBytes)
@@ -337,6 +345,13 @@ struct RemoteSessionDTO: Codable, Equatable, Sendable {
         isAttached = session.isAttached
         unacknowledged = session.unacknowledged
         launching = session.launching
+        liveMessage = RemoteWireLimits.optionalPrefix(
+            session.liveTail,
+            maximumUTF8Bytes: RemoteWireLimits.streamMessageBytes
+        )
+        liveMessageTruncated = session.liveTail.map {
+            $0.utf8.count > RemoteWireLimits.streamMessageBytes ? true : nil
+        } ?? nil
     }
 
     init(
@@ -352,7 +367,9 @@ struct RemoteSessionDTO: Codable, Equatable, Sendable {
         lastActivity: Date,
         isAttached: Bool,
         unacknowledged: Bool,
-        launching: Bool
+        launching: Bool,
+        liveMessage: String? = nil,
+        liveMessageTruncated: Bool? = nil
     ) {
         self.name = RemoteWireLimits.prefix(name, maximumUTF8Bytes: RemoteWireLimits.sessionNameBytes)
         self.displayName = RemoteWireLimits.prefix(
@@ -386,6 +403,11 @@ struct RemoteSessionDTO: Codable, Equatable, Sendable {
         self.isAttached = isAttached
         self.unacknowledged = unacknowledged
         self.launching = launching
+        self.liveMessage = RemoteWireLimits.optionalPrefix(
+            liveMessage,
+            maximumUTF8Bytes: RemoteWireLimits.streamMessageBytes
+        )
+        self.liveMessageTruncated = liveMessageTruncated == true ? true : nil
     }
 }
 
@@ -416,6 +438,7 @@ struct RemoteProjectDTO: Codable, Equatable, Sendable {
 enum RemoteCapability: String, Codable, CaseIterable, Equatable, Sendable {
     case sessionsRead = "sessions:read"
     case sessionsWrite = "sessions:write"
+    case sessionsStream = "sessions:stream"
     case projectsRead = "projects:read"
     case decisionsAnswer = "decisions:answer"
 }
@@ -447,11 +470,38 @@ struct RemoteMessageDelivered: Codable, Equatable, Sendable {
     var session: String
 }
 
+/// Self-contained live response state. `text` is the complete bounded response observed at this
+/// sequence, rather than a fragile suffix, so a mobile can recover after a dropped frame.
+struct RemoteSessionMessageStream: Codable, Equatable, Sendable {
+    var session: String
+    var messageID: String
+    var sequence: Int
+    var text: String
+    var truncated: Bool
+
+    init(session: String, messageID: String, sequence: Int, text: String, truncated: Bool) {
+        self.session = RemoteWireLimits.prefix(
+            session,
+            maximumUTF8Bytes: RemoteWireLimits.sessionNameBytes
+        )
+        self.messageID = messageID
+        self.sequence = max(0, sequence)
+        self.text = RemoteWireLimits.prefix(
+            text,
+            maximumUTF8Bytes: RemoteWireLimits.streamMessageBytes
+        )
+        self.truncated = truncated || text.utf8.count > RemoteWireLimits.streamMessageBytes
+    }
+}
+
 enum RemoteEvent: Equatable, Sendable {
     case acknowledgement(RemoteAcknowledgement)
     case error(RemoteCommandFailure)
     case sessionSnapshot(RemoteSessionSnapshot)
     case messageDelivered(RemoteMessageDelivered)
+    case sessionMessageStarted(RemoteSessionMessageStream)
+    case sessionMessageUpdated(RemoteSessionMessageStream)
+    case sessionMessageCompleted(RemoteSessionMessageStream)
     case unsupported(type: String, payload: RemoteJSONValue)
 
     var type: String {
@@ -460,6 +510,9 @@ enum RemoteEvent: Equatable, Sendable {
         case .error: return RemoteEventType.error
         case .sessionSnapshot: return RemoteEventType.sessionSnapshot
         case .messageDelivered: return RemoteEventType.messageDelivered
+        case .sessionMessageStarted: return RemoteEventType.sessionMessageStarted
+        case .sessionMessageUpdated: return RemoteEventType.sessionMessageUpdated
+        case .sessionMessageCompleted: return RemoteEventType.sessionMessageCompleted
         case .unsupported(let type, _): return type
         }
     }
@@ -511,6 +564,12 @@ struct RemoteEventEnvelope: Codable, Equatable, Sendable {
             event = .sessionSnapshot(try container.decode(RemoteSessionSnapshot.self, forKey: .payload))
         case RemoteEventType.messageDelivered:
             event = .messageDelivered(try container.decode(RemoteMessageDelivered.self, forKey: .payload))
+        case RemoteEventType.sessionMessageStarted:
+            event = .sessionMessageStarted(try container.decode(RemoteSessionMessageStream.self, forKey: .payload))
+        case RemoteEventType.sessionMessageUpdated:
+            event = .sessionMessageUpdated(try container.decode(RemoteSessionMessageStream.self, forKey: .payload))
+        case RemoteEventType.sessionMessageCompleted:
+            event = .sessionMessageCompleted(try container.decode(RemoteSessionMessageStream.self, forKey: .payload))
         default:
             let payload = try container.decodeIfPresent(RemoteJSONValue.self, forKey: .payload) ?? .object([:])
             event = .unsupported(type: type, payload: payload)
@@ -532,6 +591,12 @@ struct RemoteEventEnvelope: Codable, Equatable, Sendable {
         case .sessionSnapshot(let payload):
             try container.encode(payload, forKey: .payload)
         case .messageDelivered(let payload):
+            try container.encode(payload, forKey: .payload)
+        case .sessionMessageStarted(let payload):
+            try container.encode(payload, forKey: .payload)
+        case .sessionMessageUpdated(let payload):
+            try container.encode(payload, forKey: .payload)
+        case .sessionMessageCompleted(let payload):
             try container.encode(payload, forKey: .payload)
         case .unsupported(_, let payload):
             try container.encode(payload, forKey: .payload)

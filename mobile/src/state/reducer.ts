@@ -4,6 +4,7 @@ import type {
   ClientCommandType,
   RemoteProject,
   RemoteSession,
+  SessionMessageStreamPayload,
   ServerEvent,
   VoiceActionConfirmation,
   VoiceStatus,
@@ -47,6 +48,15 @@ export interface RemoteActivity {
   status?: CommandStatus;
 }
 
+export interface SessionMessageStream {
+  messageID: string;
+  sequence: number;
+  text: string;
+  truncated: boolean;
+  phase: "streaming" | "completed";
+  updatedAt: string;
+}
+
 export interface RemoteState {
   connection: {
     phase: ConnectionPhase;
@@ -60,6 +70,7 @@ export interface RemoteState {
   capabilities: Capability[];
   pendingCommands: Record<string, PendingCommand>;
   activities: RemoteActivity[];
+  messageStreamsBySession: Record<string, SessionMessageStream>;
   voice: {
     status: VoiceStatus;
     conversationId?: string;
@@ -89,6 +100,7 @@ export const initialRemoteState: RemoteState = {
   capabilities: [],
   pendingCommands: {},
   activities: [],
+  messageStreamsBySession: {},
   voice: { status: "idle", turns: [], actions: [] },
   latestSequence: 0,
   protocolErrors: 0,
@@ -205,6 +217,77 @@ function snapshotActivities(state: RemoteState, event: Extract<ServerEvent, { ty
     });
   }
   return keepNewest([...state.activities, ...changes], 150);
+}
+
+function snapshotMessageStreams(
+  state: RemoteState,
+  event: Extract<ServerEvent, { type: "session.snapshot" }>,
+): Record<string, SessionMessageStream> {
+  const streams: Record<string, SessionMessageStream> = {};
+  for (const session of event.payload.sessions) {
+    if (!session.liveMessage) continue;
+    const current = state.messageStreamsBySession[session.name];
+    const currentIsNewer =
+      current?.phase === "streaming" &&
+      current.updatedAt.localeCompare(event.payload.generatedAt) > 0;
+    streams[session.name] = currentIsNewer
+      ? current
+      : {
+          messageID: current?.messageID ?? `snapshot:${event.id}:${session.name}`,
+          sequence: current?.sequence ?? 0,
+          text: session.liveMessage,
+          truncated: session.liveMessageTruncated === true,
+          phase: "streaming",
+          updatedAt: event.payload.generatedAt,
+        };
+  }
+  return streams;
+}
+
+function applyMessageStream(
+  state: RemoteState,
+  payload: SessionMessageStreamPayload,
+  phase: SessionMessageStream["phase"],
+  updatedAt: string,
+): RemoteState {
+  const current = state.messageStreamsBySession[payload.session];
+  if (
+    current?.messageID === payload.messageID &&
+    current.sequence >= payload.sequence
+  ) {
+    return state;
+  }
+
+  const stream: SessionMessageStream = {
+    messageID: payload.messageID,
+    sequence: payload.sequence,
+    text: payload.text,
+    truncated: payload.truncated,
+    phase,
+    updatedAt,
+  };
+  const session = state.sessionsByName[payload.session];
+  const sessionsByName = session
+    ? {
+        ...state.sessionsByName,
+        [payload.session]: {
+          ...session,
+          liveMessage: phase === "streaming" ? payload.text : null,
+          liveMessageTruncated:
+            phase === "streaming" ? payload.truncated : undefined,
+          ...(phase === "completed" ? { lastMessage: payload.text } : {}),
+        },
+      }
+    : state.sessionsByName;
+
+  return {
+    ...state,
+    sessionsByName,
+    messageStreamsBySession: {
+      ...state.messageStreamsBySession,
+      [payload.session]: stream,
+    },
+  };
 }
 
 function receiptStatus(
@@ -361,6 +444,7 @@ function reduceEvent(state: RemoteState, event: ServerEvent): RemoteState {
         projectsByRoot: indexBy(event.payload.projects, (project) => project.rootPath),
         capabilities: event.payload.capabilities,
         activities: snapshotActivities(state, event),
+        messageStreamsBySession: snapshotMessageStreams(state, event),
         lastSyncedAt: event.payload.generatedAt,
         snapshotTruncation: event.payload.truncated
           ? {
@@ -373,6 +457,21 @@ function reduceEvent(state: RemoteState, event: ServerEvent): RemoteState {
             }
           : undefined,
       };
+    case "session.message.started":
+    case "session.message.updated":
+      return applyMessageStream(
+        state,
+        event.payload,
+        "streaming",
+        event.sentAt,
+      );
+    case "session.message.completed":
+      return applyMessageStream(
+        state,
+        event.payload,
+        "completed",
+        event.sentAt,
+      );
     case "message.delivered": {
       const commandId = event.replyTo ?? event.id;
       const pendingCommands = updateCommand(

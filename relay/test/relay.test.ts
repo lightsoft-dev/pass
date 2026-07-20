@@ -331,7 +331,7 @@ describe("Pass mobile relay", () => {
     await desktop.expectNo("desktop.presence");
   });
 
-  it("broadcasts only unsolicited snapshots and isolates desktop rooms", async () => {
+  it("broadcasts unsolicited snapshots and message streams within one desktop room", async () => {
     const desktopA = await connect({ desktopId: "desk-a", role: "desktop" });
     const mobileA = await connect({
       desktopId: "desk-a",
@@ -355,6 +355,18 @@ describe("Pass mobile relay", () => {
 
     await expect(mobileA.next("session.snapshot")).resolves.toEqual(snapshot);
     await mobileB.expectNo("session.snapshot");
+
+    const stream = desktopEvent("evt-stream", "session.message.updated", {
+      session: "pass-app",
+      messageID: "msg-turn",
+      sequence: 3,
+      text: "Running the relay tests",
+      truncated: false,
+    });
+    desktopA.send(stream);
+
+    await expect(mobileA.next("session.message.updated")).resolves.toEqual(stream);
+    await mobileB.expectNo("session.message.updated");
   });
 
   it("routes future correlated desktop events without exposing unsolicited ones", async () => {

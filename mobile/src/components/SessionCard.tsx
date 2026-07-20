@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import type { RemoteSession } from "../protocol/types";
+import type { SessionMessageStream } from "../state/reducer";
 import { colors, radius, spacing } from "../theme/theme";
 
 const agentGlyph: Record<RemoteSession["agent"], string> = {
@@ -11,7 +12,7 @@ const agentGlyph: Record<RemoteSession["agent"], string> = {
   generic: "•",
 };
 
-function statusMeta(session: RemoteSession) {
+function statusMeta(session: RemoteSession, streaming: boolean) {
   if (
     session.unacknowledged &&
     session.attention.status !== "decision" &&
@@ -19,6 +20,7 @@ function statusMeta(session: RemoteSession) {
   ) {
     return { label: "NEEDS REVIEW", color: colors.warning };
   }
+  if (streaming) return { label: "LIVE", color: colors.info };
   switch (session.attention.status) {
     case "decision":
       return { label: "DECISION", color: colors.danger };
@@ -36,15 +38,22 @@ function statusMeta(session: RemoteSession) {
 export function SessionCard({
   session,
   projectEmoji,
+  stream,
   onPress,
 }: {
   session: RemoteSession;
   projectEmoji?: string | null;
+  stream?: SessionMessageStream;
   onPress: () => void;
 }) {
-  const status = statusMeta(session);
+  const streaming = stream?.phase === "streaming" || Boolean(session.liveMessage);
+  const status = statusMeta(session, streaming);
   const preview =
-    session.attention.preview || session.lastMessage || "No completed response yet.";
+    stream?.text ||
+    session.liveMessage ||
+    session.attention.preview ||
+    session.lastMessage ||
+    "No completed response yet.";
   return (
     <Pressable
       accessibilityRole="button"
@@ -56,6 +65,7 @@ export function SessionCard({
           session.attention.status === "decision" ||
           session.attention.status === "input") &&
           styles.needsAttention,
+        streaming && styles.streaming,
         pressed && styles.pressed,
       ]}
     >
@@ -86,6 +96,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   needsAttention: { borderColor: colors.warning, backgroundColor: "#211d17" },
+  streaming: { borderLeftColor: colors.info, borderLeftWidth: 3 },
   pressed: { opacity: 0.8 },
   topRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   title: { flex: 1, color: colors.text, fontSize: 17, fontWeight: "700" },

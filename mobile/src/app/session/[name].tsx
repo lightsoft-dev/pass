@@ -31,6 +31,7 @@ export default function SessionDetailScreen() {
   const sessionName = Array.isArray(params.name) ? params.name[0] : params.name;
   const { state, sendMessage, answerDecision } = useRemote();
   const session = sessionName ? state.sessionsByName[sessionName] : undefined;
+  const stream = sessionName ? state.messageStreamsBySession[sessionName] : undefined;
   const [message, setMessage] = useState("");
   const [resultText, setResultText] = useState<string | null>(null);
   const timeline = useMemo(
@@ -45,6 +46,11 @@ export default function SessionDetailScreen() {
     state.connection.phase === "online" && state.capabilities.includes("sessions:write");
   const canDecide =
     canWrite && state.capabilities.includes("decisions:answer");
+  const responseText = stream?.text || session?.liveMessage || session?.lastMessage;
+  const responseStreaming =
+    stream?.phase === "streaming" || Boolean(session?.liveMessage);
+  const responseTruncated =
+    stream?.truncated === true || session?.liveMessageTruncated === true;
 
   if (!session) {
     return (
@@ -127,11 +133,28 @@ export default function SessionDetailScreen() {
           ) : null}
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Last assistant response</Text>
-            <View style={styles.responseCard}>
-              <Text style={session.lastMessage ? styles.response : styles.muted}>
-                {session.lastMessage || "No completed response has been published yet."}
+            <View style={styles.responseHeading}>
+              <Text style={styles.sectionTitle}>Agent response</Text>
+              {responseStreaming ? (
+                <View style={styles.liveLabel}>
+                  <View style={styles.liveDot} />
+                  <Text style={styles.liveText}>LIVE</Text>
+                </View>
+              ) : null}
+            </View>
+            <View
+              style={[
+                styles.responseCard,
+                responseStreaming && styles.streamingResponseCard,
+              ]}
+            >
+              <Text selectable style={responseText ? styles.response : styles.muted}>
+                {responseText || "No completed response has been published yet."}
+                {responseStreaming ? <Text style={styles.cursor}> ▍</Text> : null}
               </Text>
+              {responseTruncated ? (
+                <Text style={styles.streamNotice}>Showing the first 64 KiB of this response.</Text>
+              ) : null}
             </View>
           </View>
 
@@ -193,8 +216,15 @@ const styles = StyleSheet.create({
   decisionActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   section: { gap: spacing.sm },
   sectionTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },
-  responseCard: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.md },
+  responseHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
+  liveLabel: { flexDirection: "row", alignItems: "center", gap: 6 },
+  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.info },
+  liveText: { color: colors.info, fontSize: 10, fontWeight: "900", letterSpacing: 0.8 },
+  responseCard: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.md, gap: spacing.sm },
+  streamingResponseCard: { borderLeftColor: colors.info, borderLeftWidth: 3 },
   response: { color: colors.text, fontSize: 14, lineHeight: 22 },
+  cursor: { color: colors.info, fontWeight: "900" },
+  streamNotice: { color: colors.subtle, fontSize: 11, lineHeight: 16 },
   timelineItem: { flexDirection: "row", gap: spacing.sm },
   timelineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent, marginTop: 6 },
   timelineText: { flex: 1, paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, gap: 4 },

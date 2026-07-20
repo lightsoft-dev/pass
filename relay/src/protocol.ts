@@ -29,6 +29,9 @@ export const DESKTOP_EVENT_TYPES = [
   "error",
   "session.snapshot",
   "message.delivered",
+  "session.message.started",
+  "session.message.updated",
+  "session.message.completed",
 ] as const;
 
 export type DesktopEventType = (typeof DESKTOP_EVENT_TYPES)[number];

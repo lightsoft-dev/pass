@@ -192,6 +192,110 @@ final class RemoteGatewayTests: XCTestCase {
         XCTAssertEqual(failure.code, "frame_too_large")
     }
 
+    func testGatewayPublishesOrderedSelfContainedMessageStreamEvents() async throws {
+        let transport = ScriptedRemoteTransport(incoming: [])
+        let gateway = RemoteGateway(
+            configuration: .init(
+                isEnabled: true,
+                relayURL: URL(string: "ws://127.0.0.1:9001/connect")!,
+                desktopID: "desk_stream",
+                minimumReconnectDelay: 10,
+                maximumReconnectDelay: 10
+            ),
+            handler: GatewayStubHandler(),
+            transportFactory: { transport }
+        )
+
+        await gateway.start()
+        for _ in 0..<100 {
+            if await transport.sentCount >= 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        var session = Session(
+            name: "pass-app",
+            projectRoot: "/projects/app",
+            cwd: "/projects/app",
+            agent: .claude,
+            lastActivity: Date(),
+            isAttached: false
+        )
+        session.lastMessage = "Previous response"
+        session.liveTail = "Running"
+        await gateway.publishMessageStreams([RemoteMessageStreamSource(session)])
+
+        session.liveTail = "Running tests"
+        await gateway.publishMessageStreams([RemoteMessageStreamSource(session)])
+
+        session.liveTail = nil
+        session.lastMessage = "Running tests completed"
+        await gateway.publishMessageStreams([RemoteMessageStreamSource(session)])
+
+        let messages = await transport.sentMessages
+        await gateway.stop()
+        let events = try messages.map { try RemoteWireCodec.decodeEvent(from: $0.data) }
+        XCTAssertEqual(Array(events.suffix(3).map(\.type)), [
+            RemoteEventType.sessionMessageStarted,
+            RemoteEventType.sessionMessageUpdated,
+            RemoteEventType.sessionMessageCompleted,
+        ])
+
+        let payloads = events.suffix(3).compactMap { event -> RemoteSessionMessageStream? in
+            switch event.event {
+            case .sessionMessageStarted(let payload),
+                 .sessionMessageUpdated(let payload),
+                 .sessionMessageCompleted(let payload):
+                return payload
+            default:
+                return nil
+            }
+        }
+        XCTAssertEqual(payloads.map(\.sequence), [0, 1, 2])
+        XCTAssertEqual(payloads.map(\.text), [
+            "Running",
+            "Running tests",
+            "Running tests completed",
+        ])
+        XCTAssertEqual(Set(payloads.map(\.messageID)).count, 1)
+    }
+
+    func testGatewayDoesNotStartStreamFromPreviousCompletedResponse() async throws {
+        let transport = ScriptedRemoteTransport(incoming: [])
+        let gateway = RemoteGateway(
+            configuration: .init(
+                isEnabled: true,
+                relayURL: URL(string: "ws://127.0.0.1:9001/connect")!,
+                desktopID: "desk_stream_baseline",
+                minimumReconnectDelay: 10,
+                maximumReconnectDelay: 10
+            ),
+            handler: GatewayStubHandler(),
+            transportFactory: { transport }
+        )
+
+        await gateway.start()
+        for _ in 0..<100 {
+            if await transport.sentCount >= 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        var session = Session(
+            name: "pass-app",
+            projectRoot: "/projects/app",
+            cwd: "/projects/app",
+            agent: .claude,
+            lastActivity: Date(),
+            isAttached: false
+        )
+        session.lastMessage = "Previous response"
+        session.liveTail = "Previous response"
+        await gateway.publishMessageStreams([RemoteMessageStreamSource(session)])
+
+        let sentCount = await transport.sentCount
+        XCTAssertEqual(sentCount, 1, "only the initial snapshot should be sent")
+        await gateway.stop()
+    }
+
     func testSnapshotHookCoalescesBurstAfterCurrentMainActorTurn() async throws {
         let publisher = CountingSnapshotPublisher()
         let hook = RemoteSnapshotPublicationHook(publisher: publisher, debounceNanoseconds: 1_000_000)

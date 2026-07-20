@@ -305,7 +305,13 @@ final class RemoteCommandHandler: RemoteCommandHandling {
             generatedAt: now(),
             sessions: backend.currentSessions(),
             projects: backend.currentProjects(),
-            capabilities: [.sessionsRead, .sessionsWrite, .projectsRead, .decisionsAnswer]
+            capabilities: [
+                .sessionsRead,
+                .sessionsWrite,
+                .sessionsStream,
+                .projectsRead,
+                .decisionsAnswer,
+            ]
         )
         return event(replyTo: replyTo, .sessionSnapshot(snapshot))
     }

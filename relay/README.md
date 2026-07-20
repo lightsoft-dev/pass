@@ -5,8 +5,9 @@ Each `desktopId` maps deterministically to one `DesktopRoom` Durable Object. The
 active desktop WebSocket and multiple mobile WebSockets through Cloudflare's WebSocket Hibernation
 API.
 
-This directory implements the control-plane MVP only. It does not provision Cloudflare Realtime
-TURN/SFU, push queues, D1 pairing records, or a production device-authorization service.
+The Worker supports two authentication modes. Public mode verifies an OIDC user token for account
+operations and issues opaque, short-lived desktop/device credentials backed by D1. Legacy mode
+accepts one shared development token only when `ALLOW_DEVELOPMENT_AUTH` is true.
 
 ## Local setup
 
@@ -17,11 +18,14 @@ npm install
 npm run types
 ```
 
-Create an untracked `.dev.vars` file and set a randomly generated token. Do not reuse the example
-text below as a credential:
+Create an untracked `.dev.vars` file. Do not reuse the example text below as a credential:
 
 ```text
 RELAY_AUTH_TOKEN=<a-new-random-token>
+DEVICE_CREDENTIAL_PEPPER=<another-independent-random-value>
+OIDC_ISSUER=https://identity.example.com
+OIDC_AUDIENCE=pass-public-api
+OIDC_JWKS_URL=https://identity.example.com/.well-known/jwks.json
 ```
 
 For example, `openssl rand -hex 32` can generate a local token. The token is never declared as a
@@ -30,6 +34,7 @@ Wrangler plaintext variable; `wrangler.jsonc` only declares the required secret 
 Then run:
 
 ```sh
+npx wrangler d1 migrations apply pass-mobile-control-dev --local
 npm run dev
 npm test
 npm run check
@@ -40,27 +45,41 @@ a value to `wrangler.jsonc` or source code:
 
 ```sh
 npx wrangler secret put RELAY_AUTH_TOKEN
+npx wrangler secret put DEVICE_CREDENTIAL_PEPPER
 ```
 
-No deployment is performed by this project setup or its tests.
+Configure `OIDC_ISSUER`, `OIDC_AUDIENCE`, and `OIDC_JWKS_URL` as deployment environment values or
+secrets. `OIDC_ISSUER` must exactly match the token's `iss` claim, including a trailing slash when
+the provider includes one. Apply D1 migrations before deploying the Worker.
+
+## Public account API
+
+- `GET /v2/me` creates or returns the OIDC-backed account.
+- `GET|POST /v2/desktops` lists or registers desktop instances.
+- `DELETE /v2/desktops/:id` revokes a desktop and its credentials.
+- `POST /v2/pairings` creates a five-minute, one-time code using a desktop access credential.
+- `POST /v2/pairings/:id/claim` claims that code for a signed-in mobile on the same account.
+- `POST /v2/token/refresh` rotates a desktop or mobile refresh credential.
+- `GET /v2/devices` lists paired devices; `DELETE /v2/devices/:id` revokes one immediately.
+
+Account API calls use the OIDC bearer. Pairing creation, refresh, and `/connect` use issued opaque
+credentials. Only credential hashes are stored in D1; raw credentials are returned once.
+The Worker Rate Limiting API limits pairing routes to 20 requests per minute and other authenticated
+API/WebSocket handshakes to 120 per minute for each hashed credential key in a Cloudflare location.
 
 ## WebSocket handshake
 
-Both clients connect to `GET /connect` with:
+Public clients connect to `GET /connect` with an issued access credential:
 
 ```text
 Upgrade: websocket
 Authorization: Bearer <token>
 X-Pass-Protocol-Version: 1
-X-Pass-Desktop-ID: <desktop-id>
-X-Pass-Role: desktop | mobile
-X-Pass-Device-ID: <mobile-device-id>  # mobile only
 ```
 
-`desktopId`, `role`, `deviceId`, and `version` query parameters remain a compatibility fallback.
-Credentials are never read from URL/query parameters, which keeps bearer values out of URL logs and
-history. Authentication is completed in the public Worker before the request is routed to a Durable
-Object. Supplied and configured tokens are SHA-256 hashed and compared with a fixed-work byte loop.
+The account id, desktop id, role, device id, scopes, and expiry come from the D1 credential record;
+client identity headers cannot override them. Legacy clients may still send identity headers only
+when development authentication is enabled. Credentials are never accepted in URL parameters.
 
 `GET /health` is public and reports the supported protocol version.
 
@@ -86,9 +105,9 @@ Known commands are:
 - `session.sendMessage` (mutating)
 - `session.answerDecision` (mutating)
 
-Unknown, well-formed command types are also forwarded so the desktop can return its versioned
-`unsupported_command` error. The relay caps complete frames at 1 MiB of UTF-8; the desktop remains
-responsible for domain payload limits.
+Public mobile credentials can send only known commands allowed by their scopes. Legacy development
+clients retain forward-compatible unknown-command behavior. The relay caps complete frames at 1 MiB
+of UTF-8; the desktop remains responsible for domain payload limits.
 
 `sentAt` must be a calendar-valid RFC 3339 timestamp with uppercase `T`, either uppercase `Z` or a
 colon-delimited numeric offset, and optional fractional seconds. The intended Swift and JavaScript
@@ -96,7 +115,8 @@ encoders emit this form; permissive variants such as a space separator, `+0900`,
 invalid calendar date are rejected.
 
 The desktop publishes the exact event envelope below, with event types `ack`, `error`,
-`session.snapshot`, or `message.delivered`:
+`session.snapshot`, `message.delivered`, or the streaming events `session.message.started`,
+`session.message.updated`, and `session.message.completed`:
 
 ```json
 {
@@ -110,9 +130,10 @@ The desktop publishes the exact event envelope below, with event types `ack`, `e
 ```
 
 Events with `replyTo` are routed only to the originating mobile device, including well-formed event
-types introduced by a future desktop release. An unsolicited `session.snapshot` (no `replyTo`) is
-broadcast to every connected mobile in that desktop room. Other unknown unsolicited event types are
-ignored rather than broadcast, and they do not close the desktop socket.
+types introduced by a future desktop release. An unsolicited `session.snapshot` or known
+`session.message.*` stream event is broadcast to every connected mobile in that desktop room.
+Other unknown unsolicited event types are ignored rather than broadcast, and they do not close the
+desktop socket.
 
 Relay-only mobile envelopes keep the same top-level shape:
 
@@ -137,6 +158,8 @@ mistaking relay control messages for remote commands.
   commands are never queued or replayed automatically.
 - Before forwarding, the room stores command idempotency metadata with an auto-incrementing
   sequence. It does **not** store command payloads or desktop event payloads.
+- Session message stream events are forwarded only to currently connected mobiles and are not
+  persisted or replayed. A reconnecting mobile recovers current text from the desktop snapshot.
 - Re-sending the same command id from the same mobile device returns `relay.receipt` with
   `replay: true` and does not forward the command again.
 - Reusing a command id from another device returns `command.id_conflict`.
@@ -146,14 +169,13 @@ mistaking relay control messages for remote commands.
 
 ## Security boundary and production work
 
-`RELAY_AUTH_TOKEN` is intentionally a **local MVP shared secret**. It authenticates possession but
-does not authorize a role or scope. A mobile that knows the shared token can claim
-`X-Pass-Role: desktop`, replace the real desktop connection, and publish desktop events. Therefore
-this relay is not production-ready and the token must only be shared with trusted development
-clients.
+Issued access credentials expire after 15 minutes; rotating refresh credentials expire after 30
+days. D1 binds each credential to an account, subject, desktop, role, and scopes. Revoking a desktop
+or device revokes its credentials and closes matching sockets. Durable Object alarms close sockets
+when their attached access credential expires.
 
-Before production use, replace the shared-token model with short-lived signed credentials whose
-claims bind at least `desktopId`, `deviceId`, role, capabilities/scopes, issuer, audience, expiry,
-and nonce/key id. Pairing public keys and revoked-device state should be stored in a durable pairing
-registry (for example D1 or a dedicated Durable Object), with key rotation, rate limiting, audit
-metadata, and explicit device revocation. TURN/SFU credentials must also be short-lived and scoped.
+`RELAY_AUTH_TOKEN` remains unsafe for public use because its holder can choose a role and desktop.
+Set `ALLOW_DEVELOPMENT_AUTH` to `false` for production. Before unrestricted public launch, add
+provider-side account deletion/revocation, abuse alerts, retention controls, and a
+separate production D1 database and Worker environment. TURN/SFU credentials must also be
+short-lived and scoped when voice ships.

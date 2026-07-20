@@ -7,7 +7,10 @@ export type PairingParseResult =
   | { ok: true; value: PairingQrPayload }
   | { ok: false; error: string };
 
-type PairingParseOptions = { allowInsecureDevelopment?: boolean };
+type PairingParseOptions = {
+  allowInsecureDevelopment?: boolean;
+  now?: () => Date;
+};
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 function nonEmpty(value: unknown, maxLength = 4096): value is string {
@@ -53,6 +56,9 @@ function fromUrl(input: string): Record<string, unknown> | null {
       desktopId: url.searchParams.get("desktopId"),
       authorizationToken:
         url.searchParams.get("authorizationToken") ?? url.searchParams.get("token"),
+      pairingId: url.searchParams.get("pairingId"),
+      pairingSecret: url.searchParams.get("pairingSecret") ?? url.searchParams.get("code"),
+      expiresAt: url.searchParams.get("expiresAt"),
       desktopName: url.searchParams.get("desktopName") ?? undefined,
       desktopPublicKey: url.searchParams.get("publicKey") ?? undefined,
     };
@@ -84,10 +90,10 @@ export function parsePairingPayload(
   }
 
   const value = candidate as Record<string, unknown>;
-  if (value.v !== PROTOCOL_VERSION) {
+  if (value.v !== PROTOCOL_VERSION && value.v !== 2) {
     return {
       ok: false,
-      error: `Unsupported pairing version. Expected v${PROTOCOL_VERSION}.`,
+      error: "Unsupported pairing version. Expected v1 or v2.",
     };
   }
   if (!nonEmpty(value.relayUrl, 2048)) {
@@ -103,21 +109,49 @@ export function parsePairingPayload(
       error: "Relay URL must use HTTPS (HTTP is allowed only in development).",
     };
   }
-  const authorizationToken =
-    value.authorizationToken ?? value.pairingToken;
-  if (!nonEmpty(value.desktopId, 200) || !nonEmpty(authorizationToken, 8192)) {
-    return { ok: false, error: "Pairing payload is missing a desktop id or token." };
+  if (!nonEmpty(value.desktopId, 200)) {
+    return { ok: false, error: "Pairing payload is missing a desktop id." };
   }
   if (!IDENTIFIER_PATTERN.test(value.desktopId.trim())) {
     return { ok: false, error: "Desktop id contains unsupported characters." };
   }
+  if (value.v === 2) {
+    if (
+      !nonEmpty(value.pairingId, 200) ||
+      !IDENTIFIER_PATTERN.test(value.pairingId.trim()) ||
+      !nonEmpty(value.pairingSecret, 256) ||
+      !nonEmpty(value.expiresAt, 100)
+    ) {
+      return { ok: false, error: "Pairing payload is missing a valid one-time code." };
+    }
+    const expiresAt = new Date(value.expiresAt);
+    if (!Number.isFinite(expiresAt.getTime())) {
+      return { ok: false, error: "Pairing code has an invalid expiration time." };
+    }
+    if (expiresAt.getTime() <= (options.now ?? (() => new Date()))().getTime()) {
+      return { ok: false, error: "Pairing code has expired. Generate a new code on the Mac." };
+    }
+    return {
+      ok: true,
+      value: {
+        v: 2,
+        relayUrl,
+        desktopId: value.desktopId.trim(),
+        pairingId: value.pairingId.trim(),
+        pairingSecret: value.pairingSecret.trim(),
+        expiresAt: expiresAt.toISOString(),
+      },
+    };
+  }
+
+  const authorizationToken = value.authorizationToken ?? value.pairingToken;
+  if (!nonEmpty(authorizationToken, 8192)) {
+    return { ok: false, error: "Development pairing payload is missing a token." };
+  }
   if (value.desktopName !== undefined && !nonEmpty(value.desktopName, 200)) {
     return { ok: false, error: "Desktop name is invalid." };
   }
-  if (
-    value.desktopPublicKey !== undefined &&
-    !nonEmpty(value.desktopPublicKey, 8192)
-  ) {
+  if (value.desktopPublicKey !== undefined && !nonEmpty(value.desktopPublicKey, 8192)) {
     return { ok: false, error: "Desktop public key is invalid." };
   }
 
