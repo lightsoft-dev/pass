@@ -318,8 +318,10 @@ final class ExtensionStoreTests: XCTestCase {
 
         // Disabled by default — nothing reaches the palette until the user opts in.
         XCTAssertTrue(store.paletteCommands.isEmpty)
+        XCTAssertTrue(store.activeExtensions.isEmpty)
         store.setEnabled("hello", true)
         XCTAssertEqual(store.paletteCommands.map(\.token), [">hi"])
+        XCTAssertEqual(store.activeExtensions.map(\.id), ["hello"])
 
         // The enabled set persists (a fresh store over the same defaults sees it).
         let second = ExtensionStore(directory: root, defaults: defaults)
@@ -355,6 +357,21 @@ final class ExtensionStoreTests: XCTestCase {
         let store = ExtensionStore(directory: root, defaults: defaults)
         XCTAssertTrue(store.loaded.isEmpty)
         XCTAssertTrue(store.loadErrors.isEmpty)
+    }
+
+    func testEnabledEventOnlyExtensionAppearsInChromeWithoutCommands() throws {
+        try install("watcher", manifest: """
+        { "apiVersion": 1, "id": "watcher", "name": "Watcher",
+          "permissions": ["events:session", "notify"],
+          "contributes": { "rules": [
+            { "on": "session.created", "run": { "notify": { "title": "Created" } } }
+          ] } }
+        """, script: nil)
+        let store = ExtensionStore(directory: root, defaults: defaults)
+        store.setEnabled("watcher", true)
+
+        XCTAssertEqual(store.activeExtensions.map(\.id), ["watcher"])
+        XCTAssertTrue(store.paletteCommands.isEmpty)
     }
 
     func testReloadPicksUpNewExtensions() throws {

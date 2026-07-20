@@ -42,7 +42,8 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
   HTML/CSS/JS in a separate macOS window with a constrained snapshot/event/action JSON bridge;
   the bundled **event-monitor** example opens with `>events`. **AI Extension Builder** turns a
   natural-language goal into a disabled Claude work session, then shows every generated file and
-  permission for feedback or explicit fingerprint approval. Design & schema: `docs/EXTENSIONS.md`.
+  permission for feedback or explicit fingerprint approval. Enabled extensions also appear in the
+  Pass panel's top launcher and the macOS menu-bar menu. Design & schema: `docs/EXTENSIONS.md`.
 - **Mobile remote developer preview** — an outbound-only macOS gateway, Cloudflare
   Worker/Durable Object relay, and Expo client can list/create sessions, send messages, and answer
   decisions. The current shared-token pairing is explicitly development-only; device-key pairing

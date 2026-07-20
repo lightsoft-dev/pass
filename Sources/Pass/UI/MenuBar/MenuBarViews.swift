@@ -35,6 +35,25 @@ struct MenuBarContent: View {
         Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
         Button("Back up all projects…") { appModel.exportAllProjects(optimizeGit: backupOptimizeGit) }
             .disabled(appModel.isExporting)
+
+        if appModel.extensions?.activeExtensions.isEmpty == false {
+            Menu("Extensions") {
+                ForEach(appModel.extensions?.activeExtensions ?? []) { ext in
+                    let commands = commands(for: ext.id)
+                    Menu(ext.manifest.name) {
+                        if commands.isEmpty {
+                            Button("Enabled · event rules only") {}
+                                .disabled(true)
+                        } else {
+                            ForEach(commands) { command in
+                                Button(command.command.title) { run(command) }
+                                    .disabled(!canRun(command))
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Toggle("Float above windows", isOn: Binding(
             get: { appModel.panelFloating },
             set: { appModel.setPanelFloating($0) })
@@ -76,5 +95,23 @@ struct MenuBarContent: View {
             prompt: "New session",
             message: "Choose a project directory to run \(agent.rawValue) in") else { return }
         appModel.createSession(projectDir: dir, agent: agent)
+    }
+
+    private func commands(for extensionId: String) -> [ExtensionStore.PaletteCommand] {
+        (appModel.extensions?.paletteCommands ?? []).filter { $0.extensionId == extensionId }
+    }
+
+    private var contextSession: Session? {
+        guard let name = appModel.focusedSessionName else { return nil }
+        return appModel.sessions?.session(named: name)
+    }
+
+    private func canRun(_ command: ExtensionStore.PaletteCommand) -> Bool {
+        command.command.contextKind == "global" || contextSession != nil
+    }
+
+    private func run(_ command: ExtensionStore.PaletteCommand) {
+        let session = command.command.contextKind == "global" ? nil : contextSession
+        Task { _ = await appModel.extensionRuntime?.run(command, session: session) }
     }
 }

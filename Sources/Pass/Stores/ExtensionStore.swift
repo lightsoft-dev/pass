@@ -135,6 +135,10 @@ final class ExtensionStore {
         loaded.filter { $0.isValid && enabledIds.contains($0.id) }
     }
 
+    /// Enabled + valid extensions shown in the panel/menu-bar launcher. This intentionally
+    /// includes event-only extensions with no commands so activation is visible to the user.
+    var activeExtensions: [Loaded] { active }
+
     func activeExtension(id: String) -> Loaded? {
         active.first { $0.id == id }
     }
