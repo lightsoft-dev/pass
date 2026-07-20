@@ -15,7 +15,7 @@ struct PassCli: AsyncParsableCommand {
         $PASS_PORT), so the app must be running.
         """,
         version: "0.1.0",
-        subcommands: [Browser.self, Status.self, Advertise.self]
+        subcommands: [Browser.self, ExtensionCommand.self, Status.self, Advertise.self]
     )
 }
 

@@ -400,7 +400,8 @@ final class SessionStore {
     /// its CLI argument so it starts working on it right away.
     @discardableResult
     func createSession(projectDir: String, agent: AgentKind = .claude,
-                       initialPrompt: String? = nil) async -> String {
+                       initialPrompt: String? = nil,
+                       rememberProject: Bool = true) async -> String {
         // 1. Instant placeholder — a card appears the moment you hit create.
         let dirRepo = URL(fileURLWithPath: projectDir).lastPathComponent
         let provisional = Slug.sessionName(repo: dirRepo, branch: nil)
@@ -413,6 +414,7 @@ final class SessionStore {
         var name = Slug.sessionName(repo: repo, branch: branch)
         name = await uniqueName(name)
         let projectRoot = git?.projectRoot ?? projectDir
+        if !rememberProject { ephemeralSessions.insert(name) } // before reconcile can see it
         var launch = LaunchCommands.command(for: agent)
         if let base = launch,
            let prompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -421,7 +423,7 @@ final class SessionStore {
         }
         await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
                               agent: agent, launchCommand: launch)
-        projects.remember(rootPath: projectRoot)
+        if rememberProject { projects.remember(rootPath: projectRoot) }
 
         // 3. Swap the provisional card for the real one (name may differ once git/uniqueness resolve).
         if name != provisional { sessions.removeAll { $0.name == provisional } }
@@ -624,6 +626,10 @@ final class SessionStore {
     func session(named name: String) -> Session? {
         sessions.first { $0.name == name }
     }
+
+    /// Builder/report sessions are visible to the user but must not recursively trigger
+    /// extension automation or enter project/restore state.
+    func isEphemeral(_ name: String) -> Bool { ephemeralSessions.contains(name) }
 
     /// pass's own state directory (`~/.pass/…`) is never a project/workspace.
     static func isInternalRoot(_ root: String) -> Bool {

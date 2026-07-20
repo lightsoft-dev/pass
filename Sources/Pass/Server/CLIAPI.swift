@@ -61,6 +61,19 @@ struct CLIReadResponse: Codable {
     var error: String? = nil
 }
 
+struct CLIExtensionValidateRequest: Codable {
+    var path: String
+}
+
+struct CLIExtensionValidateResponse: Codable {
+    var ok: Bool
+    var id: String? = nil
+    var name: String? = nil
+    var permissions: [String] = []
+    var problems: [String] = []
+    var error: String? = nil
+}
+
 /// Serves passcli: opens/closes/lists embedded-browser pages and the observation verbs
 /// (screenshot/read). Always answers 200 + `{ok,…}` JSON — errors ride in the body so the
 /// CLI can print them verbatim. Loopback-only, same trust posture as /hook/* and /share/*:
@@ -197,6 +210,52 @@ enum CLIAPI {
             truncated = true
         }
         return encode(CLIReadResponse(ok: true, content: content, truncated: truncated ? true : nil))
+    }
+
+    // MARK: extension authoring
+
+    /// Validate a draft with the exact decoder/catalog/runtime rules the app uses. This endpoint
+    /// is deliberately read-only: validation never installs, approves, or enables an extension.
+    static func validateExtension(body: Data, fileManager: FileManager = .default) -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes else {
+            return encode(CLIExtensionValidateResponse(ok: false, error: "request too large"))
+        }
+        guard let request = try? JSONDecoder().decode(CLIExtensionValidateRequest.self, from: body) else {
+            return encode(CLIExtensionValidateResponse(ok: false, error: "bad request"))
+        }
+        let expanded = NSString(string: request.path).expandingTildeInPath
+        guard expanded.hasPrefix("/") else {
+            return encode(CLIExtensionValidateResponse(ok: false, error: "path must be absolute"))
+        }
+        let directory = URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return encode(CLIExtensionValidateResponse(ok: false, error: "extension folder not found"))
+        }
+        let manifestURL = directory.appendingPathComponent("extension.json")
+        guard let data = try? Data(contentsOf: manifestURL) else {
+            return encode(CLIExtensionValidateResponse(
+                ok: false, problems: ["extension.json is missing or unreadable"]))
+        }
+        guard data.count <= 1024 * 1024 else {
+            return encode(CLIExtensionValidateResponse(
+                ok: false, problems: ["extension.json is larger than 1 MB"]))
+        }
+        let manifest: ExtensionManifest
+        do {
+            manifest = try JSONDecoder().decode(ExtensionManifest.self, from: data)
+        } catch {
+            return encode(CLIExtensionValidateResponse(
+                ok: false, problems: ["extension.json: \(error.localizedDescription)"]))
+        }
+        let problems = manifest.problems(directory: directory, fileManager: fileManager)
+        return encode(CLIExtensionValidateResponse(
+            ok: problems.isEmpty,
+            id: manifest.id,
+            name: manifest.name,
+            permissions: (manifest.permissions ?? []).sorted(),
+            problems: problems))
     }
 
     // MARK: helpers

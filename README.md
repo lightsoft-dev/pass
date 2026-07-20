@@ -33,12 +33,17 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
 - **Notifications** for permission / input / finished, with the menu-bar badge as a reliable
   always-on fallback.
 - **Settings** (⌘,): rebind the hotkey, launch-at-login, floating toggle, project list, install
-  hooks, notification status.
+  hooks, notification status, and build/review extensions with an AI agent.
 - **Extensions (v1)** — add your own features as manifest+script extensions in
   `~/.pass/extensions`: `>commands` in the quick command (⌘P) and event rules
   (attention/session → script/notify/sendText/openURL), with per-capability permissions and
   an enable-after-review flow. Ships with an **agent-usage** example (`>usage` — Claude Code
-  token usage by day/model/project). Design & schema: `docs/EXTENSIONS.md`.
+  token usage by day/model/project). **Web UI windows (apiVersion 2)** render extension-owned
+  HTML/CSS/JS in a separate macOS window with a constrained snapshot/event/action JSON bridge;
+  the bundled **event-monitor** example opens with `>events`. **AI Extension Builder** turns a
+  natural-language goal into a disabled Claude work session, then shows every generated file and
+  permission for feedback or explicit fingerprint approval. Enabled extensions also appear in the
+  Pass panel's top launcher and the macOS menu-bar menu. Design & schema: `docs/EXTENSIONS.md`.
 - **Mobile remote developer preview** — an outbound-only macOS gateway, Cloudflare
   Worker/Durable Object relay, and Expo client can list/create sessions, send messages, and answer
   decisions. The current shared-token pairing is explicitly development-only; device-key pairing

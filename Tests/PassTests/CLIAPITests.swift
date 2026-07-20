@@ -66,4 +66,43 @@ final class CLIAPITests: XCTestCase {
         XCTAssertTrue(CLIAPI.missingSession(nil).contains("PASS_SESSION"))
         XCTAssertTrue(CLIAPI.missingSession("pass-x").contains("'pass-x'"))
     }
+
+    func testExtensionValidationUsesRuntimeManifestRules() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pass-cli-extension-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(#"{"apiVersion":2,"id":"wrong-id","name":"Draft","permissions":["ui:window"],"contributes":{}}"#.utf8)
+            .write(to: root.appendingPathComponent("extension.json"))
+
+        let body = try JSONEncoder().encode(CLIExtensionValidateRequest(path: root.path))
+        let response = try JSONDecoder().decode(
+            CLIExtensionValidateResponse.self,
+            from: CLIAPI.validateExtension(body: body))
+
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(response.id, "wrong-id")
+        XCTAssertTrue(response.problems.contains { $0.contains("must match its folder name") })
+        XCTAssertNil(response.error)
+    }
+
+    func testExtensionValidationAcceptsAValidDraftWithoutEnablingIt() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pass-cli-extension-\(UUID().uuidString)", isDirectory: true)
+        let root = parent.appendingPathComponent("valid-draft", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(#"{"apiVersion":1,"id":"valid-draft","name":"Valid Draft","permissions":["notify"],"contributes":{"commands":[{"id":"hello","title":"Hello","run":{"notify":{"title":"Hello"}}}]}}"#.utf8)
+            .write(to: root.appendingPathComponent("extension.json"))
+
+        let body = try JSONEncoder().encode(CLIExtensionValidateRequest(path: root.path))
+        let response = try JSONDecoder().decode(
+            CLIExtensionValidateResponse.self,
+            from: CLIAPI.validateExtension(body: body))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.name, "Valid Draft")
+        XCTAssertEqual(response.permissions, ["notify"])
+        XCTAssertTrue(response.problems.isEmpty)
+    }
 }

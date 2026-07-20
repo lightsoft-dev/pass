@@ -60,6 +60,19 @@ struct CLIReadResponse: Codable {
     var error: String? = nil
 }
 
+struct CLIExtensionValidateRequest: Codable {
+    var path: String
+}
+
+struct CLIExtensionValidateResponse: Codable {
+    var ok: Bool
+    var id: String? = nil
+    var name: String? = nil
+    var permissions: [String] = []
+    var problems: [String] = []
+    var error: String? = nil
+}
+
 /// Exit codes (BROWSER.md §5.3): 0 ok · 1 pass refused (reason on stderr) · 2 usage /
 /// no target session · 3 pass not running.
 enum PassExit {

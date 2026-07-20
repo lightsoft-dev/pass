@@ -126,7 +126,13 @@ struct CommandView: View {
     }
 
     var body: some View {
-        content
+        VStack(spacing: 0) {
+            if appModel.extensions?.activeExtensions.isEmpty == false {
+                ExtensionLauncherBar(contextSession: extensionContextSession)
+                Divider()
+            }
+            content
+        }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -319,6 +325,19 @@ struct CommandView: View {
         case .detail(let name), .specSession(let name, _): return name
         case .list: return selectedSession?.name
         case .specs: return nil
+        }
+    }
+
+    /// Context used by a plugin launched from the top bar. Detail routes target the session
+    /// actually on screen; the home targets its selected card; specs have no session context.
+    private var extensionContextSession: Session? {
+        switch route {
+        case .detail(let name), .specSession(let name, _):
+            return sessions.first { $0.name == name }
+        case .list:
+            return selectedSession
+        case .specs:
+            return nil
         }
     }
 

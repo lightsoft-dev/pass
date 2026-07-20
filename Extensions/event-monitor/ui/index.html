@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pass Event Monitor</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">PASS / EXTENSION TELEMETRY</p>
+        <h1>EVENT<br>MONITOR</h1>
+      </div>
+      <div class="status-block" aria-live="polite">
+        <span id="connection-light" class="status-light"></span>
+        <div>
+          <strong id="connection-label">CONNECTING</strong>
+          <small id="generated-at">Waiting for snapshot</small>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <aside class="session-rail" aria-labelledby="sessions-title">
+        <div class="section-heading">
+          <h2 id="sessions-title">LIVE SESSIONS</h2>
+          <span id="session-count" class="counter">00</span>
+        </div>
+        <div id="sessions" class="sessions"></div>
+      </aside>
+
+      <section class="event-deck" aria-labelledby="events-title">
+        <div class="section-heading event-heading">
+          <div>
+            <h2 id="events-title">EVENT TAPE</h2>
+            <p>Only subscriptions declared in extension.json arrive here.</p>
+          </div>
+          <div class="actions">
+            <button id="ping" type="button">PING HOST</button>
+            <button id="clear" class="quiet" type="button">CLEAR</button>
+          </div>
+        </div>
+        <ol id="events" class="events" aria-live="polite"></ol>
+        <div id="empty-state" class="empty-state">
+          <span>LISTENING</span>
+          <p>세션 생성·종료 또는 attention 변경 이벤트가 여기에 기록됩니다.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>LOCAL ASSETS ONLY</span>
+      <span>NETWORK / FILESYSTEM BLOCKED</span>
+      <span id="clock">--:--:--</span>
+    </footer>
+  </body>
+</html>
