@@ -5,6 +5,7 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let appModel = AppModel()
     private var panelController: PanelController!
+    private var mirrorController: MirrorWindowController!
     private let notifications = NotificationService()
     private let hookServer = HookServer()
     private var eventRouter: EventRouter?
@@ -43,6 +44,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Panel (non-activating, keyboard-first).
         panelController = PanelController(appModel: appModel)
         appModel.panelController = panelController
+
+        // Device mirror (Vysor-style visor window, shown from the menu bar).
+        mirrorController = MirrorWindowController()
+        appModel.mirrorController = mirrorController
 
         // Global hotkeys → toggle the panel: ⌘⌘ double-tap (primary) + ⌥Space (rebindable).
         HotkeyService.registerSummon { [weak self] in

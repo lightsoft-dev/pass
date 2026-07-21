@@ -35,6 +35,7 @@ struct MenuBarContent: View {
         Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
         Button("Back up all projects…") { appModel.exportAllProjects(optimizeGit: backupOptimizeGit) }
             .disabled(appModel.isExporting)
+        Button("Device mirror…") { appModel.showDeviceMirror() }
 
         if appModel.extensions?.activeExtensions.isEmpty == false {
             Menu("Extensions") {
