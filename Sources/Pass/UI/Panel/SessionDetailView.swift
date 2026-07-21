@@ -65,7 +65,7 @@ struct SessionDetailView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            Text("keys go to the session").foregroundStyle(.tertiary)
+            Text("drag select · ⌘C copy · ⌥drag tmux").foregroundStyle(.tertiary)
             Spacer()
             Text("⌘B  browser").foregroundStyle(.tertiary)
             Text("⌘[ or ⌘W  back to list").foregroundStyle(.secondary)

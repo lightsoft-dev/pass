@@ -2,6 +2,22 @@ import SwiftUI
 import SwiftTerm
 import AppKit
 
+/// Embedded tmux sessions request mouse events for scrollback. Normal terminal behavior is more
+/// useful for dragging, though: keep a native SwiftTerm selection by default and reserve Option
+/// for forwarding a drag to tmux copy-mode.
+enum TerminalMouseInteractionPolicy {
+    static func usesLocalSelection(modifierFlags: NSEvent.ModifierFlags) -> Bool {
+        !modifierFlags.contains(.option)
+    }
+
+    /// Option chooses tmux mode in Pass; it is not part of the mouse gesture tmux should match.
+    static func modifierFlagsForwardedToTmux(
+        _ modifierFlags: NSEvent.ModifierFlags
+    ) -> NSEvent.ModifierFlags {
+        modifierFlags.subtracting(.option)
+    }
+}
+
 /// SwiftTerm's macOS view ignores IME composition (`setMarkedText` is an empty stub), so while
 /// typing Korean/Japanese/Chinese NOTHING shows until the character is committed — it feels
 /// like keystrokes are swallowed. This subclass renders the in-progress composition at the
@@ -12,6 +28,9 @@ final class IMETerminalView: LocalProcessTerminalView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        // SwiftTerm clears local selections on streamed output while this is true. Keep local
+        // selection as the steady state; the event bridge enables reporting only for Option-drag.
+        allowMouseReporting = false
         // Drop files (or text) onto the terminal → their escaped paths land in the agent's
         // input, Terminal.app-style.
         registerForDraggedTypes([.fileURL, .string])
@@ -19,6 +38,7 @@ final class IMETerminalView: LocalProcessTerminalView {
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        allowMouseReporting = false
         registerForDraggedTypes([.fileURL, .string])
     }
 
@@ -62,13 +82,17 @@ final class IMETerminalView: LocalProcessTerminalView {
     /// `scrollWheel` is public-not-open (can't override), so a local event monitor intercepts
     /// wheel events over these views and — when the app requested mouse reporting (our
     /// sessions run `mouse on`) — forwards them to tmux as SGR mouse events, which scroll
-    /// tmux's copy-mode history like any modern terminal. A second monitor opens plain-text
-    /// http(s) URLs on ⌘-click (SwiftTerm only handles OSC 8 hyperlinks, which agents don't
-    /// emit).
+    /// tmux's copy-mode history like any modern terminal. A second monitor temporarily disables
+    /// reporting for a normal drag so SwiftTerm owns a persistent, ⌘C-copyable selection;
+    /// Option-drag keeps the original tmux behavior. It also opens plain-text http(s) URLs on
+    /// ⌘-click (SwiftTerm only handles OSC 8 hyperlinks, which agents don't emit).
     static func installEventBridges() { _ = wheelForwarder; _ = mouseBridge }
 
     private static weak var hoverTerm: IMETerminalView?
     private static var mouseDownPoint: NSPoint?
+    private static weak var mouseDownTerm: IMETerminalView?
+    private static var mouseReportingBeforeDrag: Bool?
+    private static var mouseGestureUsesTmux = false
 
     /// Hover a plain-text URL → underline + pointing hand. Click it in place (or ⌘-click
     /// anywhere on it) → open in the browser. Runs as a monitor because SwiftTerm's own mouse
@@ -83,16 +107,60 @@ final class IMETerminalView: LocalProcessTerminalView {
                 hoverTerm = term
                 term?.updateLinkHover(event)
             case .leftMouseDragged:
-                // SwiftTerm only forwards drag motions in anyEvent mode (it checks
-                // sendMotionEvent() instead of sendButtonTracking() — upstream bug), so under
-                // tmux's button-event tracking the drag never reaches copy-mode. Forward it.
-                term?.forwardDrag(event)
-                term?.clearLinkHover()
+                let dragTerm = mouseDownTerm ?? term
+                if mouseGestureUsesTmux {
+                    // Option is Pass's mode switch, not a modifier tmux should see. Forward an
+                    // unmodified drag so tmux's ordinary MouseDrag1Pane binding still matches.
+                    dragTerm?.forwardDrag(event)
+                } else if mouseReportingBeforeDrag != nil {
+                    // Keep reporting off for the whole gesture. SwiftTerm now extends its own
+                    // selection, which remains visible after mouse-up and is handled by ⌘C.
+                    dragTerm?.allowMouseReporting = false
+                }
+                dragTerm?.clearLinkHover()
+                if mouseGestureUsesTmux { return eventForTmux(event) }
             case .leftMouseDown:
+                // Recover if a previous gesture was interrupted before its mouse-up arrived.
+                if let oldTerm = mouseDownTerm, let oldValue = mouseReportingBeforeDrag {
+                    oldTerm.allowMouseReporting = oldValue
+                }
                 mouseDownPoint = event.locationInWindow
+                mouseDownTerm = term
+                mouseReportingBeforeDrag = nil
+                mouseGestureUsesTmux = false
+                if let term {
+                    if TerminalMouseInteractionPolicy.usesLocalSelection(
+                        modifierFlags: event.modifierFlags
+                    ) {
+                        mouseReportingBeforeDrag = term.allowMouseReporting
+                        term.allowMouseReporting = false
+                    } else {
+                        mouseReportingBeforeDrag = term.allowMouseReporting
+                        term.allowMouseReporting = true
+                        mouseGestureUsesTmux = true
+                        return eventForTmux(event)
+                    }
+                }
             case .leftMouseUp:
+                let dragTerm = mouseDownTerm ?? term
+                let reportingToRestore = mouseReportingBeforeDrag
+                let downPoint = mouseDownPoint
+                let gestureUsedTmux = mouseGestureUsesTmux
+                mouseDownPoint = nil
+                mouseDownTerm = nil
+                mouseReportingBeforeDrag = nil
+                mouseGestureUsesTmux = false
+
+                // The local monitor runs before SwiftTerm receives mouseUp. Restore reporting on
+                // the next main-queue turn so mouseUp also follows the local-selection path.
+                if let dragTerm, let reportingToRestore {
+                    DispatchQueue.main.async { [weak dragTerm] in
+                        dragTerm?.allowMouseReporting = reportingToRestore
+                    }
+                }
+
                 guard let term else { return event }
-                let moved = mouseDownPoint.map {
+                let moved = downPoint.map {
                     hypot(event.locationInWindow.x - $0.x, event.locationInWindow.y - $0.y) > 4
                 } ?? true
                 let cmd = event.modifierFlags.contains(.command)
@@ -104,13 +172,32 @@ final class IMETerminalView: LocalProcessTerminalView {
                     NSWorkspace.shared.open(url)
                     // Plain click still flows to tmux (keeps its button state sane); ⌘-click
                     // is consumed so SwiftTerm's OSC-8 handler doesn't double-fire.
-                    return cmd ? nil : event
+                    if cmd { return nil }
+                    return gestureUsedTmux ? eventForTmux(event) : event
                 }
-                return event
+                return gestureUsedTmux ? eventForTmux(event) : event
             default: break
             }
             return event
         }
+
+    /// Rebuild a left-mouse event without Option. Pass uses Option to select tmux interaction,
+    /// while tmux's default bindings intentionally listen for the ordinary mouse event.
+    private static func eventForTmux(_ event: NSEvent) -> NSEvent {
+        NSEvent.mouseEvent(
+            with: event.type,
+            location: event.locationInWindow,
+            modifierFlags: TerminalMouseInteractionPolicy.modifierFlagsForwardedToTmux(
+                event.modifierFlags
+            ),
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            eventNumber: event.eventNumber,
+            clickCount: event.clickCount,
+            pressure: event.pressure
+        ) ?? event
+    }
 
     private static func terminalView(under event: NSEvent) -> IMETerminalView? {
         guard let window = event.window,
@@ -246,8 +333,8 @@ final class IMETerminalView: LocalProcessTerminalView {
             return event
         }
 
-    /// Drag motion (button 1 held) as an SGR mouse report — SwiftTerm won't send these in
-    /// button-event-tracking mode itself, and tmux needs them to extend a copy-mode selection.
+    /// Option-drag motion (button 1 held) as an SGR mouse report — SwiftTerm won't send these
+    /// in button-event-tracking mode itself, and tmux needs them to extend a copy-mode selection.
     fileprivate func forwardDrag(_ event: NSEvent) {
         let terminal = getTerminal()
         guard terminal.mouseMode == .buttonEventTracking else { return } // anyEvent: SwiftTerm handles it
@@ -285,7 +372,7 @@ final class IMETerminalView: LocalProcessTerminalView {
 
     /// The panel is movable-by-background (drag empty areas to move it), and SwiftTerm's view
     /// doesn't claim its drags — so dragging ON THE TERMINAL moved the whole window instead of
-    /// selecting text. Claim them: drags become tmux mouse selection (release → pbcopy).
+    /// selecting text. Claim them so normal drags become persistent local selections.
     override var mouseDownCanMoveWindow: Bool { false }
 
     /// The summon panel is non-activating, so the app is usually "inactive" while you use it.

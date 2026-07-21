@@ -737,7 +737,7 @@ struct CommandView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Divider()
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text("drag select · ⌘C copy · ⌥drag tmux · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 8).padding(.vertical, 3)
         }
