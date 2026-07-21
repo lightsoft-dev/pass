@@ -3,8 +3,9 @@ import SwiftUI
 /// Root of the floating panel — a chat-style home over every session, with the SELECTED
 /// session shown as a live terminal: a real `tmux attach` client (colors, styles, cursor),
 /// so every keystroke goes straight into the agent's TUI and all of its features work.
-/// ⌘P summons the quick command (`@` jump, `+branch` worktree, `>command` extensions,
-/// plain text replies); ⌘↑↓ moves between sessions; ⌘⏎ expands the session full-height.
+/// ⌘P summons the quick command (session/project/extension search, `+branch` worktree,
+/// `>command` extension-only search, plain text replies); ⌘↑↓ moves between sessions;
+/// ⌘⏎ expands the session full-height.
 struct CommandView: View {
     @Environment(AppModel.self) private var appModel
     @State private var route: Route = .list
@@ -37,7 +38,7 @@ struct CommandView: View {
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
     /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
-    /// and is simply stripped). Only `+branch` (worktree) and `>command` (extensions) opt out.
+    /// and is simply stripped). `+branch` starts a worktree; `>command` narrows to extensions.
     private var isJumpMode: Bool { !query.isEmpty && !query.hasPrefix("+") && !query.hasPrefix(">") }
     /// `>` prefix (VS Code's command convention) — the results are extension commands; ⏎ runs
     /// the selected one. NOT `/`: slash-prefixed text must keep flowing to the agent session
@@ -80,12 +81,10 @@ struct CommandView: View {
     /// live sessions are offered; registered projects join once a filter narrows things down
     /// (there are far too many to list unfiltered).
     private var jumpItems: [PaletteItem] {
-        // `>` mode: extension commands (from enabled, valid extensions only).
+        // `>` mode: extension commands only (from enabled, valid extensions).
         if isCommandMode {
             let needle = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
-            return (appModel.extensions?.paletteCommands ?? [])
-                .filter { needle.isEmpty || Fuzzy.matches(needle, $0.command.id) || Fuzzy.matches(needle, $0.command.title) }
-                .map { .command($0) }
+            return matchingExtensionCommands(needle).map { .command($0) }
         }
         let needle = jumpToken.trimmingCharacters(in: .whitespaces)
         // ⌘N mode: the list is PROJECTS to start a session in (all of them until you type).
@@ -293,7 +292,7 @@ struct CommandView: View {
                     query = ""
                     hideQuickCommand() // action done — watch the new session arrive
                 case .command(let c):
-                    runExtensionCommand(c) // commands only appear in `>` mode, but stay exhaustive
+                    runExtensionCommand(c)
                 }
                 return true
             }
@@ -559,10 +558,7 @@ struct CommandView: View {
         }
         if isCommandMode {
             if case .command(let c)? = jumpSelectedItem {
-                // Everything but "global" runs against the selected session (runtime rule).
-                let target = c.command.contextKind == "global" ? ""
-                    : (selectedSession.map { " on \($0.displayName)" } ?? " — select a session first")
-                return "⏎ run \(c.token)\(target) · \(c.extensionName)"
+                return commandHint(c)
             }
             return "extension commands · ⏎ run · Esc close"
         }
@@ -570,13 +566,14 @@ struct CommandView: View {
             if jumpItems.isEmpty, let s = selectedSession {
                 return "no matches — ⏎ sends this to \(s.displayName)"
             }
+            if case .command(let c)? = jumpSelectedItem { return commandHint(c) }
             if case .project(let p)? = jumpSelectedItem { return "⏎ new session in \(p.name)" }
             if jumpMessageIsReady, case .session(let s)? = jumpSelectedItem {
                 return "⏎ send to \(s.displayName)"
             }
             return "Tab complete · ⏎ go to session · keep typing to message it"
         }
-        return "type to search · first word filters, the rest is the message · +branch · >command"
+        return "type to search sessions, projects, commands · +branch · >command"
     }
 
     @ViewBuilder
@@ -758,7 +755,29 @@ struct CommandView: View {
         for p in projects where !liveRoots.contains(p.rootPath) {
             if needle.isEmpty || Fuzzy.matches(needle, p.name) { out.append(.project(p)) }
         }
+        out.append(contentsOf: matchingExtensionCommands(needle).map { .command($0) })
         return out
+    }
+
+    private func matchingExtensionCommands(_ needleRaw: String) -> [ExtensionStore.PaletteCommand] {
+        let needle = needleRaw.trimmingCharacters(in: .whitespaces)
+        return (appModel.extensions?.paletteCommands ?? []).filter { command in
+            needle.isEmpty || commandMatches(needle, command)
+        }
+    }
+
+    private func commandMatches(_ needle: String, _ command: ExtensionStore.PaletteCommand) -> Bool {
+        Fuzzy.matches(needle, command.command.id)
+            || Fuzzy.matches(needle, command.command.title)
+            || Fuzzy.matches(needle, command.extensionName)
+            || Fuzzy.matches(needle, command.token)
+    }
+
+    private func commandHint(_ c: ExtensionStore.PaletteCommand) -> String {
+        // Everything but "global" runs against the selected session (runtime rule).
+        let target = c.command.contextKind == "global" ? ""
+            : (selectedSession.map { " on \($0.displayName)" } ?? " — select a session first")
+        return "⏎ run \(c.token)\(target) · \(c.extensionName)"
     }
 
     // MARK: Keyboard

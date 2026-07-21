@@ -266,6 +266,18 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertEqual(m.contributes?.windows?.map(\.id), ["monitor"])
     }
 
+    func testBundledUIStarterManifestIsValid() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let dir = repo.appendingPathComponent("Extensions/ui-starter")
+        let data = try Data(contentsOf: dir.appendingPathComponent("extension.json"))
+        let m = try JSONDecoder().decode(ExtensionManifest.self, from: data)
+        XCTAssertEqual(m.problems(directory: dir), [])
+        XCTAssertEqual(m.contributes?.commands?.map(\.id), ["ui-starter"])
+        XCTAssertEqual(m.contributes?.windows?.map(\.id), ["panel"])
+        XCTAssertNotNil(m.contributes?.actions?["notify"])
+    }
+
     func testWebResourceCSPInjection() {
         let html = Data("<html><head><title>x</title></head><body>ok</body></html>".utf8)
         let rendered = String(decoding: ExtensionResourceSchemeHandler.injectCSP(into: html),

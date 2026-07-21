@@ -145,7 +145,8 @@ final class ExtensionStore {
 
     func wasDisabledAfterChange(_ id: String) -> Bool { changedIds.contains(id) }
 
-    /// Commands the ⌘P palette offers (`>id`).
+    /// Commands the ⌘P palette offers. `token` keeps the explicit `>id` spelling, while the
+    /// palette can also find commands by id, title, or extension name in normal search.
     var paletteCommands: [PaletteCommand] {
         active.flatMap { ext in
             (ext.manifest.contributes?.commands ?? []).map {
