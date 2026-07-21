@@ -44,6 +44,19 @@ actor TmuxClient: TerminalPaneAccess {
     private let fieldSep = "\t" // tmux escapes non-printable control bytes in -F output, so
                                 // a real separator (tab) is required. Paths with tabs are pathological.
 
+    /// The tmux CLIENT sanitizes its printed output by the process locale: under C/POSIX
+    /// (GUI launch, systemd units, CI — no LANG) tabs in -F output become `_`, which breaks
+    /// the tab-separated parsing above, and non-ASCII pane content can be octal-escaped.
+    /// Force a UTF-8 LC_ALL for every tmux spawn unless the environment already has one.
+    private static let localeEnv: [String: String] = {
+        let env = ProcessInfo.processInfo.environment
+        let effective = env["LC_ALL"] ?? env["LC_CTYPE"] ?? env["LANG"] ?? ""
+        if effective.uppercased().contains("UTF-8") || effective.uppercased().contains("UTF8") {
+            return [:]
+        }
+        return ["LC_ALL": "C.UTF-8"]
+    }()
+
     /// Run tmux off the actor executor (Process.waitUntilExit blocks).
     @discardableResult
     func run(_ args: [String]) async -> ProcResult {
@@ -52,7 +65,7 @@ actor TmuxClient: TerminalPaneAccess {
         }
         return await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
-                cont.resume(returning: Shell.run(tmuxPath, args))
+                cont.resume(returning: Shell.run(tmuxPath, args, extraEnv: Self.localeEnv))
             }
         }
     }
@@ -217,8 +230,8 @@ actor TmuxClient: TerminalPaneAccess {
         // local buffer has nothing to scroll). Mouse mode turns wheel/trackpad scrolling into
         // tmux copy-mode scrolling — SwiftTerm forwards the events via the xterm protocol.
         await run(["set-option", "-t", name, "mouse", "on"])
-        // Mouse-drag copy: the default MouseDragEnd1Pane binding is copy-pipe-and-cancel,
-        // which pipes the selection to `copy-command` — point it at the macOS clipboard.
+        // Option-drag copy: normal drags are persistent local SwiftTerm selections. The default
+        // MouseDragEnd1Pane binding pipes an explicit tmux selection to `copy-command`.
         await run(["set-option", "-s", "copy-command", "pbcopy"])
     }
 

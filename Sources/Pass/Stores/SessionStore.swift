@@ -129,6 +129,7 @@ final class SessionStore {
     func stop() {
         pollTask?.cancel()
         stopRemoteStreaming()
+        flushSave()
     }
 
     // MARK: Restore (survive a tmux server death — reboot / kill-server)
@@ -263,11 +264,12 @@ final class SessionStore {
         // every persisted alias/message/pending state in one save.
         if !next.isEmpty {
             let liveNames = Set(next.map(\.name))
+            let keepNames = liveNames.union(pendingRestore.map(\.name))
             let before = (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count)
-            attentionByName = attentionByName.filter { liveNames.contains($0.key) }
-            lastMessageByName = lastMessageByName.filter { liveNames.contains($0.key) }
-            unacked = unacked.intersection(liveNames)
-            aliasByName = aliasByName.filter { liveNames.contains($0.key) }
+            attentionByName = attentionByName.filter { keepNames.contains($0.key) }
+            lastMessageByName = lastMessageByName.filter { keepNames.contains($0.key) }
+            unacked = unacked.intersection(keepNames)
+            aliasByName = aliasByName.filter { keepNames.contains($0.key) }
             ephemeralSessions = ephemeralSessions.intersection(liveNames)
             // Descriptors track exactly the live launchable-agent sessions. Pruning here (rather
             // than on an empty listing) is deliberate: a session that vanished while others remain
@@ -400,7 +402,8 @@ final class SessionStore {
     /// its CLI argument so it starts working on it right away.
     @discardableResult
     func createSession(projectDir: String, agent: AgentKind = .claude,
-                       initialPrompt: String? = nil) async -> String {
+                       initialPrompt: String? = nil,
+                       rememberProject: Bool = true) async -> String {
         // 1. Instant placeholder — a card appears the moment you hit create.
         let dirRepo = URL(fileURLWithPath: projectDir).lastPathComponent
         let provisional = Slug.sessionName(repo: dirRepo, branch: nil)
@@ -413,6 +416,7 @@ final class SessionStore {
         var name = Slug.sessionName(repo: repo, branch: branch)
         name = await uniqueName(name)
         let projectRoot = git?.projectRoot ?? projectDir
+        if !rememberProject { ephemeralSessions.insert(name) } // before reconcile can see it
         var launch = LaunchCommands.command(for: agent)
         if let base = launch,
            let prompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -421,7 +425,7 @@ final class SessionStore {
         }
         await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
                               agent: agent, launchCommand: launch)
-        projects.remember(rootPath: projectRoot)
+        if rememberProject { projects.remember(rootPath: projectRoot) }
 
         // 3. Swap the provisional card for the real one (name may differ once git/uniqueness resolve).
         if name != provisional { sessions.removeAll { $0.name == provisional } }
@@ -588,28 +592,36 @@ final class SessionStore {
     /// Debounced write — coalesces bursts of hook events into one save.
     private func scheduleSave() {
         saveTask?.cancel()
-        let attn = attentionByName, last = lastMessageByName
-        let unack = unacked
-        let aliases = aliasByName
-        let descriptors = sessionDescriptors
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled, self != nil else { return }
-            // Load-modify-save: this store owns pending/lastMessages/unacked/aliases/sessions;
-            // fields owned by other stores (browserURLs) must survive our writes.
-            var snap = SessionStatePersistence.load()
-            snap.pending = [:]
-            snap.lastMessages = last
-            snap.unacked = Array(unack)
-            snap.aliases = aliases
-            snap.sessions = Array(descriptors.values)
-            for (name, state) in attn {
-                if case .pending(let a) = state {
-                    snap.pending[name] = .init(kind: a.kind.rawValue, receivedAt: a.receivedAt, preview: a.preview)
-                }
+            await MainActor.run {
+                guard !Task.isCancelled, self != nil else { return }
+                self?.writeSnapshot()
             }
-            SessionStatePersistence.save(snap)
         }
+    }
+
+    func flushSave() {
+        saveTask?.cancel()
+        saveTask = nil
+        writeSnapshot()
+    }
+
+    private func writeSnapshot() {
+        // Load-modify-save: this store owns pending/lastMessages/unacked/aliases/sessions;
+        // fields owned by other stores (browserURLs) must survive our writes.
+        var snap = SessionStatePersistence.load()
+        snap.pending = [:]
+        snap.lastMessages = lastMessageByName
+        snap.unacked = Array(unacked)
+        snap.aliases = aliasByName
+        snap.sessions = Array(sessionDescriptors.values)
+        for (name, state) in attentionByName {
+            if case .pending(let a) = state {
+                snap.pending[name] = .init(kind: a.kind.rawValue, receivedAt: a.receivedAt, preview: a.preview)
+            }
+        }
+        SessionStatePersistence.save(snap)
     }
 
     /// Resolve a hook event to a session name: trust the header hint (it's our env var),
@@ -624,6 +636,10 @@ final class SessionStore {
     func session(named name: String) -> Session? {
         sessions.first { $0.name == name }
     }
+
+    /// Builder/report sessions are visible to the user but must not recursively trigger
+    /// extension automation or enter project/restore state.
+    func isEphemeral(_ name: String) -> Bool { ephemeralSessions.contains(name) }
 
     /// pass's own state directory (`~/.pass/…`) is never a project/workspace.
     static func isInternalRoot(_ root: String) -> Bool {

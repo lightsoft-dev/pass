@@ -7,8 +7,10 @@ enum ExtensionCatalog {
         "run:script",       // run a script bundled in the extension folder
         "session:send",     // inject text into a session (ReplyInjector rules apply)
         "session:create",   // start a tmux session (terminal-mode scripts)
+        "session:read",     // read the current session snapshot from a web UI
         "notify",           // post a macOS notification
         "open:url",         // open a URL in the default handler
+        "ui:window",        // open an extension-owned HTML/CSS/JS window
         "events:attention", // subscribe to attention.* events
         "events:session",   // subscribe to session.* events
     ]
@@ -47,6 +49,22 @@ struct ExtensionManifest: Codable, Hashable, Sendable {
     struct Contributes: Codable, Hashable, Sendable {
         var commands: [Command]?
         var rules: [Rule]?
+        /// Named actions exposed to a web UI through `pass.runAction(id, input)`. The page can
+        /// request only these actions; it never receives a raw shell/filesystem bridge.
+        var actions: [String: Action]?
+        var windows: [Window]?
+    }
+
+    /// An app-owned NSWindow whose content is rendered by an isolated WKWebView. `entry` and all
+    /// of its relative assets stay inside the extension directory and load through the private
+    /// pass-extension:// scheme (never file://).
+    struct Window: Codable, Hashable, Sendable {
+        var id: String
+        var title: String
+        var entry: String
+        var width: Double?
+        var height: Double?
+        var subscriptions: [String]?
     }
 
     /// A quick-command palette entry, typed as `>id` (the `>` prefix is VS Code's command
@@ -89,7 +107,7 @@ struct ExtensionManifest: Codable, Hashable, Sendable {
         var kind: [String]?
     }
 
-    /// What a command/rule does — exactly ONE of script / sendText / notify / openURL.
+    /// What a command/rule does — exactly ONE effect.
     struct Action: Codable, Hashable, Sendable {
         /// Path of a script INSIDE the extension folder (relative, no escapes).
         var script: String?
@@ -105,6 +123,8 @@ struct ExtensionManifest: Codable, Hashable, Sendable {
         var sendText: String?
         var notify: Notify?
         var openURL: String?
+        /// Opens a contributed HTML window by id. Web windows require apiVersion 2.
+        var openWindow: String?
 
         /// Permissions this action needs the manifest to have declared.
         var requiredPermissions: Set<String> {
@@ -116,11 +136,13 @@ struct ExtensionManifest: Codable, Hashable, Sendable {
             if sendText != nil { p.insert("session:send") }
             if notify != nil { p.insert("notify") }
             if openURL != nil { p.insert("open:url") }
+            if openWindow != nil { p.insert("ui:window") }
             return p
         }
 
         var effectCount: Int {
-            [script != nil, sendText != nil, notify != nil, openURL != nil].filter { $0 }.count
+            [script != nil, sendText != nil, notify != nil, openURL != nil, openWindow != nil]
+                .filter { $0 }.count
         }
 
         /// Short human label for logs ("script usage.sh", "sendText", …).
@@ -129,6 +151,7 @@ struct ExtensionManifest: Codable, Hashable, Sendable {
             if sendText != nil { return "sendText" }
             if notify != nil { return "notify" }
             if openURL != nil { return "openURL" }
+            if let openWindow { return "openWindow " + openWindow }
             return "(empty)"
         }
     }
@@ -146,8 +169,8 @@ extension ExtensionManifest {
     /// broken extensions surface in Settings with these messages instead of silently vanishing.
     func problems(directory: URL, fileManager: FileManager = .default) -> [String] {
         var out: [String] = []
-        if apiVersion != 1 {
-            out.append("apiVersion \(apiVersion) is not supported (this pass supports 1)")
+        if ![1, 2].contains(apiVersion) {
+            out.append("apiVersion \(apiVersion) is not supported (this pass supports 1 and 2)")
         }
         if !Self.isValidIdentifier(id) {
             out.append("id \"\(id)\" must be lowercase letters, digits, and '-'")
@@ -158,6 +181,66 @@ extension ExtensionManifest {
         let declared = Set(permissions ?? [])
         for p in declared.sorted() where !ExtensionCatalog.permissions.contains(p) {
             out.append("unknown permission \"\(p)\"")
+        }
+
+        let windows = contributes?.windows ?? []
+        let windowIds = Set(windows.map(\.id))
+        if apiVersion < 2, !windows.isEmpty || !(contributes?.actions?.isEmpty ?? true) {
+            out.append("windows and named actions require apiVersion 2")
+        }
+
+        var seenWindowIds: Set<String> = []
+        for window in windows {
+            let label = "window \(window.id)"
+            if !Self.isValidIdentifier(window.id) {
+                out.append("\(label): id must be lowercase letters, digits, and '-'")
+            }
+            if !seenWindowIds.insert(window.id).inserted {
+                out.append("\(label): duplicate window id")
+            }
+            if window.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                out.append("\(label): title must not be empty")
+            }
+            if let width = window.width, !(320...1920).contains(width) {
+                out.append("\(label): width must be between 320 and 1920")
+            }
+            if let height = window.height, !(240...1200).contains(height) {
+                out.append("\(label): height must be between 240 and 1200")
+            }
+            if !declared.contains("ui:window") {
+                out.append("\(label): permission \"ui:window\" not declared")
+            }
+            if !window.entry.lowercased().hasSuffix(".html") {
+                out.append("\(label): entry must be an HTML file")
+            }
+            if case .failure(let problem) = Self.resolveResource(window.entry, in: directory,
+                                                                  fileManager: fileManager) {
+                out.append("\(label): \(problem.message)")
+            }
+            var subscriptions: Set<String> = []
+            for event in window.subscriptions ?? [] {
+                if !subscriptions.insert(event).inserted {
+                    out.append("\(label): duplicate subscription \"\(event)\"")
+                }
+                if !ExtensionCatalog.events.contains(event) {
+                    out.append("\(label): unknown event \"\(event)\"")
+                } else if let needed = ExtensionCatalog.permission(forEvent: event),
+                          !declared.contains(needed) {
+                    out.append("\(label): permission \"\(needed)\" not declared")
+                }
+            }
+        }
+
+        for (id, action) in contributes?.actions ?? [:] {
+            let label = "action \(id)"
+            if !Self.isValidIdentifier(id) {
+                out.append("\(label): id must be lowercase letters, digits, and '-'")
+            }
+            out += actionProblems(action, label: label, declared: declared,
+                                  directory: directory, fileManager: fileManager)
+            if let target = action.openWindow, !windowIds.contains(target) {
+                out.append("\(label): unknown window \"\(target)\"")
+            }
         }
 
         var commandIds: Set<String> = []
@@ -177,6 +260,9 @@ extension ExtensionManifest {
             }
             out += actionProblems(cmd.run, label: label, declared: declared,
                                   directory: directory, fileManager: fileManager)
+            if let target = cmd.run.openWindow, !windowIds.contains(target) {
+                out.append("\(label): unknown window \"\(target)\"")
+            }
         }
         for rule in contributes?.rules ?? [] {
             let label = "rule on \(rule.on)"
@@ -185,6 +271,9 @@ extension ExtensionManifest {
             } else if let needed = ExtensionCatalog.permission(forEvent: rule.on),
                       !declared.contains(needed) {
                 out.append("\(label): permission \"\(needed)\" not declared")
+            }
+            if rule.run.openWindow != nil {
+                out.append("\(label): openWindow is command/action-only")
             }
             out += actionProblems(rule.run, label: label, declared: declared,
                                   directory: directory, fileManager: fileManager)
@@ -196,7 +285,7 @@ extension ExtensionManifest {
                                 directory: URL, fileManager: FileManager) -> [String] {
         var out: [String] = []
         if action.effectCount != 1 {
-            out.append("\(label): exactly one of script / sendText / notify / openURL")
+            out.append("\(label): exactly one of script / sendText / notify / openURL / openWindow")
         }
         if action.terminal == true && action.script == nil {
             out.append("\(label): terminal needs a script")
@@ -205,8 +294,8 @@ extension ExtensionManifest {
             out.append("\(label): permission \"\(p)\" not declared")
         }
         if action.script != nil,
-           case .failure(let message) = action.resolveScript(in: directory, fileManager: fileManager) {
-            out.append("\(label): \(message)")
+           case .failure(let problem) = action.resolveScript(in: directory, fileManager: fileManager) {
+            out.append("\(label): \(problem.message)")
         }
         return out
     }
@@ -215,6 +304,34 @@ extension ExtensionManifest {
     static func isValidIdentifier(_ s: String) -> Bool {
         guard let first = s.first, first != "-" else { return false }
         return s.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }
+    }
+
+    struct ResourceError: Error, CustomStringConvertible, ExpressibleByStringLiteral {
+        let message: String
+        init(_ message: String) { self.message = message }
+        init(stringLiteral value: String) { message = value }
+        var description: String { message }
+    }
+
+    /// Resolve any extension-owned file and follow symlinks before enforcing containment. This
+    /// closes the lexical-only hole where `ui/index.html` or a script was a symlink to a file
+    /// outside the reviewed extension directory.
+    static func resolveResource(_ path: String, in directory: URL,
+                                fileManager: FileManager = .default) -> Result<URL, ResourceError> {
+        guard !path.isEmpty else { return .failure("resource path must not be empty") }
+        guard !path.hasPrefix("/") else {
+            return .failure("resource must be a relative path inside the extension folder")
+        }
+        let root = directory.standardizedFileURL.resolvingSymlinksInPath().path
+        let url = directory.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
+        guard url.path.hasPrefix(root + "/") else {
+            return .failure("resource must stay inside the extension folder")
+        }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            return .failure(ResourceError("resource not found: \(path)"))
+        }
+        return .success(url)
     }
 }
 
@@ -236,18 +353,12 @@ extension ExtensionManifest.Action {
     /// `report..v2.sh` is not rejected.
     func resolveScript(in directory: URL, fileManager: FileManager = .default) -> Result<URL, ScriptError> {
         guard let script, !script.isEmpty else { return .failure("action has no script") }
-        guard !script.hasPrefix("/") else {
-            return .failure("script must be a relative path inside the extension folder")
+        switch ExtensionManifest.resolveResource(script, in: directory, fileManager: fileManager) {
+        case .success(let url): return .success(url)
+        case .failure(let error):
+            let message = error.message.replacingOccurrences(of: "resource", with: "script")
+            return .failure(ScriptError(message))
         }
-        let root = directory.standardizedFileURL.path
-        let url = directory.appendingPathComponent(script).standardizedFileURL
-        guard url.path.hasPrefix(root + "/") else {
-            return .failure("script must stay inside the extension folder")
-        }
-        guard fileManager.fileExists(atPath: url.path) else {
-            return .failure(ScriptError("script not found: \(script)"))
-        }
-        return .success(url)
     }
 }
 

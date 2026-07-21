@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Observation
 
@@ -23,6 +24,8 @@ final class AppModel {
 
     /// Set once services are wired, so views can react.
     var isReady: Bool = false
+    /// Bumped when a project-local pass-config.json changes so views re-read shared settings.
+    var configRevision: Int = 0
 
     /// When a notification is clicked, the session to preselect on next panel show.
     var pendingPreselect: String?
@@ -62,14 +65,21 @@ final class AppModel {
     /// immediately; any other target only gets the 🌐 badge (never steal the selection).
     var focusedSessionName: String?
 
+    /// Local runtime sessions are intentionally not persisted into the portable feature file.
+    /// The implementation agent session is a collaboration hint; a dev-server PID/session is not.
+    private(set) var featurePreviewSessions: [String: String] = [:]
+
     // Stores (composition root). Set in configure() on the main actor.
     private(set) var projects: ProjectStore!
     private(set) var sessions: SessionStore!
     private(set) var specs: SpecStore!
+    private(set) var features: FeatureStore!
     private(set) var browser: BrowserStore!
     private(set) var webViews: WebViewPool!
     private(set) var extensions: ExtensionStore!
     private(set) var extensionRuntime: ExtensionRuntime!
+    private(set) var extensionWindows: ExtensionWindowManager!
+    private(set) var extensionBuilder: ExtensionBuilder!
 
     /// Outbound-only mobile control plane. The gateway is disabled unless its feature flag is
     /// enabled, so normal desktop launches never make a relay connection.
@@ -102,6 +112,7 @@ final class AppModel {
         projects = ProjectStore()
         sessions = SessionStore(projects: projects)
         specs = SpecStore()
+        features = FeatureStore()
         browser = BrowserStore()
         webViews = WebViewPool()
         webViews.store = browser
@@ -111,10 +122,18 @@ final class AppModel {
         // Session died → its tab/webview go with it (same lifecycle as the terminal pool).
         sessions.onReconciled = { [weak self] live in self?.browser?.pruneSessions(alive: live) }
         extensions = ExtensionStore()
-        extensionRuntime = ExtensionRuntime(store: extensions, appModel: self)
+        extensionWindows = ExtensionWindowManager(store: extensions)
+        extensionRuntime = ExtensionRuntime(store: extensions, windows: extensionWindows, appModel: self)
+        extensionBuilder = ExtensionBuilder(store: extensions, sessions: sessions)
+        extensionWindows.runtime = extensionRuntime
+        extensions.onReload = { [weak self] in self?.extensionWindows?.closeAll() }
+        extensions.onDisabled = { [weak self] id in self?.extensionWindows?.close(extensionId: id) }
         sessions.onSessionsChanged = { [weak self] created, ended in
-            self?.extensionRuntime?.sessionsCreated(created)
-            self?.extensionRuntime?.sessionsEnded(ended)
+            guard let self else { return }
+            self.extensionRuntime?.sessionsCreated(
+                created.filter { !self.extensionBuilder.ownsSession($0.name) })
+            self.extensionRuntime?.sessionsEnded(
+                ended.filter { !self.extensionBuilder.ownsSession($0) })
         }
         sessions.start()
         isReady = true
@@ -365,6 +384,22 @@ final class AppModel {
         sessions?.setAlias(name, alias)
     }
 
+    /// Manually mark a session as checked/read. For input or decision prompts this behaves like
+    /// a successful reply: the pending card state is cleared and the session returns to working.
+    func markSessionChecked(_ name: String) {
+        guard let session = sessions?.session(named: name) else { return }
+        sessions?.acknowledge(name)
+        if case .pending(let attention) = session.attention {
+            switch attention.kind {
+            case .decision, .input:
+                sessions?.applyAttention(name: name, .working)
+            case .finished:
+                sessions?.applyAttention(name: name, .idle)
+            }
+        }
+        clearSessionNotifications?(name)
+    }
+
     /// Spin off a git worktree for a project (from a `+branch` message) and start a session in
     /// it. Returns nil on success, or a short error message for the caller to show.
     @discardableResult
@@ -415,6 +450,21 @@ final class AppModel {
         } else {
             browser.open(url: url, session: session, markUnseen: true)
         }
+    }
+
+    /// Open a project-configured URL directly in the selected session's embedded browser.
+    func openConfiguredURL(_ url: URL, for session: String) {
+        browser?.open(url: url, session: session)
+        if !panelVisible {
+            panelController?.show(preselecting: session)
+        }
+    }
+
+    @discardableResult
+    func addConfiguredURL(projectRoot: String, rawURL: String, label: String? = nil) throws -> PassConfigStore.URLItem {
+        let item = try PassConfigStore.addURL(projectRoot: projectRoot, rawURL: rawURL, label: label)
+        configRevision &+= 1
+        return item
     }
 
     // MARK: Project registration
@@ -708,5 +758,171 @@ final class AppModel {
         default:
             break
         }
+    }
+
+    // MARK: Executable feature documents
+
+    enum FeatureAgentAction {
+        case implement
+        case verify
+        case rework(feedback: String)
+    }
+
+    enum FeatureActionResult: Equatable {
+        case success(String)
+        case failure(String)
+    }
+
+    func previewSession(projectRoot: String, featureID: String) -> Session? {
+        guard let name = featurePreviewSessions[featureRuntimeKey(projectRoot, featureID)] else { return nil }
+        return sessions?.session(named: name)
+    }
+
+    /// Start the document's development command only after the user explicitly clicks Run.
+    /// Working directories are resolved by FeatureStore and cannot escape the project root.
+    func startFeaturePreview(projectRoot: String, featureID: String) async -> FeatureActionResult {
+        features.reload(projectRoot: projectRoot)
+        guard let document = features.document(projectRoot: projectRoot, id: featureID) else {
+            return .failure("Feature document not found.")
+        }
+        let command = document.development.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else { return .failure("Add a development command first.") }
+        guard let cwd = features.developmentWorkingDirectory(for: document, projectRoot: projectRoot) else {
+            return .failure("Working directory must stay inside the project.")
+        }
+
+        let key = featureRuntimeKey(projectRoot, featureID)
+        if let existing = featurePreviewSessions[key], sessions.session(named: existing) != nil {
+            return .success(existing)
+        }
+        let name = await sessions.createCommandSession(
+            projectDir: cwd,
+            slug: "preview-\(featureID)",
+            command: command
+        )
+        featurePreviewSessions[key] = name
+        sessions.setAlias(name, "Preview · \(document.title)")
+        return .success(name)
+    }
+
+    func stopFeaturePreview(projectRoot: String, featureID: String) {
+        let key = featureRuntimeKey(projectRoot, featureID)
+        guard let name = featurePreviewSessions.removeValue(forKey: key) else { return }
+        killSession(name)
+    }
+
+    func openFeatureURL(_ rawURL: String) -> Bool {
+        guard let url = URL(string: rawURL),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme) else { return false }
+        return NSWorkspace.shared.open(url)
+    }
+
+    func revealFeatureFile(projectRoot: String, featureID: String) {
+        let url = features.fileURL(projectRoot: projectRoot, id: featureID)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    /// Give an agent the JSON document as its contract. The same path is used for implementation,
+    /// verification and human-requested rework, and the agent must write its evidence back into
+    /// the document so status is visible without scraping prose from a terminal.
+    func runFeatureAgent(
+        projectRoot: String,
+        featureID: String,
+        action: FeatureAgentAction
+    ) async -> FeatureActionResult {
+        features.reload(projectRoot: projectRoot)
+        guard var document = features.document(projectRoot: projectRoot, id: featureID) else {
+            return .failure("Feature document not found.")
+        }
+
+        let feedback: String?
+        switch action {
+        case .implement:
+            document.status = .implementing
+            feedback = nil
+        case .verify:
+            document.status = .verifying
+            feedback = nil
+        case .rework(let text):
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return .failure("Describe what behaved incorrectly.") }
+            document.status = .implementing
+            document.reviews.append(FeatureReview(feedback: trimmed))
+            feedback = trimmed
+        }
+
+        var agent = document.implementation.preferredAgent
+        if !AgentKind.launchable.contains(agent) { agent = .claude }
+        let sessionName: String
+        if let existing = document.implementation.agentSession,
+           let live = sessions.session(named: existing), live.agent != .shell {
+            sessionName = existing
+            agent = live.agent
+        } else {
+            sessionName = await sessions.createSession(projectDir: projectRoot, agent: agent)
+        }
+        document.implementation.agentSession = sessionName
+
+        do {
+            try features.save(document, projectRoot: projectRoot)
+        } catch {
+            return .failure("Could not update feature status: \(error.localizedDescription)")
+        }
+
+        let prompt = featureAgentPrompt(document: document, projectRoot: projectRoot,
+                                        action: action, feedback: feedback)
+        // A freshly-created tmux pane briefly reports the login shell while the agent starts.
+        // Retry only that safe refusal; any other delivery result is final.
+        for _ in 0..<20 {
+            let result = await ReplyInjector.shared.sendText(sessionName, agent: agent, text: prompt)
+            switch result {
+            case .delivered:
+                sessions.applyAttention(name: sessionName, .working)
+                return .success(sessionName)
+            case .refusedShell:
+                try? await Task.sleep(for: .milliseconds(250))
+            case .error(let message):
+                return .failure(message)
+            }
+        }
+        return .failure("The agent did not become ready. Open the session and check its launch command.")
+    }
+
+    private func featureRuntimeKey(_ projectRoot: String, _ featureID: String) -> String {
+        projectRoot + "\u{1f}" + featureID
+    }
+
+    private func featureAgentPrompt(document: FeatureDocument, projectRoot: String,
+                                    action: FeatureAgentAction, feedback: String?) -> String {
+        let relativePath = ".pass/features/\(document.id).json"
+        let intent: String
+        switch action {
+        case .implement:
+            intent = "Implement this feature completely."
+        case .verify:
+            intent = "Inspect the current implementation and verify every acceptance criterion. Fix only issues required by the document."
+        case .rework:
+            intent = "The human review found incorrect behavior. Reproduce it and revise the implementation."
+        }
+
+        var lines = [
+            "Pass feature task: \(intent)",
+            "Project root: \(projectRoot)",
+            "Contract file: \(relativePath)",
+            "",
+            "Read the JSON contract before changing code. Work only inside this project and preserve the document id/schema.",
+            "Implement the requirements, then verify every acceptance criterion and run the development.testCommand when present.",
+            "Before finishing, update the same JSON file atomically:",
+            "- set status to needsReview when the work is ready for a human, or blocked if you cannot proceed",
+            "- write a concise implementation.summary",
+            "- list every changed project-relative path in implementation.files",
+            "- replace implementation.checks with one passed/failed/pending evidence record per criterion or command",
+            "- never set status to verified; only the human reviewer may do that",
+        ]
+        if let feedback {
+            lines += ["", "Human review feedback (treat as required reproduction evidence):", feedback]
+        }
+        return lines.joined(separator: "\n")
     }
 }

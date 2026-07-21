@@ -16,6 +16,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated { launch() }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            appModel.sessions?.flushSave()
+        }
+    }
+
     @MainActor
     private func launch() {
         // Accessory app: no Dock icon, no app-switcher entry. (LSUIElement also sets this.)
@@ -121,7 +127,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
                 Task { await notifications.notify(session: name, kind: att.kind.rawValue,
                                                   title: display, body: body, sound: sound) }
-                appModel.extensionRuntime?.attentionPending(sessionName: name, attention: att)
+                appModel.extensionBuilder?.attentionPending(sessionName: name, attention: att)
+                if appModel.sessions?.isEphemeral(name) != true,
+                   appModel.extensionBuilder?.ownsSession(name) != true {
+                    appModel.extensionRuntime?.attentionPending(sessionName: name, attention: att)
+                }
             },
             onResolved: { name in
                 notifications.clear(session: name, kinds: [
@@ -129,7 +139,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     Attention.Kind.input.rawValue,
                     Attention.Kind.finished.rawValue,
                 ])
-                appModel.extensionRuntime?.attentionResolved(sessionName: name)
+                if appModel.sessions?.isEphemeral(name) != true,
+                   appModel.extensionBuilder?.ownsSession(name) != true {
+                    appModel.extensionRuntime?.attentionResolved(sessionName: name)
+                }
             }
         )
         self.eventRouter = router
@@ -145,7 +158,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 close: { body in await MainActor.run { CLIAPI.close(appModel, body: body) } },
                 tabs: { await MainActor.run { CLIAPI.tabs(appModel) } },
                 screenshot: { body in await CLIAPI.screenshot(appModel, body: body) },
-                read: { body in await CLIAPI.read(appModel, body: body) }
+                read: { body in await CLIAPI.read(appModel, body: body) },
+                validateExtension: { body in await MainActor.run {
+                    CLIAPI.validateExtension(body: body)
+                } },
+                configURLAdd: { body in await MainActor.run { CLIAPI.addConfigURL(appModel, body: body) } }
             )
             await hookServer.start(port: PassConfig.hookPort, share: share, cli: cli)
             appModel.hookServerFailed = !(await hookServer.didBind)

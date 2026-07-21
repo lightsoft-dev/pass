@@ -1,4 +1,12 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(Musl)
+import Musl
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 // Mirrored /cli/* JSON shapes — the app's Sources/Pass/Server/CLIAPI.swift is the source of
 // truth (separate target, no shared framework — same rule as PassShare). Keep the two in sync.
@@ -60,6 +68,33 @@ struct CLIReadResponse: Codable {
     var error: String? = nil
 }
 
+struct CLIExtensionValidateRequest: Codable {
+    var path: String
+}
+
+struct CLIExtensionValidateResponse: Codable {
+    var ok: Bool
+    var id: String? = nil
+    var name: String? = nil
+    var permissions: [String] = []
+    var problems: [String] = []
+    var error: String? = nil
+}
+
+struct CLIConfigURLAddRequest: Codable {
+    var session: String? = nil
+    var url: String
+    var label: String? = nil
+}
+
+struct CLIConfigURLAddResponse: Codable {
+    var ok: Bool
+    var rawURL: String? = nil
+    var resolvedURL: String? = nil
+    var label: String? = nil
+    var error: String? = nil
+}
+
 /// Exit codes (BROWSER.md §5.3): 0 ok · 1 pass refused (reason on stderr) · 2 usage /
 /// no target session · 3 pass not running.
 enum PassExit {
@@ -87,6 +122,7 @@ enum PassClient {
     }
 
     private static func tmuxSessionName() -> String? {
+        #if canImport(Darwin)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["tmux", "display-message", "-p", "#S"]
@@ -99,6 +135,45 @@ enum PassClient {
         let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return out.isEmpty ? nil : out
+        #else
+        // Foundation.Process.waitUntilExit hangs under the Static Linux SDK (musl) —
+        // fork/execve directly. Mirror of Core/Shell.swift's forkExecWait; keep in sync.
+        let outPath = NSTemporaryDirectory() + "passcli-tmux-\(UUID().uuidString).out"
+        FileManager.default.createFile(atPath: outPath, contents: nil)
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+        guard let outFH = FileHandle(forWritingAtPath: outPath) else { return nil }
+
+        let argvStrings: [String] = ["/usr/bin/env", "tmux", "display-message", "-p", "#S"]
+        var argvC: [UnsafeMutablePointer<CChar>?] = argvStrings.map { strdup($0) }
+        argvC.append(nil)
+        var envpC: [UnsafeMutablePointer<CChar>?] =
+            ProcessInfo.processInfo.environment.map { strdup("\($0.key)=\($0.value)") }
+        envpC.append(nil)
+        defer {
+            argvC.forEach { free($0) }
+            envpC.forEach { free($0) }
+        }
+
+        let pid = fork()
+        if pid == 0 {
+            let devnull = open("/dev/null", O_RDWR)
+            if devnull >= 0 { _ = dup2(devnull, 0); _ = dup2(devnull, 2) }
+            _ = dup2(outFH.fileDescriptor, 1)
+            _ = execve(argvC[0], argvC, envpC)
+            _exit(127)
+        }
+        outFH.closeFile()
+        guard pid > 0 else { return nil }
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) == -1 {
+            if errno != EINTR { return nil }
+        }
+        guard (status & 0x7f) == 0, (status >> 8) & 0xff == 0 else { return nil }
+        guard let data = FileManager.default.contents(atPath: outPath) else { return nil }
+        let out = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return out.isEmpty ? nil : out
+        #endif
     }
 
     static func post<Request: Encodable, Response: Decodable>(

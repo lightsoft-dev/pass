@@ -9,7 +9,7 @@ import Observation
 /// the enforcement).
 @MainActor
 @Observable
-final class ExtensionRuntime {
+final class ExtensionRuntime: ExtensionWindowRuntime {
     struct LogEntry: Identifiable {
         let id = UUID()
         let date: Date
@@ -25,15 +25,18 @@ final class ExtensionRuntime {
     private static let logCap = 50
 
     private let store: ExtensionStore
+    private let windows: ExtensionWindowManager
     private weak var appModel: AppModel?
+    private var eventSequence: UInt64 = 0
 
     /// Sessions with a dispatched attention.pending that hasn't resolved yet. EventRouter's
     /// onResolved fires on EVERY started/ended hook (fine for its original job, idempotent
     /// notification clearing) — extensions only get real pending→resolved transitions.
     private var pendingSessions: Set<String> = []
 
-    init(store: ExtensionStore, appModel: AppModel) {
+    init(store: ExtensionStore, windows: ExtensionWindowManager, appModel: AppModel) {
         self.store = store
+        self.windows = windows
         self.appModel = appModel
     }
 
@@ -75,9 +78,13 @@ final class ExtensionRuntime {
     }
 
     private func dispatch(event: String, kind: String?, session: Session?, extra: [String: String]) {
+        let ctx = context(event: event, kind: kind, session: session, extra: extra)
+        eventSequence &+= 1
+        windows.publish(name: event, envelope: eventEnvelope(sequence: eventSequence, name: event,
+                                                              kind: kind, session: session,
+                                                              context: ctx))
         let matched = store.activeRules.filter { $0.rule.matches(event: event, kind: kind) }
         guard !matched.isEmpty else { return }
-        let ctx = context(event: event, kind: kind, session: session, extra: extra)
         for (ext, rule) in matched {
             // Fire-and-forget: one slow script must not delay the next rule or the event source.
             Task { [weak self] in
@@ -111,6 +118,42 @@ final class ExtensionRuntime {
         return err
     }
 
+    /// Named manifest actions are the only native capabilities exposed to extension JavaScript.
+    /// UI input becomes `${input.key}` template values; `sessionName` optionally supplies the
+    /// session context required by sendText/session templates.
+    func runNamedAction(extensionId: String, actionId: String,
+                        input: [String: String]) async -> String? {
+        guard let ext = store.activeExtension(id: extensionId) else { return "extension is disabled" }
+        guard let action = ext.manifest.contributes?.actions?[actionId] else {
+            return "unknown action \"\(actionId)\""
+        }
+        let session = input["sessionName"].flatMap { appModel?.sessions?.session(named: $0) }
+        if action.sendText != nil, session == nil { return "action needs input.sessionName" }
+        var extra = ["action.id": actionId]
+        for (key, value) in input { extra["input." + key] = value }
+        let ctx = context(event: nil, kind: nil, session: session, extra: extra)
+        let error = await execute(action, extensionId: extensionId,
+                                  permissions: Set(ext.manifest.permissions ?? []),
+                                  directory: ext.directory, slug: actionId,
+                                  label: "\(ext.manifest.name): \(actionId)",
+                                  context: ctx, session: session)
+        log(extensionId, "action \(actionId) → \(action.summary)",
+            ok: error == nil, detail: error)
+        return error
+    }
+
+    /// Read-only state exposed only when a window declared `session:read`.
+    func webSnapshot(extensionId: String, permissions: Set<String>) -> [String: Any] {
+        guard permissions.contains("session:read"), store.activeExtension(id: extensionId) != nil else {
+            return ["schemaVersion": 1, "sessions": []]
+        }
+        return [
+            "schemaVersion": 1,
+            "generatedAt": Self.iso8601.string(from: Date()),
+            "sessions": (appModel?.sessions?.sessions ?? []).map(Self.sessionPayload),
+        ]
+    }
+
     // MARK: Template context
 
     private func context(event: String?, kind: String?, session: Session?,
@@ -129,6 +172,52 @@ final class ExtensionRuntime {
         }
         for (k, v) in extra { ctx[k] = v }
         return ctx
+    }
+
+    private func eventEnvelope(sequence: UInt64, name: String, kind: String?, session: Session?,
+                               context: [String: String]) -> [String: Any] {
+        var event: [String: Any] = [
+            "schemaVersion": 1,
+            "sequence": sequence,
+            "name": name,
+            "occurredAt": Self.iso8601.string(from: Date()),
+            "context": context,
+        ]
+        if let kind { event["kind"] = kind }
+        if let session { event["session"] = Self.sessionPayload(session) }
+        return event
+    }
+
+    private static let iso8601: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static func sessionPayload(_ session: Session) -> [String: Any] {
+        var payload: [String: Any] = [
+            "name": session.name,
+            "displayName": session.displayName,
+            "projectRoot": session.projectRoot,
+            "cwd": session.cwd,
+            "agent": session.agent.rawValue,
+            "lastActivity": iso8601.string(from: session.lastActivity),
+            "isAttached": session.isAttached,
+            "needsUser": session.needsUser,
+        ]
+        if let branch = session.git?.branch { payload["branch"] = branch }
+        switch session.attention {
+        case .working: payload["attention"] = ["state": "working"]
+        case .idle: payload["attention"] = ["state": "idle"]
+        case .pending(let attention):
+            payload["attention"] = [
+                "state": "pending",
+                "kind": attention.kind.rawValue,
+                "preview": attention.preview,
+                "receivedAt": iso8601.string(from: attention.receivedAt),
+            ]
+        }
+        return payload
     }
 
     // MARK: Execution
@@ -188,6 +277,14 @@ final class ExtensionRuntime {
             guard let u = URL(string: expanded) else { return "bad URL: \(expanded)" }
             NSWorkspace.shared.open(u)
             return nil
+        }
+
+        if let windowId = action.openWindow {
+            guard let ext = store.activeExtension(id: extensionId) else { return "extension is disabled" }
+            guard let window = ext.manifest.contributes?.windows?.first(where: { $0.id == windowId }) else {
+                return "unknown window \"\(windowId)\""
+            }
+            return windows.open(extension: ext, window: window)
         }
 
         return "action has nothing to run"

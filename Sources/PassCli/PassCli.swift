@@ -15,7 +15,7 @@ struct PassCli: AsyncParsableCommand {
         $PASS_PORT), so the app must be running.
         """,
         version: "0.1.0",
-        subcommands: [Browser.self, Status.self, Advertise.self]
+        subcommands: [Browser.self, Config.self, ExtensionCommand.self, Status.self, Advertise.self]
     )
 }
 
@@ -77,6 +77,8 @@ struct Advertise: AsyncParsableCommand {
         - "\(cli)" browser screenshot -o <path>.png — capture what the user currently sees, \
         then read that file to check your frontend work
         - "\(cli)" browser read — the open page as plain text
+        - "\(cli)" config url add <url> --label <name> — save a project URL into \
+        pass-config.json so it appears in the session URL bar
         It shows pages to the human — it is NOT a browser-automation tool (no clicking, no JS).
         """
         let payload: [String: Any] = [

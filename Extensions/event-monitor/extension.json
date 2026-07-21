@@ -1,0 +1,47 @@
+{
+  "apiVersion": 2,
+  "id": "event-monitor",
+  "name": "Event Monitor",
+  "version": "0.1.0",
+  "description": "독립 Web UI 창에서 현재 세션과 pass 이벤트 스트림을 확인하는 예제",
+  "permissions": [
+    "ui:window",
+    "session:read",
+    "events:attention",
+    "events:session",
+    "notify"
+  ],
+  "contributes": {
+    "windows": [
+      {
+        "id": "monitor",
+        "title": "Pass Event Monitor",
+        "entry": "ui/index.html",
+        "width": 1040,
+        "height": 680,
+        "subscriptions": [
+          "attention.pending",
+          "attention.resolved",
+          "session.created",
+          "session.ended"
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "id": "events",
+        "title": "Event Monitor 열기",
+        "context": "global",
+        "run": { "openWindow": "monitor" }
+      }
+    ],
+    "actions": {
+      "ping": {
+        "notify": {
+          "title": "Event Monitor",
+          "body": "${input.message}"
+        }
+      }
+    }
+  }
+}
