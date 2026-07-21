@@ -217,8 +217,8 @@ actor TmuxClient: TerminalPaneAccess {
         // local buffer has nothing to scroll). Mouse mode turns wheel/trackpad scrolling into
         // tmux copy-mode scrolling — SwiftTerm forwards the events via the xterm protocol.
         await run(["set-option", "-t", name, "mouse", "on"])
-        // Mouse-drag copy: the default MouseDragEnd1Pane binding is copy-pipe-and-cancel,
-        // which pipes the selection to `copy-command` — point it at the macOS clipboard.
+        // Option-drag copy: normal drags are persistent local SwiftTerm selections. The default
+        // MouseDragEnd1Pane binding pipes an explicit tmux selection to `copy-command`.
         await run(["set-option", "-s", "copy-command", "pbcopy"])
     }
 
