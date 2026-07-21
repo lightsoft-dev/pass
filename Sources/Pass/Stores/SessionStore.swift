@@ -129,6 +129,7 @@ final class SessionStore {
     func stop() {
         pollTask?.cancel()
         stopRemoteStreaming()
+        flushSave()
     }
 
     // MARK: Restore (survive a tmux server death — reboot / kill-server)
@@ -263,11 +264,12 @@ final class SessionStore {
         // every persisted alias/message/pending state in one save.
         if !next.isEmpty {
             let liveNames = Set(next.map(\.name))
+            let keepNames = liveNames.union(pendingRestore.map(\.name))
             let before = (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count)
-            attentionByName = attentionByName.filter { liveNames.contains($0.key) }
-            lastMessageByName = lastMessageByName.filter { liveNames.contains($0.key) }
-            unacked = unacked.intersection(liveNames)
-            aliasByName = aliasByName.filter { liveNames.contains($0.key) }
+            attentionByName = attentionByName.filter { keepNames.contains($0.key) }
+            lastMessageByName = lastMessageByName.filter { keepNames.contains($0.key) }
+            unacked = unacked.intersection(keepNames)
+            aliasByName = aliasByName.filter { keepNames.contains($0.key) }
             ephemeralSessions = ephemeralSessions.intersection(liveNames)
             // Descriptors track exactly the live launchable-agent sessions. Pruning here (rather
             // than on an empty listing) is deliberate: a session that vanished while others remain
@@ -590,28 +592,36 @@ final class SessionStore {
     /// Debounced write — coalesces bursts of hook events into one save.
     private func scheduleSave() {
         saveTask?.cancel()
-        let attn = attentionByName, last = lastMessageByName
-        let unack = unacked
-        let aliases = aliasByName
-        let descriptors = sessionDescriptors
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled, self != nil else { return }
-            // Load-modify-save: this store owns pending/lastMessages/unacked/aliases/sessions;
-            // fields owned by other stores (browserURLs) must survive our writes.
-            var snap = SessionStatePersistence.load()
-            snap.pending = [:]
-            snap.lastMessages = last
-            snap.unacked = Array(unack)
-            snap.aliases = aliases
-            snap.sessions = Array(descriptors.values)
-            for (name, state) in attn {
-                if case .pending(let a) = state {
-                    snap.pending[name] = .init(kind: a.kind.rawValue, receivedAt: a.receivedAt, preview: a.preview)
-                }
+            await MainActor.run {
+                guard !Task.isCancelled, self != nil else { return }
+                self?.writeSnapshot()
             }
-            SessionStatePersistence.save(snap)
         }
+    }
+
+    func flushSave() {
+        saveTask?.cancel()
+        saveTask = nil
+        writeSnapshot()
+    }
+
+    private func writeSnapshot() {
+        // Load-modify-save: this store owns pending/lastMessages/unacked/aliases/sessions;
+        // fields owned by other stores (browserURLs) must survive our writes.
+        var snap = SessionStatePersistence.load()
+        snap.pending = [:]
+        snap.lastMessages = lastMessageByName
+        snap.unacked = Array(unacked)
+        snap.aliases = aliasByName
+        snap.sessions = Array(sessionDescriptors.values)
+        for (name, state) in attentionByName {
+            if case .pending(let a) = state {
+                snap.pending[name] = .init(kind: a.kind.rawValue, receivedAt: a.receivedAt, preview: a.preview)
+            }
+        }
+        SessionStatePersistence.save(snap)
     }
 
     /// Resolve a hook event to a session name: trust the header hint (it's our env var),

@@ -74,6 +74,20 @@ struct CLIExtensionValidateResponse: Codable {
     var error: String? = nil
 }
 
+struct CLIConfigURLAddRequest: Codable {
+    var session: String? = nil
+    var url: String
+    var label: String? = nil
+}
+
+struct CLIConfigURLAddResponse: Codable {
+    var ok: Bool
+    var rawURL: String? = nil
+    var resolvedURL: String? = nil
+    var label: String? = nil
+    var error: String? = nil
+}
+
 /// Serves passcli: opens/closes/lists embedded-browser pages and the observation verbs
 /// (screenshot/read). Always answers 200 + `{ok,…}` JSON — errors ride in the body so the
 /// CLI can print them verbatim. Loopback-only, same trust posture as /hook/* and /share/*:
@@ -256,6 +270,38 @@ enum CLIAPI {
             name: manifest.name,
             permissions: (manifest.permissions ?? []).sorted(),
             problems: problems))
+    }
+
+    // MARK: project config
+
+    static func addConfigURL(_ appModel: AppModel, body: Data) -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes else {
+            return encode(CLIConfigURLAddResponse(ok: false, error: "request too large"))
+        }
+        guard let req = try? JSONDecoder().decode(CLIConfigURLAddRequest.self, from: body) else {
+            return encode(CLIConfigURLAddResponse(ok: false, error: "bad request"))
+        }
+        guard req.url.utf8.count <= PassConfig.cliMaxURLBytes else {
+            return encode(CLIConfigURLAddResponse(ok: false, error: "url too long"))
+        }
+        guard let session = target(appModel, req.session) else {
+            return encode(CLIConfigURLAddResponse(ok: false, error: missingSession(req.session)))
+        }
+        do {
+            let item = try appModel.addConfiguredURL(
+                projectRoot: session.projectRoot,
+                rawURL: req.url,
+                label: req.label
+            )
+            return encode(CLIConfigURLAddResponse(
+                ok: true,
+                rawURL: item.rawURL,
+                resolvedURL: item.url.absoluteString,
+                label: item.label
+            ))
+        } catch {
+            return encode(CLIConfigURLAddResponse(ok: false, error: error.localizedDescription))
+        }
     }
 
     // MARK: helpers

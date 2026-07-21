@@ -23,6 +23,8 @@ final class AppModel {
 
     /// Set once services are wired, so views can react.
     var isReady: Bool = false
+    /// Bumped when a project-local pass-config.json changes so views re-read shared settings.
+    var configRevision: Int = 0
 
     /// When a notification is clicked, the session to preselect on next panel show.
     var pendingPreselect: String?
@@ -375,6 +377,22 @@ final class AppModel {
         sessions?.setAlias(name, alias)
     }
 
+    /// Manually mark a session as checked/read. For input or decision prompts this behaves like
+    /// a successful reply: the pending card state is cleared and the session returns to working.
+    func markSessionChecked(_ name: String) {
+        guard let session = sessions?.session(named: name) else { return }
+        sessions?.acknowledge(name)
+        if case .pending(let attention) = session.attention {
+            switch attention.kind {
+            case .decision, .input:
+                sessions?.applyAttention(name: name, .working)
+            case .finished:
+                sessions?.applyAttention(name: name, .idle)
+            }
+        }
+        clearSessionNotifications?(name)
+    }
+
     /// Spin off a git worktree for a project (from a `+branch` message) and start a session in
     /// it. Returns nil on success, or a short error message for the caller to show.
     @discardableResult
@@ -425,6 +443,21 @@ final class AppModel {
         } else {
             browser.open(url: url, session: session, markUnseen: true)
         }
+    }
+
+    /// Open a project-configured URL directly in the selected session's embedded browser.
+    func openConfiguredURL(_ url: URL, for session: String) {
+        browser?.open(url: url, session: session)
+        if !panelVisible {
+            panelController?.show(preselecting: session)
+        }
+    }
+
+    @discardableResult
+    func addConfiguredURL(projectRoot: String, rawURL: String, label: String? = nil) throws -> PassConfigStore.URLItem {
+        let item = try PassConfigStore.addURL(projectRoot: projectRoot, rawURL: rawURL, label: label)
+        configRevision &+= 1
+        return item
     }
 
     // MARK: Project registration

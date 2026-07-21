@@ -30,8 +30,9 @@ final class ProjectStore {
 
     /// Register a project (or move it to the front if already known).
     func remember(rootPath: String) {
+        let existingEmoji = projects.first { $0.rootPath == rootPath }?.emoji
         projects.removeAll { $0.rootPath == rootPath }
-        projects.insert(Project(rootPath: rootPath), at: 0)
+        projects.insert(Project(rootPath: rootPath, emoji: existingEmoji), at: 0)
         save()
         onRemoteStateChanged?()
     }

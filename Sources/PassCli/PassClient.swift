@@ -73,6 +73,20 @@ struct CLIExtensionValidateResponse: Codable {
     var error: String? = nil
 }
 
+struct CLIConfigURLAddRequest: Codable {
+    var session: String? = nil
+    var url: String
+    var label: String? = nil
+}
+
+struct CLIConfigURLAddResponse: Codable {
+    var ok: Bool
+    var rawURL: String? = nil
+    var resolvedURL: String? = nil
+    var label: String? = nil
+    var error: String? = nil
+}
+
 /// Exit codes (BROWSER.md §5.3): 0 ok · 1 pass refused (reason on stderr) · 2 usage /
 /// no target session · 3 pass not running.
 enum PassExit {

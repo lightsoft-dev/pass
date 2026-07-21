@@ -210,6 +210,10 @@ struct CommandView: View {
                   appModel.browser?.visibleTab(for: name) != nil else { return true }
             appModel.browser?.expanded.toggle()
             return true
+        case .markChecked:
+            guard let name = workspaceSessionName else { return true }
+            appModel.markSessionChecked(name)
+            return true
         default:
             break
         }
@@ -305,6 +309,8 @@ struct CommandView: View {
             // ⌘⌫ → confirm killing the selected session.
             if let s = selectedSession { pendingKill = s }
             return true
+        case .markChecked:
+            return true // handled before the route guard
         case .escape:
             if pendingKill != nil { pendingKill = nil; return true }
             if typingInBar {
@@ -594,6 +600,7 @@ struct CommandView: View {
                         ForEach(Array(orderedSessions.enumerated()), id: \.element.id) { idx, s in
                             CompactSessionCard(session: s, selected: idx == selection,
                                                onSelect: { selection = idx },
+                                               onMarkChecked: { appModel.markSessionChecked(s.name) },
                                                onDelete: { pendingKill = s },
                                                onSpecs: { route = .specs(s.projectRoot) },
                                                browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
@@ -621,11 +628,13 @@ struct CommandView: View {
                                     FocusedSessionCard(
                                         session: s,
                                         terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
+                                        onMarkChecked: { appModel.markSessionChecked(s.name) },
                                         onDelete: { pendingKill = s },
                                         onSpecs: { route = .specs(s.projectRoot) }
                                     )
                                 } else {
                                     CompactSessionCard(session: s, onSelect: { selection = idx },
+                                                       onMarkChecked: { appModel.markSessionChecked(s.name) },
                                                        browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
                                 }
                             }
@@ -734,7 +743,7 @@ struct CommandView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Divider()
-            Text("drag select · ⌘C copy · ⌥drag tmux · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text("drag select · ⌘C copy · ⌥drag tmux · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 8).padding(.vertical, 3)
         }
@@ -1015,6 +1024,7 @@ enum FieldEditorFix {
 struct FocusedSessionCard: View {
     let session: Session
     var terminal: TerminalController?
+    var onMarkChecked: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     var onSpecs: (() -> Void)? = nil
 
@@ -1026,7 +1036,7 @@ struct FocusedSessionCard: View {
             header
                 .padding(.horizontal, 12).padding(.top, 10)
             terminalBody // full-bleed: the terminal spans the card edge-to-edge
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text("keys go to the session · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 12).padding(.bottom, 8)
         }
@@ -1034,14 +1044,13 @@ struct FocusedSessionCard: View {
         .background(Color.primary.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            // Focused → accent border. A session still WAITING on you → a stronger orange one
-            // that stays until the input is actually answered (merely selecting/passing over
-            // the session doesn't clear it).
+            // This is the focused session, so selection wins over needs-you coloring.
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(session.needsUser || session.unacknowledged
-                              ? Color.orange : Color.accentColor.opacity(0.6),
+                              ? Color.accentColor : Color.accentColor.opacity(0.6),
                               lineWidth: session.needsUser || session.unacknowledged ? 2 : 1.5)
         )
+        .contextMenu { sessionMenu(rename: { renaming = true }) }
     }
 
     @ViewBuilder
@@ -1119,6 +1128,25 @@ struct FocusedSessionCard: View {
         if case .pending(let a) = session.attention { return a.receivedAt }
         return session.lastActivity
     }
+
+    @ViewBuilder
+    private func sessionMenu(rename: @escaping () -> Void) -> some View {
+        if let onMarkChecked {
+            Button("Mark Checked") { onMarkChecked() }
+                .keyboardShortcut("m", modifiers: .command)
+        }
+        Button("Rename...") { rename() }
+        ConfigURLContextMenu(session: session)
+        if let onSpecs {
+            Button("Project Specs") { onSpecs() }
+                .keyboardShortcut("d", modifiers: .command)
+        }
+        if onDelete != nil { Divider() }
+        if let onDelete {
+            Button("Delete", role: .destructive) { onDelete() }
+                .keyboardShortcut(.delete, modifiers: .command)
+        }
+    }
 }
 
 /// Pencil button + popover for giving a session a custom display name (alias). The alias only
@@ -1139,6 +1167,9 @@ struct SessionRenameButton: View {
         .buttonStyle(.plain).foregroundStyle(.secondary)
         .font(.system(size: 11))
         .help("Rename (display only)")
+        .onChange(of: show) { _, visible in
+            if visible { text = session.customName ?? "" }
+        }
         .popover(isPresented: $show, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Display name").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
@@ -1170,6 +1201,7 @@ struct CompactSessionCard: View {
     let session: Session
     var selected: Bool = false
     var onSelect: () -> Void = {}
+    var onMarkChecked: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     var onSpecs: (() -> Void)? = nil
     /// An agent opened/updated this session's browser page and the user hasn't seen it yet.
@@ -1219,14 +1251,15 @@ struct CompactSessionCard: View {
         .background(selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.03))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
-            // Waiting on you → orange border that stays until the input is answered (passing
-            // over the row doesn't clear it); else the selected row gets an accent border so
-            // you can see which session the keyboard targets.
+            // Selected rows use the accent border even while waiting; unselected waiting rows
+            // keep the needs-you border until the input is answered.
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(session.needsUser || session.unacknowledged ? Color.orange : Color.accentColor,
+                .strokeBorder(selected ? Color.accentColor :
+                              (session.needsUser || session.unacknowledged ? Color.orange : Color.accentColor),
                               lineWidth: session.needsUser || session.unacknowledged ? 1.5 : 1)
-                .opacity(session.needsUser || session.unacknowledged ? 1 : (selected ? 1 : 0))
+                .opacity(selected || session.needsUser || session.unacknowledged ? 1 : 0)
         )
+        .contextMenu { sessionMenu(rename: { renaming = true }) }
     }
 
     @ViewBuilder
@@ -1265,12 +1298,60 @@ struct CompactSessionCard: View {
         return session.lastActivity
     }
 
+    @ViewBuilder
+    private func sessionMenu(rename: @escaping () -> Void) -> some View {
+        if let onMarkChecked {
+            Button("Mark Checked") { onMarkChecked() }
+                .keyboardShortcut("m", modifiers: .command)
+        }
+        Button("Rename...") { rename() }
+        ConfigURLContextMenu(session: session)
+        if let onSpecs {
+            Button("Project Specs") { onSpecs() }
+                .keyboardShortcut("d", modifiers: .command)
+        }
+        if onDelete != nil { Divider() }
+        if let onDelete {
+            Button("Delete", role: .destructive) { onDelete() }
+                .keyboardShortcut(.delete, modifiers: .command)
+        }
+    }
+
     private var urgencyColor: Color {
         guard case .pending(let a) = session.attention, a.kind != .finished else { return .secondary }
         let mins = Date().timeIntervalSince(a.receivedAt) / 60
         if mins > 10 { return .red }
         if mins > 2 { return .orange }
         return .secondary
+    }
+}
+
+private struct ConfigURLContextMenu: View {
+    let session: Session
+    @Environment(AppModel.self) private var appModel
+
+    private var items: [PassConfigStore.URLItem] {
+        _ = appModel.configRevision
+        return PassConfigStore.urls(projectRoot: session.projectRoot)
+    }
+
+    var body: some View {
+        Menu("URLs") {
+            if items.isEmpty {
+                Button("No URLs") {}
+                    .disabled(true)
+            } else {
+                ForEach(items) { item in
+                    Button(item.label) {
+                        appModel.openConfiguredURL(item.url, for: session.name)
+                    }
+                }
+                Divider()
+            }
+            Button("Add URL...") {
+                ConfigURLDialog.addURL(for: session, appModel: appModel)
+            }
+        }
     }
 }
 
