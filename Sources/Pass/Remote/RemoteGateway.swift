@@ -15,6 +15,20 @@ enum RemoteGatewayEnvironmentKey {
     static let authorizationToken = "PASS_REMOTE_TOKEN"
 }
 
+struct DeveloperPairingPayload: Encodable {
+    let v = RemoteProtocolVersion.current
+    let relayURL: String
+    let desktopID: String
+    let authorizationToken: String
+
+    private enum CodingKeys: String, CodingKey {
+        case v
+        case relayURL = "relayUrl"
+        case desktopID = "desktopId"
+        case authorizationToken
+    }
+}
+
 enum RemoteGatewayConfigurationError: Error, Equatable, LocalizedError {
     case missingRelayURL
     case missingDesktopID

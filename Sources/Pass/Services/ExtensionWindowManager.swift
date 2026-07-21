@@ -2,6 +2,12 @@ import AppKit
 import Foundation
 import WebKit
 
+@MainActor
+protocol ExtensionWindowRuntime: AnyObject {
+    func webSnapshot(extensionId: String, permissions: Set<String>) -> [String: Any]
+    func runNamedAction(extensionId: String, actionId: String, input: [String: String]) async -> String?
+}
+
 /// Owns extension HTML windows. The app owns the NSWindow/WKWebView lifecycle; an extension owns
 /// only local HTML/CSS/JS and communicates through a small JSON bridge.
 @MainActor
@@ -13,7 +19,7 @@ final class ExtensionWindowManager {
 
     private let store: ExtensionStore
     private var controllers: [Key: ExtensionWebWindowController] = [:]
-    weak var runtime: ExtensionRuntime?
+    weak var runtime: (any ExtensionWindowRuntime)?
     var openWindowCount: Int { controllers.count }
 
     init(store: ExtensionStore) {

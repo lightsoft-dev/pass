@@ -9,7 +9,7 @@ import Observation
 /// the enforcement).
 @MainActor
 @Observable
-final class ExtensionRuntime {
+final class ExtensionRuntime: ExtensionWindowRuntime {
     struct LogEntry: Identifiable {
         let id = UUID()
         let date: Date

@@ -558,20 +558,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     }
 }
 
-struct DeveloperPairingPayload: Encodable {
-    let v = RemoteProtocolVersion.current
-    let relayURL: String
-    let desktopID: String
-    let authorizationToken: String
-
-    private enum CodingKeys: String, CodingKey {
-        case v
-        case relayURL = "relayUrl"
-        case desktopID = "desktopId"
-        case authorizationToken
-    }
-}
-
 private struct SettingsSidebar: View {
     @Binding var selection: SettingsSection
 
