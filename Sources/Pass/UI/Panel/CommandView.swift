@@ -360,12 +360,18 @@ struct CommandView: View {
         case .list:
             listMode
         case .features:
-            FeatureLibraryView(
-                onBack: { route = .list; focusSoon() },
-                onOpen: { root, id in route = .feature(projectRoot: root, id: id) }
-            )
+            if PassConfig.enableFeatureDocuments {
+                FeatureLibraryView(
+                    onBack: { route = .list; focusSoon() },
+                    onOpen: { root, id in route = .feature(projectRoot: root, id: id) }
+                )
+            } else {
+                listMode.onAppear { route = .list; focusSoon() }
+            }
         case .feature(let projectRoot, let id):
-            if let document = appModel.features?.document(projectRoot: projectRoot, id: id) {
+            if !PassConfig.enableFeatureDocuments {
+                listMode.onAppear { route = .list; focusSoon() }
+            } else if let document = appModel.features?.document(projectRoot: projectRoot, id: id) {
                 FeatureDetailView(
                     projectRoot: projectRoot,
                     document: document,
@@ -382,7 +388,9 @@ struct CommandView: View {
                 .onAppear { appModel.features?.reload(projectRoot: projectRoot) }
             }
         case .featureSession(let name, let projectRoot, let id):
-            if let session = sessions.first(where: { $0.name == name }) {
+            if !PassConfig.enableFeatureDocuments {
+                listMode.onAppear { route = .list; focusSoon() }
+            } else if let session = sessions.first(where: { $0.name == name }) {
                 SessionDetailView(session: session) {
                     route = .feature(projectRoot: projectRoot, id: id)
                 }
@@ -421,15 +429,17 @@ struct CommandView: View {
                     Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(.secondary)
                     Text("Sessions").font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    Button {
-                        query = ""
-                        route = .features
-                    } label: {
-                        Label("Features", systemImage: "doc.text.magnifyingglass")
+                    if PassConfig.enableFeatureDocuments {
+                        Button {
+                            query = ""
+                            route = .features
+                        } label: {
+                            Label("Features", systemImage: "doc.text.magnifyingglass")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Executable software feature documents")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Executable software feature documents")
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 Divider()

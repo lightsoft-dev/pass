@@ -774,6 +774,7 @@ final class AppModel {
     }
 
     func previewSession(projectRoot: String, featureID: String) -> Session? {
+        guard PassConfig.enableFeatureDocuments else { return nil }
         guard let name = featurePreviewSessions[featureRuntimeKey(projectRoot, featureID)] else { return nil }
         return sessions?.session(named: name)
     }
@@ -781,6 +782,9 @@ final class AppModel {
     /// Start the document's development command only after the user explicitly clicks Run.
     /// Working directories are resolved by FeatureStore and cannot escape the project root.
     func startFeaturePreview(projectRoot: String, featureID: String) async -> FeatureActionResult {
+        guard PassConfig.enableFeatureDocuments else {
+            return .failure("Feature documents are disabled.")
+        }
         features.reload(projectRoot: projectRoot)
         guard let document = features.document(projectRoot: projectRoot, id: featureID) else {
             return .failure("Feature document not found.")
@@ -806,12 +810,14 @@ final class AppModel {
     }
 
     func stopFeaturePreview(projectRoot: String, featureID: String) {
+        guard PassConfig.enableFeatureDocuments else { return }
         let key = featureRuntimeKey(projectRoot, featureID)
         guard let name = featurePreviewSessions.removeValue(forKey: key) else { return }
         killSession(name)
     }
 
     func openFeatureURL(_ rawURL: String) -> Bool {
+        guard PassConfig.enableFeatureDocuments else { return false }
         guard let url = URL(string: rawURL),
               let scheme = url.scheme?.lowercased(),
               ["http", "https"].contains(scheme) else { return false }
@@ -819,6 +825,7 @@ final class AppModel {
     }
 
     func revealFeatureFile(projectRoot: String, featureID: String) {
+        guard PassConfig.enableFeatureDocuments else { return }
         let url = features.fileURL(projectRoot: projectRoot, id: featureID)
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
@@ -831,6 +838,9 @@ final class AppModel {
         featureID: String,
         action: FeatureAgentAction
     ) async -> FeatureActionResult {
+        guard PassConfig.enableFeatureDocuments else {
+            return .failure("Feature documents are disabled.")
+        }
         features.reload(projectRoot: projectRoot)
         guard var document = features.document(projectRoot: projectRoot, id: featureID) else {
             return .failure("Feature document not found.")
