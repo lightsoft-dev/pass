@@ -99,6 +99,7 @@ final class AppModel {
     @ObservationIgnored private var remoteAccountService: RemoteAccountService!
 
     weak var panelController: PanelController?
+    weak var mirrorController: MirrorWindowController?
 
     /// Set by AppDelegate — clears a session's delivered notifications.
     var clearSessionNotifications: ((String) -> Void)?
@@ -352,6 +353,11 @@ final class AppModel {
 
     func summon() {
         panelController?.toggle()
+    }
+
+    /// Menu bar → the Vysor-style device mirror window (emulator / real-device screen).
+    func showDeviceMirror() {
+        mirrorController?.show()
     }
 
     func hidePanel() {
