@@ -80,12 +80,12 @@ final class IMETerminalView: LocalProcessTerminalView {
     /// SwiftTerm's wheel handler ONLY scrolls the local buffer — which is empty under tmux
     /// (it redraws in place; history lives on the tmux side), so scrolling did nothing. Its
     /// `scrollWheel` is public-not-open (can't override), so a local event monitor intercepts
-    /// wheel events over these views and — when the app requested mouse reporting (our
+    /// wheel events over these views and — when the terminal requested mouse tracking (our
     /// sessions run `mouse on`) — forwards them to tmux as SGR mouse events, which scroll
-    /// tmux's copy-mode history like any modern terminal. A second monitor temporarily disables
-    /// reporting for a normal drag so SwiftTerm owns a persistent, ⌘C-copyable selection;
-    /// Option-drag keeps the original tmux behavior. It also opens plain-text http(s) URLs on
-    /// ⌘-click (SwiftTerm only handles OSC 8 hyperlinks, which agents don't emit).
+    /// tmux's copy-mode history like any modern terminal. A second monitor keeps normal drags
+    /// as persistent, ⌘C-copyable SwiftTerm selections and temporarily enables reporting for
+    /// Option-drag. It also opens plain-text http(s) URLs on ⌘-click (SwiftTerm only handles
+    /// OSC 8 hyperlinks, which agents don't emit).
     static func installEventBridges() { _ = wheelForwarder; _ = mouseBridge }
 
     private static weak var hoverTerm: IMETerminalView?
