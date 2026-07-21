@@ -7,6 +7,8 @@ import AppKit
 /// the first responder ever sees it, so this works no matter what has focus.
 enum PanelNavKey {
     case up, down, returnKey, escape, tab, delete
+    /// ⌘M — manually mark the selected session as checked.
+    case markChecked
     /// ⌘P — toggle the centered quick command (the home terminal owns plain keys by default).
     case toggleInput
     /// ⇧⇧ (double-tap, routed from DoubleTapHotkey) — hop to the next session waiting on you.
@@ -119,6 +121,11 @@ final class SummonPanel: NSPanel {
             // ⌘D opens the selected session's project spec document.
             if key("d", 2),
                onNavigate?(PanelNavEvent(key: .openSpecs, command: true, option: false)) == true {
+                return true
+            }
+            // ⌘M manually clears the selected session's needs-you state.
+            if key("m", 46),
+               onNavigate?(PanelNavEvent(key: .markChecked, command: true, option: false)) == true {
                 return true
             }
             // ⌘N — new session (quick command in project-pick mode).

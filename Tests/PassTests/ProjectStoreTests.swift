@@ -27,6 +27,18 @@ final class ProjectStoreTests: XCTestCase {
         XCTAssertEqual(store.projects.map(\.rootPath), ["/a", "/b"])
     }
 
+    func testRememberExistingProjectPreservesEmoji() {
+        let (store, _) = makeStore()
+        store.remember(rootPath: "/a")
+        store.remember(rootPath: "/b")
+        store.setEmoji(rootPath: "/a", "🚀")
+
+        store.remember(rootPath: "/a")
+
+        XCTAssertEqual(store.projects.map(\.rootPath), ["/a", "/b"])
+        XCTAssertEqual(store.emoji(forRoot: "/a"), "🚀")
+    }
+
     // MARK: delete
 
     func testForgetRemoves() {

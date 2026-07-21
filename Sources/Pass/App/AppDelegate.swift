@@ -16,6 +16,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated { launch() }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            appModel.sessions?.flushSave()
+        }
+    }
+
     @MainActor
     private func launch() {
         // Accessory app: no Dock icon, no app-switcher entry. (LSUIElement also sets this.)
@@ -145,7 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 close: { body in await MainActor.run { CLIAPI.close(appModel, body: body) } },
                 tabs: { await MainActor.run { CLIAPI.tabs(appModel) } },
                 screenshot: { body in await CLIAPI.screenshot(appModel, body: body) },
-                read: { body in await CLIAPI.read(appModel, body: body) }
+                read: { body in await CLIAPI.read(appModel, body: body) },
+                configURLAdd: { body in await MainActor.run { CLIAPI.addConfigURL(appModel, body: body) } }
             )
             await hookServer.start(port: PassConfig.hookPort, share: share, cli: cli)
             appModel.hookServerFailed = !(await hookServer.didBind)
