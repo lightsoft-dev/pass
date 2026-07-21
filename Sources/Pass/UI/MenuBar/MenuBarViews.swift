@@ -31,7 +31,7 @@ struct MenuBarContent: View {
                 Button("\(agent.glyph) \(agent.rawValue)…") { newSession(agent: agent) }
             }
         }
-        Button("Feature specs…") { appModel.showSpecs() }
+        Button("Specs…") { appModel.showSpecs() }
         Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
         Button("Back up all projects…") { appModel.exportAllProjects(optimizeGit: backupOptimizeGit) }
             .disabled(appModel.isExporting)

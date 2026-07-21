@@ -19,6 +19,9 @@ enum PassConfig {
             .appendingPathComponent(".pass", isDirectory: true)
     }
 
+    /// Executable feature documents are currently disabled in the desktop UI and action layer.
+    static let enableFeatureDocuments = false
+
     /// tmux custom options used to persist project/agent binding across app restarts.
     static let optProjectRoot = "@pass_project_root"
     static let optAgent = "@pass_agent"
