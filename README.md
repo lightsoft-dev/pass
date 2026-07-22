@@ -30,15 +30,34 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
   attachable from any terminal. Worktrees group under their main repo but show a `⧉` badge.
 - **Projects** — register a single repo, a parent folder (scanned for repos), or several at once
   (menu / Settings); live sessions' projects are remembered automatically.
+- **Executable feature documents** — keep software feature contracts in
+  `<project>/.pass/features/*.json`, launch their local development server, follow a human test
+  guide, ask a local agent to implement or verify the contract, and send failed human-review
+  feedback back for rework. Agent summaries, changed files, checks, review history, and lifecycle
+  status stay in JSON so they can be committed or synced later.
 - **Notifications** for permission / input / finished, with the menu-bar badge as a reliable
   always-on fallback.
 - **Settings** (⌘,): rebind the hotkey, launch-at-login, floating toggle, project list, install
-  hooks, notification status.
+  hooks, notification status, and build/review extensions with an AI agent.
 - **Extensions (v1)** — add your own features as manifest+script extensions in
   `~/.pass/extensions`: `>commands` in the quick command (⌘P) and event rules
   (attention/session → script/notify/sendText/openURL), with per-capability permissions and
   an enable-after-review flow. Ships with an **agent-usage** example (`>usage` — Claude Code
-  token usage by day/model/project). Design & schema: `docs/EXTENSIONS.md`.
+  token usage by day/model/project). **Web UI windows (apiVersion 2)** render extension-owned
+  HTML/CSS/JS in a separate macOS window with a constrained snapshot/event/action JSON bridge;
+  the bundled **event-monitor** example opens with `>events`. **AI Extension Builder** turns a
+  natural-language goal into a disabled Claude work session, then shows every generated file and
+  permission for feedback or explicit fingerprint approval. Enabled extensions also appear in the
+  Pass panel's top launcher and the macOS menu-bar menu. Design & schema: `docs/EXTENSIONS.md`.
+- **Device mirror** — a Vysor-style visor window that keeps a device screen visible while you
+  work: pick the iOS Simulator or Android emulator window (or real hardware shown through
+  QuickTime/scrcpy) and it live-mirrors into a compact always-on-top panel locked to the
+  device's aspect ratio. Menu bar → **Device mirror…**; uses ScreenCaptureKit, so macOS will
+  ask for the Screen Recording permission on first use.
+- **Mobile remote developer preview** — an outbound-only macOS gateway, Cloudflare
+  Worker/Durable Object relay, and Expo client can list/create sessions, send messages, and answer
+  decisions. The current shared-token pairing is explicitly development-only; device-key pairing
+  and voice are still follow-up work.
 
 ## Build & run
 
@@ -59,6 +78,13 @@ make logs     # stream the app's OSLog
 2. **Settings › Notifications** — if blocked, enable pass in System Settings.
 3. Summon with ⌥Space, `@` to jump, `New session…` from the menu bar to start one.
 
+## Mobile remote developer preview
+
+The implementation and its security boundary are documented in
+[`docs/mobile-remote-architecture.md`](docs/mobile-remote-architecture.md). Relay setup lives in
+[`relay/README.md`](relay/README.md), and Expo setup lives in
+[`mobile/README.md`](mobile/README.md). No relay is deployed automatically.
+
 ## How it fits together
 
 ```
@@ -75,6 +101,21 @@ Claude Code (in tmux)  ──hooks(HTTP)──►  HookServer (127.0.0.1:49817)
   `/hook/<agent>`, `@pass_agent`, and per-agent glyphs are already wired for Codex/pi in M5).
 - **tmux + git are the database** — pass persists only a small project MRU list; everything else
   (cwd, branch, worktree, agent, activity) is derived live.
+- **Feature JSON is the contract** — the app and local agents read and update the same repository
+  files. A generated `.pass/feature.schema.json` supports validation; project-relative paths keep
+  documents portable, and local development commands run only after an explicit click.
+
+## Executable feature workflow
+
+1. Open **pass › Features**, choose a project, and create or edit a feature.
+2. Add requirements, observable acceptance criteria, a development command/URL, and a short human
+   test guide. The feature is saved as a reviewable JSON file in the project.
+3. Choose **Implement** or **Verify**. pass starts (or reuses) a local agent session and gives the
+   JSON file as its contract. The agent writes its summary, changed paths, check evidence, and
+   `needsReview`/`blocked` status back into that file.
+4. Choose **Start server**, open the local URL, and follow the guide. If behavior is wrong, enter
+   feedback under **Human review** and request changes; pass records it and sends it to the agent.
+5. Only a person can choose **Mark verified**.
 
 ## Design docs & findings
 
@@ -85,3 +126,5 @@ Claude Code (in tmux)  ──hooks(HTTP)──►  HookServer (127.0.0.1:49817)
 - `docs/BROWSER.md` — design (M6, pre-implementation): the embedded browser pane
   (terminal │ WKWebView split) and the `passcli` CLI that lets agents open pages in it
   (`passcli browser open <url>`), plus the S6 spikes to validate before building.
+- `docs/mobile-remote-architecture.md` — implemented developer MVP status plus the secure pairing,
+  hardening, and voice-management roadmap for mobile access.

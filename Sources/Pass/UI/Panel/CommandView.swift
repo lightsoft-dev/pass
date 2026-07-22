@@ -3,8 +3,9 @@ import SwiftUI
 /// Root of the floating panel — a chat-style home over every session, with the SELECTED
 /// session shown as a live terminal: a real `tmux attach` client (colors, styles, cursor),
 /// so every keystroke goes straight into the agent's TUI and all of its features work.
-/// ⌘P summons the quick command (`@` jump, `+branch` worktree, `>command` extensions,
-/// plain text replies); ⌘↑↓ moves between sessions; ⌘⏎ expands the session full-height.
+/// ⌘P summons the quick command (session/project/extension search, `+branch` worktree,
+/// `>command` extension-only search, plain text replies); ⌘↑↓ moves between sessions;
+/// ⌘⏎ expands the session full-height.
 struct CommandView: View {
     @Environment(AppModel.self) private var appModel
     @State private var route: Route = .list
@@ -30,6 +31,9 @@ struct CommandView: View {
         case detail(String)                  // a session's full-height terminal (back → list)
         case specs(String?)                  // spec documents, optionally pinned to a project
         case specSession(String, String)     // session opened FROM specs (name, projectRoot)
+        case features
+        case feature(projectRoot: String, id: String)
+        case featureSession(name: String, projectRoot: String, id: String)
     }
 
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
@@ -37,7 +41,7 @@ struct CommandView: View {
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
     /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
-    /// and is simply stripped). Only `+branch` (worktree) and `>command` (extensions) opt out.
+    /// and is simply stripped). `+branch` starts a worktree; `>command` narrows to extensions.
     private var isJumpMode: Bool { !query.isEmpty && !query.hasPrefix("+") && !query.hasPrefix(">") }
     /// `>` prefix (VS Code's command convention) — the results are extension commands; ⏎ runs
     /// the selected one. NOT `/`: slash-prefixed text must keep flowing to the agent session
@@ -80,12 +84,10 @@ struct CommandView: View {
     /// live sessions are offered; registered projects join once a filter narrows things down
     /// (there are far too many to list unfiltered).
     private var jumpItems: [PaletteItem] {
-        // `>` mode: extension commands (from enabled, valid extensions only).
+        // `>` mode: extension commands only (from enabled, valid extensions).
         if isCommandMode {
             let needle = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
-            return (appModel.extensions?.paletteCommands ?? [])
-                .filter { needle.isEmpty || Fuzzy.matches(needle, $0.command.id) || Fuzzy.matches(needle, $0.command.title) }
-                .map { .command($0) }
+            return matchingExtensionCommands(needle).map { .command($0) }
         }
         let needle = jumpToken.trimmingCharacters(in: .whitespaces)
         // ⌘N mode: the list is PROJECTS to start a session in (all of them until you type).
@@ -126,7 +128,13 @@ struct CommandView: View {
     }
 
     var body: some View {
-        content
+        VStack(spacing: 0) {
+            if appModel.extensions?.activeExtensions.isEmpty == false {
+                ExtensionLauncherBar(contextSession: extensionContextSession)
+                Divider()
+            }
+            content
+        }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -146,8 +154,12 @@ struct CommandView: View {
             .onChange(of: appModel.backToken) { _, _ in
                 switch route {
                 case .specSession(_, let root): route = .specs(root) // ⌘[ steps back one level
-                case .specs, .detail: route = .list; focusSoon()
-                case .list: break
+                case .feature(let root, let id), .featureSession(_, let root, let id):
+                    route = .feature(projectRoot: root, id: id)
+                case .specs, .features, .detail:
+                    route = .list; focusSoon()
+                case .list:
+                    break
                 }
             }
             .onChange(of: appModel.forceOpenSession) { _, s in
@@ -204,6 +216,10 @@ struct CommandView: View {
             guard let name = workspaceSessionName,
                   appModel.browser?.visibleTab(for: name) != nil else { return true }
             appModel.browser?.expanded.toggle()
+            return true
+        case .markChecked:
+            guard let name = workspaceSessionName else { return true }
+            appModel.markSessionChecked(name)
             return true
         default:
             break
@@ -287,7 +303,7 @@ struct CommandView: View {
                     query = ""
                     hideQuickCommand() // action done — watch the new session arrive
                 case .command(let c):
-                    runExtensionCommand(c) // commands only appear in `>` mode, but stay exhaustive
+                    runExtensionCommand(c)
                 }
                 return true
             }
@@ -300,6 +316,8 @@ struct CommandView: View {
             // ⌘⌫ → confirm killing the selected session.
             if let s = selectedSession { pendingKill = s }
             return true
+        case .markChecked:
+            return true // handled before the route guard
         case .escape:
             if pendingKill != nil { pendingKill = nil; return true }
             if typingInBar {
@@ -316,9 +334,23 @@ struct CommandView: View {
     /// The session whose workspace (terminal │ browser) is on screen — browser keys target it.
     private var workspaceSessionName: String? {
         switch route {
-        case .detail(let name), .specSession(let name, _): return name
+        case .detail(let name), .specSession(let name, _), .featureSession(let name, _, _):
+            return name
         case .list: return selectedSession?.name
-        case .specs: return nil
+        case .specs, .features, .feature: return nil
+        }
+    }
+
+    /// Context used by a plugin launched from the top bar. Detail routes target the session
+    /// actually on screen; the home targets its selected card; specs have no session context.
+    private var extensionContextSession: Session? {
+        switch route {
+        case .detail(let name), .specSession(let name, _), .featureSession(let name, _, _):
+            return sessions.first { $0.name == name }
+        case .list:
+            return selectedSession
+        case .specs, .features, .feature:
+            return nil
         }
     }
 
@@ -327,6 +359,44 @@ struct CommandView: View {
         switch route {
         case .list:
             listMode
+        case .features:
+            if PassConfig.enableFeatureDocuments {
+                FeatureLibraryView(
+                    onBack: { route = .list; focusSoon() },
+                    onOpen: { root, id in route = .feature(projectRoot: root, id: id) }
+                )
+            } else {
+                listMode.onAppear { route = .list; focusSoon() }
+            }
+        case .feature(let projectRoot, let id):
+            if !PassConfig.enableFeatureDocuments {
+                listMode.onAppear { route = .list; focusSoon() }
+            } else if let document = appModel.features?.document(projectRoot: projectRoot, id: id) {
+                FeatureDetailView(
+                    projectRoot: projectRoot,
+                    document: document,
+                    onBack: { route = .features },
+                    onOpenSession: {
+                        route = .featureSession(name: $0, projectRoot: projectRoot, id: id)
+                    }
+                )
+            } else {
+                FeatureLibraryView(
+                    onBack: { route = .list; focusSoon() },
+                    onOpen: { root, id in route = .feature(projectRoot: root, id: id) }
+                )
+                .onAppear { appModel.features?.reload(projectRoot: projectRoot) }
+            }
+        case .featureSession(let name, let projectRoot, let id):
+            if !PassConfig.enableFeatureDocuments {
+                listMode.onAppear { route = .list; focusSoon() }
+            } else if let session = sessions.first(where: { $0.name == name }) {
+                SessionDetailView(session: session) {
+                    route = .feature(projectRoot: projectRoot, id: id)
+                }
+            } else {
+                Color.clear.onAppear { route = .feature(projectRoot: projectRoot, id: id) }
+            }
         case .detail(let name):
             if let session = sessions.first(where: { $0.name == name }) {
                 SessionDetailView(session: session) { route = .list; focusSoon() }
@@ -355,6 +425,24 @@ struct CommandView: View {
         GeometryReader { geo in
             VStack(spacing: 0) {
                 if appModel.needsHookInstall { hookBanner }
+                HStack {
+                    Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(.secondary)
+                    Text("Sessions").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    if PassConfig.enableFeatureDocuments {
+                        Button {
+                            query = ""
+                            route = .features
+                        } label: {
+                            Label("Features", systemImage: "doc.text.magnifyingglass")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Executable software feature documents")
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                Divider()
                 if homeMode == .sidebar {
                     // Rows on the LEFT, the live terminal filling the right side.
                     HStack(spacing: 0) {
@@ -540,10 +628,7 @@ struct CommandView: View {
         }
         if isCommandMode {
             if case .command(let c)? = jumpSelectedItem {
-                // Everything but "global" runs against the selected session (runtime rule).
-                let target = c.command.contextKind == "global" ? ""
-                    : (selectedSession.map { " on \($0.displayName)" } ?? " — select a session first")
-                return "⏎ run \(c.token)\(target) · \(c.extensionName)"
+                return commandHint(c)
             }
             return "extension commands · ⏎ run · Esc close"
         }
@@ -551,13 +636,14 @@ struct CommandView: View {
             if jumpItems.isEmpty, let s = selectedSession {
                 return "no matches — ⏎ sends this to \(s.displayName)"
             }
+            if case .command(let c)? = jumpSelectedItem { return commandHint(c) }
             if case .project(let p)? = jumpSelectedItem { return "⏎ new session in \(p.name)" }
             if jumpMessageIsReady, case .session(let s)? = jumpSelectedItem {
                 return "⏎ send to \(s.displayName)"
             }
             return "Tab complete · ⏎ go to session · keep typing to message it"
         }
-        return "type to search · first word filters, the rest is the message · +branch · >command"
+        return "type to search sessions, projects, commands · +branch · >command"
     }
 
     @ViewBuilder
@@ -578,6 +664,7 @@ struct CommandView: View {
                         ForEach(Array(orderedSessions.enumerated()), id: \.element.id) { idx, s in
                             CompactSessionCard(session: s, selected: idx == selection,
                                                onSelect: { selection = idx },
+                                               onMarkChecked: { appModel.markSessionChecked(s.name) },
                                                onDelete: { pendingKill = s },
                                                onSpecs: { route = .specs(s.projectRoot) },
                                                browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
@@ -605,11 +692,13 @@ struct CommandView: View {
                                     FocusedSessionCard(
                                         session: s,
                                         terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
+                                        onMarkChecked: { appModel.markSessionChecked(s.name) },
                                         onDelete: { pendingKill = s },
                                         onSpecs: { route = .specs(s.projectRoot) }
                                     )
                                 } else {
                                     CompactSessionCard(session: s, onSelect: { selection = idx },
+                                                       onMarkChecked: { appModel.markSessionChecked(s.name) },
                                                        browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
                                 }
                             }
@@ -718,7 +807,7 @@ struct CommandView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Divider()
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text("drag select · ⌘C copy · ⌥drag tmux · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 8).padding(.vertical, 3)
         }
@@ -739,7 +828,29 @@ struct CommandView: View {
         for p in projects where !liveRoots.contains(p.rootPath) {
             if needle.isEmpty || Fuzzy.matches(needle, p.name) { out.append(.project(p)) }
         }
+        out.append(contentsOf: matchingExtensionCommands(needle).map { .command($0) })
         return out
+    }
+
+    private func matchingExtensionCommands(_ needleRaw: String) -> [ExtensionStore.PaletteCommand] {
+        let needle = needleRaw.trimmingCharacters(in: .whitespaces)
+        return (appModel.extensions?.paletteCommands ?? []).filter { command in
+            needle.isEmpty || commandMatches(needle, command)
+        }
+    }
+
+    private func commandMatches(_ needle: String, _ command: ExtensionStore.PaletteCommand) -> Bool {
+        Fuzzy.matches(needle, command.command.id)
+            || Fuzzy.matches(needle, command.command.title)
+            || Fuzzy.matches(needle, command.extensionName)
+            || Fuzzy.matches(needle, command.token)
+    }
+
+    private func commandHint(_ c: ExtensionStore.PaletteCommand) -> String {
+        // Everything but "global" runs against the selected session (runtime rule).
+        let target = c.command.contextKind == "global" ? ""
+            : (selectedSession.map { " on \($0.displayName)" } ?? " — select a session first")
+        return "⏎ run \(c.token)\(target) · \(c.extensionName)"
     }
 
     // MARK: Keyboard
@@ -977,6 +1088,7 @@ enum FieldEditorFix {
 struct FocusedSessionCard: View {
     let session: Session
     var terminal: TerminalController?
+    var onMarkChecked: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     var onSpecs: (() -> Void)? = nil
 
@@ -988,7 +1100,7 @@ struct FocusedSessionCard: View {
             header
                 .padding(.horizontal, 12).padding(.top, 10)
             terminalBody // full-bleed: the terminal spans the card edge-to-edge
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text("keys go to the session · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 12).padding(.bottom, 8)
         }
@@ -996,14 +1108,13 @@ struct FocusedSessionCard: View {
         .background(Color.primary.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            // Focused → accent border. A session still WAITING on you → a stronger orange one
-            // that stays until the input is actually answered (merely selecting/passing over
-            // the session doesn't clear it).
+            // This is the focused session, so selection wins over needs-you coloring.
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(session.needsUser || session.unacknowledged
-                              ? Color.orange : Color.accentColor.opacity(0.6),
+                              ? Color.accentColor : Color.accentColor.opacity(0.6),
                               lineWidth: session.needsUser || session.unacknowledged ? 2 : 1.5)
         )
+        .contextMenu { sessionMenu(rename: { renaming = true }) }
     }
 
     @ViewBuilder
@@ -1081,6 +1192,25 @@ struct FocusedSessionCard: View {
         if case .pending(let a) = session.attention { return a.receivedAt }
         return session.lastActivity
     }
+
+    @ViewBuilder
+    private func sessionMenu(rename: @escaping () -> Void) -> some View {
+        if let onMarkChecked {
+            Button("Mark Checked") { onMarkChecked() }
+                .keyboardShortcut("m", modifiers: .command)
+        }
+        Button("Rename...") { rename() }
+        ConfigURLContextMenu(session: session)
+        if let onSpecs {
+            Button("Project Specs") { onSpecs() }
+                .keyboardShortcut("d", modifiers: .command)
+        }
+        if onDelete != nil { Divider() }
+        if let onDelete {
+            Button("Delete", role: .destructive) { onDelete() }
+                .keyboardShortcut(.delete, modifiers: .command)
+        }
+    }
 }
 
 /// Pencil button + popover for giving a session a custom display name (alias). The alias only
@@ -1101,6 +1231,9 @@ struct SessionRenameButton: View {
         .buttonStyle(.plain).foregroundStyle(.secondary)
         .font(.system(size: 11))
         .help("Rename (display only)")
+        .onChange(of: show) { _, visible in
+            if visible { text = session.customName ?? "" }
+        }
         .popover(isPresented: $show, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Display name").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
@@ -1132,6 +1265,7 @@ struct CompactSessionCard: View {
     let session: Session
     var selected: Bool = false
     var onSelect: () -> Void = {}
+    var onMarkChecked: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     var onSpecs: (() -> Void)? = nil
     /// An agent opened/updated this session's browser page and the user hasn't seen it yet.
@@ -1181,14 +1315,15 @@ struct CompactSessionCard: View {
         .background(selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.03))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
-            // Waiting on you → orange border that stays until the input is answered (passing
-            // over the row doesn't clear it); else the selected row gets an accent border so
-            // you can see which session the keyboard targets.
+            // Selected rows use the accent border even while waiting; unselected waiting rows
+            // keep the needs-you border until the input is answered.
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(session.needsUser || session.unacknowledged ? Color.orange : Color.accentColor,
+                .strokeBorder(selected ? Color.accentColor :
+                              (session.needsUser || session.unacknowledged ? Color.orange : Color.accentColor),
                               lineWidth: session.needsUser || session.unacknowledged ? 1.5 : 1)
-                .opacity(session.needsUser || session.unacknowledged ? 1 : (selected ? 1 : 0))
+                .opacity(selected || session.needsUser || session.unacknowledged ? 1 : 0)
         )
+        .contextMenu { sessionMenu(rename: { renaming = true }) }
     }
 
     @ViewBuilder
@@ -1227,12 +1362,60 @@ struct CompactSessionCard: View {
         return session.lastActivity
     }
 
+    @ViewBuilder
+    private func sessionMenu(rename: @escaping () -> Void) -> some View {
+        if let onMarkChecked {
+            Button("Mark Checked") { onMarkChecked() }
+                .keyboardShortcut("m", modifiers: .command)
+        }
+        Button("Rename...") { rename() }
+        ConfigURLContextMenu(session: session)
+        if let onSpecs {
+            Button("Project Specs") { onSpecs() }
+                .keyboardShortcut("d", modifiers: .command)
+        }
+        if onDelete != nil { Divider() }
+        if let onDelete {
+            Button("Delete", role: .destructive) { onDelete() }
+                .keyboardShortcut(.delete, modifiers: .command)
+        }
+    }
+
     private var urgencyColor: Color {
         guard case .pending(let a) = session.attention, a.kind != .finished else { return .secondary }
         let mins = Date().timeIntervalSince(a.receivedAt) / 60
         if mins > 10 { return .red }
         if mins > 2 { return .orange }
         return .secondary
+    }
+}
+
+private struct ConfigURLContextMenu: View {
+    let session: Session
+    @Environment(AppModel.self) private var appModel
+
+    private var items: [PassConfigStore.URLItem] {
+        _ = appModel.configRevision
+        return PassConfigStore.urls(projectRoot: session.projectRoot)
+    }
+
+    var body: some View {
+        Menu("URLs") {
+            if items.isEmpty {
+                Button("No URLs") {}
+                    .disabled(true)
+            } else {
+                ForEach(items) { item in
+                    Button(item.label) {
+                        appModel.openConfiguredURL(item.url, for: session.name)
+                    }
+                }
+                Divider()
+            }
+            Button("Add URL...") {
+                ConfigURLDialog.addURL(for: session, appModel: appModel)
+            }
+        }
     }
 }
 

@@ -24,6 +24,8 @@ struct CLIHandlers: Sendable {
     var tabs: @Sendable () async -> Data
     var screenshot: @Sendable (Data) async -> Data
     var read: @Sendable (Data) async -> Data
+    var validateExtension: @Sendable (Data) async -> Data
+    var configURLAdd: @Sendable (Data) async -> Data
 }
 
 /// Loopback HTTP server that receives agent hook POSTs. Binds 127.0.0.1 only (no firewall
@@ -89,6 +91,15 @@ actor HookServer {
             await server.appendRoute("POST /cli/browser/read") { request in
                 let body = (try? await request.bodyData) ?? Data()
                 return HTTPResponse(statusCode: .ok, headers: json, body: await cli.read(body))
+            }
+            await server.appendRoute("POST /cli/extension/validate") { request in
+                let body = (try? await request.bodyData) ?? Data()
+                return HTTPResponse(statusCode: .ok, headers: json,
+                                    body: await cli.validateExtension(body))
+            }
+            await server.appendRoute("POST /cli/config/url/add") { request in
+                let body = (try? await request.bodyData) ?? Data()
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.configURLAdd(body))
             }
         }
 

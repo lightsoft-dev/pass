@@ -74,6 +74,9 @@ final class ExtensionManifestTests: XCTestCase {
         var b = ExtensionManifest.Action()
         b.sendText = "hello"
         XCTAssertEqual(b.requiredPermissions, ["session:send"])
+        var c = ExtensionManifest.Action()
+        c.openWindow = "dashboard"
+        XCTAssertEqual(c.requiredPermissions, ["ui:window"])
     }
 
     func testTemplateExpansion() {
@@ -97,7 +100,7 @@ final class ExtensionManifestTests: XCTestCase {
 
     func testValidationCatchesEveryProblemClass() throws {
         let m = try decode("""
-        { "apiVersion": 2, "id": "Slack_Notify", "name": "n",
+        { "apiVersion": 3, "id": "Slack_Notify", "name": "n",
           "permissions": ["events:attention", "made-up"],
           "contributes": {
             "commands": [
@@ -116,7 +119,7 @@ final class ExtensionManifestTests: XCTestCase {
             XCTAssertTrue(problems.contains { $0.contains(fragment) },
                           "missing \"\(fragment)\" in \(problems)")
         }
-        has("apiVersion 2")                                  // unsupported version
+        has("apiVersion 3")                                  // unsupported version
         has("must be lowercase")                             // bad id charset
         has("must match its folder name")                    // id ≠ folder
         has("unknown permission \"made-up\"")
@@ -158,6 +161,16 @@ final class ExtensionManifestTests: XCTestCase {
         guard case .failure = absolute.resolveScript(in: dir) else {
             return XCTFail("absolute path accepted")
         }
+
+        let outside = dir.deletingLastPathComponent().appendingPathComponent("outside.sh")
+        try Data("#!/bin/bash\n".utf8).write(to: outside)
+        let link = dir.appendingPathComponent("linked.sh")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        var symlink = ExtensionManifest.Action(); symlink.script = "linked.sh"
+        guard case .failure(let symlinkError) = symlink.resolveScript(in: dir) else {
+            return XCTFail("symlink escaped the extension folder")
+        }
+        XCTAssertTrue(symlinkError.message.contains("stay inside"))
     }
 
     func testIdentifierRules() {
@@ -179,6 +192,100 @@ final class ExtensionManifestTests: XCTestCase {
         let m = try JSONDecoder().decode(ExtensionManifest.self, from: data)
         XCTAssertEqual(m.problems(directory: dir), [])
         XCTAssertEqual(m.contributes?.commands?.map(\.id), ["usage", "usage-month"])
+    }
+
+    func testDecodesAndValidatesWebWindowManifest() throws {
+        let ui = dir.appendingPathComponent("ui", isDirectory: true)
+        try FileManager.default.createDirectory(at: ui, withIntermediateDirectories: true)
+        try Data("<!doctype html><title>x</title>".utf8)
+            .write(to: ui.appendingPathComponent("index.html"))
+        let m = try decode("""
+        {
+          "apiVersion": 2, "id": "slack-notify", "name": "Dashboard",
+          "permissions": ["ui:window", "session:read", "events:attention", "notify"],
+          "contributes": {
+            "windows": [
+              { "id": "dashboard", "title": "Dashboard", "entry": "ui/index.html",
+                "width": 900, "height": 600,
+                "subscriptions": ["attention.pending", "attention.resolved"] }
+            ],
+            "commands": [
+              { "id": "dashboard", "title": "Open", "run": { "openWindow": "dashboard" } }
+            ],
+            "actions": {
+              "ping": { "notify": { "title": "${input.message}" } }
+            }
+          }
+        }
+        """)
+        XCTAssertEqual(m.problems(directory: dir), [])
+        XCTAssertEqual(m.contributes?.windows?.first?.id, "dashboard")
+        XCTAssertEqual(m.contributes?.actions?["ping"]?.notify?.title, "${input.message}")
+    }
+
+    func testWebWindowValidationRejectsUnsafeAndUndeclaredContributions() throws {
+        let m = try decode("""
+        {
+          "apiVersion": 1, "id": "slack-notify", "name": "Broken UI",
+          "contributes": {
+            "windows": [
+              { "id": "Bad.ID", "title": "", "entry": "../index.txt", "width": 20,
+                "subscriptions": ["attention.pending", "made.up"] },
+              { "id": "Bad.ID", "title": "duplicate", "entry": "missing.html" }
+            ],
+            "commands": [
+              { "id": "open", "title": "Open", "run": { "openWindow": "missing" } }
+            ]
+          }
+        }
+        """)
+        let problems = m.problems(directory: dir)
+        func has(_ fragment: String) {
+            XCTAssertTrue(problems.contains { $0.contains(fragment) },
+                          "missing \"\(fragment)\" in \(problems)")
+        }
+        has("require apiVersion 2")
+        has("id must be lowercase")
+        has("duplicate window id")
+        has("title must not be empty")
+        has("width must be between")
+        has("permission \"ui:window\" not declared")
+        has("entry must be an HTML file")
+        has("unknown event \"made.up\"")
+        has("unknown window \"missing\"")
+    }
+
+    func testBundledEventMonitorManifestIsValid() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let dir = repo.appendingPathComponent("Extensions/event-monitor")
+        let data = try Data(contentsOf: dir.appendingPathComponent("extension.json"))
+        let m = try JSONDecoder().decode(ExtensionManifest.self, from: data)
+        XCTAssertEqual(m.problems(directory: dir), [])
+        XCTAssertEqual(m.contributes?.commands?.map(\.id), ["events"])
+        XCTAssertEqual(m.contributes?.windows?.map(\.id), ["monitor"])
+    }
+
+    func testBundledUIStarterManifestIsValid() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let dir = repo.appendingPathComponent("Extensions/ui-starter")
+        let data = try Data(contentsOf: dir.appendingPathComponent("extension.json"))
+        let m = try JSONDecoder().decode(ExtensionManifest.self, from: data)
+        XCTAssertEqual(m.problems(directory: dir), [])
+        XCTAssertEqual(m.contributes?.commands?.map(\.id), ["ui-starter"])
+        XCTAssertEqual(m.contributes?.windows?.map(\.id), ["panel"])
+        XCTAssertNotNil(m.contributes?.actions?["notify"])
+    }
+
+    func testWebResourceCSPInjection() {
+        let html = Data("<html><head><title>x</title></head><body>ok</body></html>".utf8)
+        let rendered = String(decoding: ExtensionResourceSchemeHandler.injectCSP(into: html),
+                              as: UTF8.self)
+        XCTAssertTrue(rendered.contains("Content-Security-Policy"))
+        XCTAssertTrue(rendered.contains("connect-src 'none'"))
+        XCTAssertTrue(rendered.contains("<title>x</title>"))
+        XCTAssertEqual(ExtensionResourceSchemeHandler.mimeType(for: "js"), "text/javascript")
     }
 }
 
@@ -223,8 +330,10 @@ final class ExtensionStoreTests: XCTestCase {
 
         // Disabled by default — nothing reaches the palette until the user opts in.
         XCTAssertTrue(store.paletteCommands.isEmpty)
+        XCTAssertTrue(store.activeExtensions.isEmpty)
         store.setEnabled("hello", true)
         XCTAssertEqual(store.paletteCommands.map(\.token), [">hi"])
+        XCTAssertEqual(store.activeExtensions.map(\.id), ["hello"])
 
         // The enabled set persists (a fresh store over the same defaults sees it).
         let second = ExtensionStore(directory: root, defaults: defaults)
@@ -262,6 +371,21 @@ final class ExtensionStoreTests: XCTestCase {
         XCTAssertTrue(store.loadErrors.isEmpty)
     }
 
+    func testEnabledEventOnlyExtensionAppearsInChromeWithoutCommands() throws {
+        try install("watcher", manifest: """
+        { "apiVersion": 1, "id": "watcher", "name": "Watcher",
+          "permissions": ["events:session", "notify"],
+          "contributes": { "rules": [
+            { "on": "session.created", "run": { "notify": { "title": "Created" } } }
+          ] } }
+        """, script: nil)
+        let store = ExtensionStore(directory: root, defaults: defaults)
+        store.setEnabled("watcher", true)
+
+        XCTAssertEqual(store.activeExtensions.map(\.id), ["watcher"])
+        XCTAssertTrue(store.paletteCommands.isEmpty)
+    }
+
     func testReloadPicksUpNewExtensions() throws {
         let store = ExtensionStore(directory: root, defaults: defaults)
         XCTAssertTrue(store.loaded.isEmpty)
@@ -270,5 +394,57 @@ final class ExtensionStoreTests: XCTestCase {
         """, script: nil)
         store.reload()
         XCTAssertEqual(store.loaded.map(\.id), ["late"])
+    }
+
+    func testChangedFilesDisableAnApprovedExtension() throws {
+        try install("hello", manifest: """
+        { "apiVersion": 1, "id": "hello", "name": "Hello",
+          "permissions": ["run:script"],
+          "contributes": { "commands": [
+            { "id": "hi", "title": "Say hi", "run": { "script": "run.sh" } } ] } }
+        """)
+        let store = ExtensionStore(directory: root, defaults: defaults)
+        store.setEnabled("hello", true)
+        XCTAssertTrue(store.isEnabled("hello"))
+
+        let script = root.appendingPathComponent("hello/run.sh")
+        try Data("#!/bin/bash\necho changed\n".utf8).write(to: script)
+        store.reload()
+
+        XCTAssertFalse(store.isEnabled("hello"))
+        XCTAssertTrue(store.wasDisabledAfterChange("hello"))
+        XCTAssertTrue(store.paletteCommands.isEmpty)
+    }
+
+    func testWindowManagerOpensOneWindowPerContributionAndClosesIt() throws {
+        let ui = root.appendingPathComponent("dashboard/ui", isDirectory: true)
+        try FileManager.default.createDirectory(at: ui, withIntermediateDirectories: true)
+        try Data("<!doctype html><html><head></head><body>ok</body></html>".utf8)
+            .write(to: ui.appendingPathComponent("index.html"))
+        try Data("""
+        { "apiVersion": 2, "id": "dashboard", "name": "Dashboard",
+          "permissions": ["ui:window"],
+          "contributes": {
+            "windows": [
+              { "id": "main", "title": "Dashboard", "entry": "ui/index.html" }
+            ],
+            "commands": [
+              { "id": "open", "title": "Open", "run": { "openWindow": "main" } }
+            ]
+          } }
+        """.utf8).write(to: root.appendingPathComponent("dashboard/extension.json"))
+
+        let store = ExtensionStore(directory: root, defaults: defaults)
+        store.setEnabled("dashboard", true)
+        let manager = ExtensionWindowManager(store: store)
+        let ext = try XCTUnwrap(store.activeExtension(id: "dashboard"))
+        let window = try XCTUnwrap(ext.manifest.contributes?.windows?.first)
+
+        XCTAssertNil(manager.open(extension: ext, window: window))
+        XCTAssertEqual(manager.openWindowCount, 1)
+        XCTAssertNil(manager.open(extension: ext, window: window))
+        XCTAssertEqual(manager.openWindowCount, 1)
+        manager.close(extensionId: "dashboard")
+        XCTAssertEqual(manager.openWindowCount, 0)
     }
 }

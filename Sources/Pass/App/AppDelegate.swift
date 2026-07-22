@@ -5,6 +5,7 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let appModel = AppModel()
     private var panelController: PanelController!
+    private var mirrorController: MirrorWindowController!
     private let notifications = NotificationService()
     private let hookServer = HookServer()
     private var eventRouter: EventRouter?
@@ -14,6 +15,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Always called on the main thread; assert it so we can touch main-actor state.
         MainActor.assumeIsolated { launch() }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            appModel.sessions?.flushSave()
+        }
     }
 
     @MainActor
@@ -37,6 +44,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Panel (non-activating, keyboard-first).
         panelController = PanelController(appModel: appModel)
         appModel.panelController = panelController
+
+        // Device mirror (Vysor-style visor window, shown from the menu bar).
+        mirrorController = MirrorWindowController()
+        appModel.mirrorController = mirrorController
 
         // Global hotkeys → toggle the panel: ⌘⌘ double-tap (primary) + ⌥Space (rebindable).
         HotkeyService.registerSummon { [weak self] in
@@ -121,7 +132,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
                 Task { await notifications.notify(session: name, kind: att.kind.rawValue,
                                                   title: display, body: body, sound: sound) }
-                appModel.extensionRuntime?.attentionPending(sessionName: name, attention: att)
+                appModel.extensionBuilder?.attentionPending(sessionName: name, attention: att)
+                if appModel.sessions?.isEphemeral(name) != true,
+                   appModel.extensionBuilder?.ownsSession(name) != true {
+                    appModel.extensionRuntime?.attentionPending(sessionName: name, attention: att)
+                }
             },
             onResolved: { name in
                 notifications.clear(session: name, kinds: [
@@ -129,7 +144,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     Attention.Kind.input.rawValue,
                     Attention.Kind.finished.rawValue,
                 ])
-                appModel.extensionRuntime?.attentionResolved(sessionName: name)
+                if appModel.sessions?.isEphemeral(name) != true,
+                   appModel.extensionBuilder?.ownsSession(name) != true {
+                    appModel.extensionRuntime?.attentionResolved(sessionName: name)
+                }
             }
         )
         self.eventRouter = router
@@ -145,7 +163,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 close: { body in await MainActor.run { CLIAPI.close(appModel, body: body) } },
                 tabs: { await MainActor.run { CLIAPI.tabs(appModel) } },
                 screenshot: { body in await CLIAPI.screenshot(appModel, body: body) },
-                read: { body in await CLIAPI.read(appModel, body: body) }
+                read: { body in await CLIAPI.read(appModel, body: body) },
+                validateExtension: { body in await MainActor.run {
+                    CLIAPI.validateExtension(body: body)
+                } },
+                configURLAdd: { body in await MainActor.run { CLIAPI.addConfigURL(appModel, body: body) } }
             )
             await hookServer.start(port: PassConfig.hookPort, share: share, cli: cli)
             appModel.hookServerFailed = !(await hookServer.didBind)

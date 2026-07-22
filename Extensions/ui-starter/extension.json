@@ -1,0 +1,35 @@
+{
+  "apiVersion": 2,
+  "id": "ui-starter",
+  "name": "UI Starter",
+  "version": "0.1.0",
+  "description": "Minimal Web UI extension example with a command palette entry.",
+  "permissions": ["ui:window", "session:read", "notify"],
+  "contributes": {
+    "windows": [
+      {
+        "id": "panel",
+        "title": "Pass UI Starter",
+        "entry": "ui/index.html",
+        "width": 760,
+        "height": 520
+      }
+    ],
+    "commands": [
+      {
+        "id": "ui-starter",
+        "title": "UI Starter 열기",
+        "context": "global",
+        "run": { "openWindow": "panel" }
+      }
+    ],
+    "actions": {
+      "notify": {
+        "notify": {
+          "title": "UI Starter",
+          "body": "${input.message}"
+        }
+      }
+    }
+  }
+}

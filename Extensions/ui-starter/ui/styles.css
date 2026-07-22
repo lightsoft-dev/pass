@@ -1,0 +1,132 @@
+:root {
+  color-scheme: dark;
+  --bg: #111314;
+  --panel: #1b1f22;
+  --line: #2f373c;
+  --text: #f2f0e8;
+  --muted: #99a1a6;
+  --accent: #7dd3fc;
+  --warn: #fbbf24;
+  --mono: "SFMono-Regular", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 26px 30px 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.eyebrow {
+  margin: 0 0 5px;
+  color: var(--accent);
+  font: 700 11px var(--mono);
+  letter-spacing: .14em;
+}
+
+h1, h2, p { margin: 0; }
+
+h1 { font-size: 34px; font-weight: 700; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
+
+button {
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--accent);
+  color: #081014;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:disabled { opacity: .6; cursor: default; }
+
+main {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  min-height: calc(100vh - 103px);
+}
+
+.summary {
+  display: grid;
+  place-content: center;
+  gap: 6px;
+  border-right: 1px solid var(--line);
+  text-align: center;
+}
+
+.summary span {
+  color: var(--accent);
+  font: 800 72px var(--mono);
+}
+
+.summary p {
+  color: var(--muted);
+  font: 700 11px var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+section:last-child {
+  min-width: 0;
+  padding: 22px 24px;
+}
+
+.section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+small {
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.sessions {
+  display: grid;
+  gap: 8px;
+}
+
+.session {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.session.needs-user {
+  border-color: var(--warn);
+}
+
+.session strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session span,
+.empty {
+  color: var(--muted);
+  font: 12px var(--mono);
+}

@@ -41,6 +41,12 @@ final class SessionStore {
     var onReconciled: ((Set<String>) -> Void)?
     /// Extension-runtime tap: sessions that appeared / vanished, reported once per reconcile.
     var onSessionsChanged: (@MainActor (_ created: [Session], _ ended: [String]) -> Void)?
+    /// Remote control-plane tap. AppModel wires this to a debounced snapshot publisher so
+    /// mobile clients see the same state transitions as the local UI without polling tmux.
+    var onRemoteStateChanged: (@MainActor () -> Void)?
+    /// High-frequency live response tap. Kept separate from snapshots so stream refreshes do not
+    /// resend every session and project several times per second.
+    var onRemoteStreamChanged: (@MainActor () -> Void)?
     /// Names seen by the previous reconcile. nil until the first pass — adopting sessions
     /// that were already running at launch must not fire "created" events.
     private var knownNames: Set<String>?
@@ -63,6 +69,7 @@ final class SessionStore {
     private let tmux: TmuxClient
     private let projects: ProjectStore
     private var pollTask: Task<Void, Never>?
+    private var remoteStreamTask: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
 
     init(tmux: TmuxClient = .shared, projects: ProjectStore) {
@@ -104,7 +111,26 @@ final class SessionStore {
         }
     }
 
-    func stop() { pollTask?.cancel() }
+    func startRemoteStreaming() {
+        remoteStreamTask?.cancel()
+        remoteStreamTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshRemoteStreams()
+                try? await Task.sleep(for: .milliseconds(750))
+            }
+        }
+    }
+
+    func stopRemoteStreaming() {
+        remoteStreamTask?.cancel()
+        remoteStreamTask = nil
+    }
+
+    func stop() {
+        pollTask?.cancel()
+        stopRemoteStreaming()
+        flushSave()
+    }
 
     // MARK: Restore (survive a tmux server death — reboot / kill-server)
 
@@ -217,11 +243,7 @@ final class SessionStore {
             // over terminal scraping — for live (streaming) sessions too, not just settled ones.
             // Fall back to pane scraping only for non-Claude agents / when no transcript is found.
             if isStreaming(session) {
-                if let text = await lastAssistantText(cwd: r.cwd) {
-                    session.liveTail = text
-                } else {
-                    session.liveTail = PaneSummary.lastContentLine(await tmux.capturePane(r.name, colors: false))
-                }
+                session.liveTail = await liveText(for: session)
             } else if session.lastMessage == nil || session.needsUser {
                 // Waiting sessions refresh from the transcript too: the newest assistant text
                 // is usually the QUESTION being asked — far more useful on the card than a
@@ -242,11 +264,12 @@ final class SessionStore {
         // every persisted alias/message/pending state in one save.
         if !next.isEmpty {
             let liveNames = Set(next.map(\.name))
+            let keepNames = liveNames.union(pendingRestore.map(\.name))
             let before = (attentionByName.count, lastMessageByName.count, unacked.count, aliasByName.count)
-            attentionByName = attentionByName.filter { liveNames.contains($0.key) }
-            lastMessageByName = lastMessageByName.filter { liveNames.contains($0.key) }
-            unacked = unacked.intersection(liveNames)
-            aliasByName = aliasByName.filter { liveNames.contains($0.key) }
+            attentionByName = attentionByName.filter { keepNames.contains($0.key) }
+            lastMessageByName = lastMessageByName.filter { keepNames.contains($0.key) }
+            unacked = unacked.intersection(keepNames)
+            aliasByName = aliasByName.filter { keepNames.contains($0.key) }
             ephemeralSessions = ephemeralSessions.intersection(liveNames)
             // Descriptors track exactly the live launchable-agent sessions. Pruning here (rather
             // than on an empty listing) is deliberate: a session that vanished while others remain
@@ -278,11 +301,16 @@ final class SessionStore {
         }
 
         // Sort: needs-you first, then most-recent activity.
-        sessions = next.sorted { a, b in
+        let sorted = next.sorted { a, b in
             let ap = a.attention.isPending, bp = b.attention.isPending
             if ap != bp { return ap }
             return a.lastActivity > b.lastActivity
         }
+        let previousStreams = activeRemoteStreams(in: sessions)
+        let changed = sessions != sorted
+        sessions = sorted
+        if changed { onRemoteStateChanged?() }
+        if previousStreams != activeRemoteStreams(in: sorted) { onRemoteStreamChanged?() }
     }
 
     /// Is the session actively producing output right now? `.working` is the definitive signal
@@ -292,6 +320,52 @@ final class SessionStore {
         if case .working = s.attention { return true }
         if case .pending = s.attention { return false }
         return Date().timeIntervalSince(s.lastActivity) < 3
+    }
+
+    /// Refresh only active output between full tmux/git reconciles. This gives the remote UI a
+    /// responsive stream without multiplying the expensive full-session polling work.
+    private func refreshRemoteStreams() async {
+        guard onRemoteStreamChanged != nil, !sessions.isEmpty else { return }
+
+        let candidates = sessions.filter(isStreaming)
+        var textByName: [String: String] = [:]
+        for session in candidates {
+            if let text = await liveText(for: session), !text.isEmpty {
+                textByName[session.name] = text
+            }
+        }
+
+        var changed = false
+        for index in sessions.indices {
+            let next = textByName[sessions[index].name]
+            if sessions[index].liveTail != next {
+                sessions[index].liveTail = next
+                changed = true
+            }
+        }
+        if changed { onRemoteStreamChanged?() }
+    }
+
+    private func liveText(for session: Session) async -> String? {
+        let text: String?
+        if session.agent == .claude,
+           let transcript = await lastAssistantText(cwd: session.cwd),
+           !transcript.isEmpty {
+            text = transcript
+        } else {
+            text = PaneSummary.lastContentLine(
+                await tmux.capturePane(session.name, colors: false)
+            )
+        }
+        guard text != session.lastMessage else { return nil }
+        return text
+    }
+
+    private func activeRemoteStreams(in sessions: [Session]) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: sessions.compactMap { session in
+            guard let text = session.liveTail, !text.isEmpty else { return nil }
+            return (session.name, text)
+        })
     }
 
     private func agentKind(for r: RawSession) -> AgentKind {
@@ -328,7 +402,8 @@ final class SessionStore {
     /// its CLI argument so it starts working on it right away.
     @discardableResult
     func createSession(projectDir: String, agent: AgentKind = .claude,
-                       initialPrompt: String? = nil) async -> String {
+                       initialPrompt: String? = nil,
+                       rememberProject: Bool = true) async -> String {
         // 1. Instant placeholder — a card appears the moment you hit create.
         let dirRepo = URL(fileURLWithPath: projectDir).lastPathComponent
         let provisional = Slug.sessionName(repo: dirRepo, branch: nil)
@@ -341,6 +416,7 @@ final class SessionStore {
         var name = Slug.sessionName(repo: repo, branch: branch)
         name = await uniqueName(name)
         let projectRoot = git?.projectRoot ?? projectDir
+        if !rememberProject { ephemeralSessions.insert(name) } // before reconcile can see it
         var launch = LaunchCommands.command(for: agent)
         if let base = launch,
            let prompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -349,7 +425,7 @@ final class SessionStore {
         }
         await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
                               agent: agent, launchCommand: launch)
-        projects.remember(rootPath: projectRoot)
+        if rememberProject { projects.remember(rootPath: projectRoot) }
 
         // 3. Swap the provisional card for the real one (name may differ once git/uniqueness resolve).
         if name != provisional { sessions.removeAll { $0.name == provisional } }
@@ -395,6 +471,7 @@ final class SessionStore {
         if let idx = sessions.firstIndex(where: { $0.name == name }) { sessions[idx] = s }
         else { sessions.append(s) }
         resort()
+        onRemoteStateChanged?()
     }
 
     /// Create a git worktree off a project's main checkout, then start a session inside it.
@@ -436,6 +513,7 @@ final class SessionStore {
         // Forget the restore descriptor and persist now — a deliberate kill must not come back on
         // the next launch, and if this was the LAST session reconcile skips its save (empty list).
         if sessionDescriptors.removeValue(forKey: name) != nil { scheduleSave() }
+        onRemoteStateChanged?()
         // Report the end explicitly: if this was the LAST session, reconcile sees an empty
         // listing and (deliberately, transient-failure rule) stays silent.
         if knownNames?.remove(name) != nil { onSessionsChanged?([], [name]) }
@@ -460,6 +538,7 @@ final class SessionStore {
             resort()
         }
         scheduleSave()
+        onRemoteStateChanged?()
     }
 
     /// Set (or clear, with empty/whitespace) a session's user-assigned display name.
@@ -472,6 +551,7 @@ final class SessionStore {
             sessions[idx].customName = trimmed.isEmpty ? nil : trimmed
         }
         scheduleSave()
+        onRemoteStateChanged?()
     }
 
     /// The user checked (or acted on) a session — clear its persistent needs-you highlight.
@@ -481,6 +561,7 @@ final class SessionStore {
             sessions[idx].unacknowledged = false
         }
         scheduleSave()
+        onRemoteStateChanged?()
     }
 
     /// Record a session's latest completed response.
@@ -491,6 +572,7 @@ final class SessionStore {
             sessions[idx].lastMessage = message
         }
         scheduleSave()
+        onRemoteStateChanged?()
     }
 
     // MARK: Persistence — the "needs you" queue + last responses survive app restarts.
@@ -510,28 +592,36 @@ final class SessionStore {
     /// Debounced write — coalesces bursts of hook events into one save.
     private func scheduleSave() {
         saveTask?.cancel()
-        let attn = attentionByName, last = lastMessageByName
-        let unack = unacked
-        let aliases = aliasByName
-        let descriptors = sessionDescriptors
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled, self != nil else { return }
-            // Load-modify-save: this store owns pending/lastMessages/unacked/aliases/sessions;
-            // fields owned by other stores (browserURLs) must survive our writes.
-            var snap = SessionStatePersistence.load()
-            snap.pending = [:]
-            snap.lastMessages = last
-            snap.unacked = Array(unack)
-            snap.aliases = aliases
-            snap.sessions = Array(descriptors.values)
-            for (name, state) in attn {
-                if case .pending(let a) = state {
-                    snap.pending[name] = .init(kind: a.kind.rawValue, receivedAt: a.receivedAt, preview: a.preview)
-                }
+            await MainActor.run {
+                guard !Task.isCancelled, self != nil else { return }
+                self?.writeSnapshot()
             }
-            SessionStatePersistence.save(snap)
         }
+    }
+
+    func flushSave() {
+        saveTask?.cancel()
+        saveTask = nil
+        writeSnapshot()
+    }
+
+    private func writeSnapshot() {
+        // Load-modify-save: this store owns pending/lastMessages/unacked/aliases/sessions;
+        // fields owned by other stores (browserURLs) must survive our writes.
+        var snap = SessionStatePersistence.load()
+        snap.pending = [:]
+        snap.lastMessages = lastMessageByName
+        snap.unacked = Array(unacked)
+        snap.aliases = aliasByName
+        snap.sessions = Array(sessionDescriptors.values)
+        for (name, state) in attentionByName {
+            if case .pending(let a) = state {
+                snap.pending[name] = .init(kind: a.kind.rawValue, receivedAt: a.receivedAt, preview: a.preview)
+            }
+        }
+        SessionStatePersistence.save(snap)
     }
 
     /// Resolve a hook event to a session name: trust the header hint (it's our env var),
@@ -546,6 +636,10 @@ final class SessionStore {
     func session(named name: String) -> Session? {
         sessions.first { $0.name == name }
     }
+
+    /// Builder/report sessions are visible to the user but must not recursively trigger
+    /// extension automation or enter project/restore state.
+    func isEphemeral(_ name: String) -> Bool { ephemeralSessions.contains(name) }
 
     /// pass's own state directory (`~/.pass/…`) is never a project/workspace.
     static func isInternalRoot(_ root: String) -> Bool {

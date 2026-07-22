@@ -299,6 +299,20 @@ kbd{
 .keyrow p{font-size:12.5px;color:var(--ink-dim)}
 .keyrow p b{color:var(--ink);font-weight:500}
 
+/* ————————————————————————————————— roadmap */
+.road-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:rgba(16,14,10,.5)}
+.road{
+  padding:24px 24px 22px;border-left:1px solid var(--line);
+  display:flex;flex-direction:column;gap:10px;min-height:210px;
+}
+.road:first-child{border-left:none}
+.road .tag{align-self:flex-start;border:1px solid rgba(255,176,0,.35);border-radius:100px;padding:3px 10px;color:var(--amber);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.road h3{font-family:var(--display);font-weight:400;font-size:20px;letter-spacing:.005em;text-transform:uppercase;line-height:1.15}
+.road p{color:var(--ink-dim);font-size:13.5px}
+.road p b{color:var(--ink);font-weight:500}
+.road .spec{margin-top:auto;color:var(--ink-faint);font-size:11.5px;letter-spacing:.05em}
+@media(max-width:900px){.road-grid{grid-template-columns:1fr}.road{border-left:none;border-top:1px solid var(--line);min-height:0}.road:first-child{border-top:none}}
+
 /* ————————————————————————————————— download */
 .get-grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:clamp(28px,4vw,56px);align-items:start}
 @media(max-width:900px){.get-grid,.hero-grid{grid-template-columns:minmax(0,1fr)}.mock-col{margin-bottom:0}.strip{margin-top:clamp(40px,7vh,80px)}}
@@ -358,7 +372,8 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
     <a href="#features" data-spy="features">1:features</a>
     <a href="#system" data-spy="system">2:system</a>
     <a href="#keys" data-spy="keys">3:keys</a>
-    <a href="#get" data-spy="get">4:get</a>
+    <a href="#roadmap" data-spy="roadmap">4:roadmap</a>
+    <a href="#get" data-spy="get">5:get</a>
   </nav>
   <div class="right">
     <span class="hint">⌥␣ to summon</span>
@@ -377,7 +392,8 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
         <p class="lede rise d2">
           Pass is a keyboard-driven macOS panel over <strong>every Claude Code session in every project</strong>.
           Agents run on their own; the moment one is blocked on a permission, a question, or a review,
-          it surfaces — <strong>one hotkey away, one keystroke to clear</strong>.
+          it surfaces — <strong>one hotkey away, one keystroke to clear</strong>. Share links,
+          notes, files, and screenshots into the exact agent session that should act on them.
         </p>
         <div class="cta-row rise d3">
           <a class="btn btn-amber" href="https://github.com/lightsoft-dev/pass/releases/latest" data-download>↓&nbsp;&nbsp;Download for macOS</a>
@@ -472,6 +488,18 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
         <p>Native notifications for <b>permission / input / finished</b>, with the menu-bar badge as the always-on fallback that never asks for permission itself.</p>
         <p class="spec">✳ 2 in the menu bar</p>
       </div>
+      <div class="feat s5">
+        <span class="no">PF-07</span>
+        <h3>Share into a session</h3>
+        <p>Use the macOS share sheet to send <b>URLs, selected text, notes, images, and files</b> directly into a live agent session, or start a new session in a saved project with the shared payload as the first prompt.</p>
+        <p class="spec">Share → Pass · live session or new session</p>
+      </div>
+      <div class="feat s7">
+        <span class="no">PF-08</span>
+        <h3>Mobile companion, planned</h3>
+        <p>The planned mobile version turns your phone into a lightweight command deck: <b>push notifications for blocked agents</b>, approve or deny prompts, send quick replies, and share links or screenshots from mobile into the right desktop session.</p>
+        <p class="spec">iOS first · Android under evaluation · remote session handoff</p>
+      </div>
     </div>
   </section>
 
@@ -521,12 +549,41 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
     </div>
   </section>
 
+  <!-- ————————————————— roadmap -->
+  <section class="sect wrap" id="roadmap" aria-label="Roadmap">
+    <div class="sect-head">
+      <span class="idx">[4] ROADMAP</span>
+      <h2>Platform plans</h2>
+      <p class="sub">Pass starts on macOS because Claude Code, tmux, notifications, hotkeys, and the share extension can be made tight there first. The next platforms are planned as companions, not half-finished ports.</p>
+    </div>
+    <div class="road-grid">
+      <div class="road">
+        <span class="tag">planned</span>
+        <h3>Mobile version</h3>
+        <p>Approve blocked agents from your phone, send short replies, receive completion alerts, and share mobile links, text, screenshots, or files back to a desktop Pass session.</p>
+        <p class="spec">notification actions · share sheet · session picker</p>
+      </div>
+      <div class="road">
+        <span class="tag">planned</span>
+        <h3>Windows support</h3>
+        <p>A Windows build is planned after the macOS workflow is stable. The target is the same supervision model: global summon, session feed, notifications, and terminal-backed agent control.</p>
+        <p class="spec">Windows 11 target · terminal integration research</p>
+      </div>
+      <div class="road">
+        <span class="tag">planned</span>
+        <h3>Steam distribution</h3>
+        <p>Steam support is on the distribution roadmap for users who prefer Steam library updates, install management, and Steam Deck-adjacent workflows once the cross-platform build is ready.</p>
+        <p class="spec">store packaging · auto-updates · release channel</p>
+      </div>
+    </div>
+  </section>
+
   <!-- ————————————————— download -->
   <section class="sect wrap" id="get" aria-label="Download">
     <div class="sect-head">
-      <span class="idx">[4] GET</span>
+      <span class="idx">[5] GET</span>
       <h2>Get Pass</h2>
-      <p class="sub">Free, source on GitHub. The hotkey is ⌥Space; the rest is your agents' problem.</p>
+      <p class="sub">Free, source on GitHub. macOS is available first; mobile, Windows, and Steam distribution are planned next-platform work.</p>
     </div>
     <div class="get-grid">
       <div>
@@ -587,7 +644,7 @@ make open">copy</button>
 /* ————————————————— nav scroll-spy (tmux current-window *) */
 (function(){
   var links=[].slice.call(document.querySelectorAll('[data-spy]'));
-  var ids=['top','features','system','keys','get'];
+  var ids=['top','features','system','keys','roadmap','get'];
   var secs=ids.map(function(i){return document.getElementById(i)}).filter(Boolean);
   function onScroll(){
     var y=window.scrollY+120,cur='top';
