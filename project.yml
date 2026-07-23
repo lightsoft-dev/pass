@@ -64,6 +64,7 @@ targets:
             CFBundleURLSchemes:
               - pass
         PassPublicRelayURL: $(PASS_PUBLIC_RELAY_URL)
+        PassFeedbackURL: $(PASS_FEEDBACK_URL)
         PassOIDCIssuer: $(PASS_OIDC_ISSUER)
         PassOIDCClientID: $(PASS_OIDC_CLIENT_ID)
         PassOIDCAudience: $(PASS_OIDC_AUDIENCE)
