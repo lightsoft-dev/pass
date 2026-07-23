@@ -4,6 +4,7 @@ Config/Info.plist
 
 # Build products
 .build/
+.release/
 DerivedData/
 *.xcuserstate
 xcuserdata/
