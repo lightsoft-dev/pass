@@ -1,6 +1,23 @@
 import AppKit
 import SwiftUI
 
+/// Shared session-titlebar control for opening the physical-device/emulator workspace pane.
+struct DevicePaneButton: View {
+    let sessionName: String
+
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        Button { appModel.mirror.openPicker(for: sessionName) } label: {
+            Image(systemName: "iphone.and.arrow.forward")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Attach physical device or emulator pane")
+        .accessibilityLabel("Open device pane")
+    }
+}
+
 /// Device picker and live video surface rendered inside a session workspace split.
 struct MirrorView: View {
     let engine: MirrorEngine
@@ -36,6 +53,12 @@ struct MirrorView: View {
             if case .streaming(let device) = engine.state {
                 Text("· \(device.displayName)")
                     .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                if !device.supportsPointerInput {
+                    Text("VIEW ONLY")
+                        .font(.system(size: 7, weight: .bold))
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(.quaternary, in: Capsule())
+                }
             }
             Spacer()
             if case .pickingDevice = engine.state {
@@ -59,12 +82,8 @@ struct MirrorView: View {
     private var picker: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 13) {
-                if let problem = engine.toolProblem {
-                    notice(icon: "wrench.and.screwdriver", title: "Tools required", detail: problem)
-                }
-
                 if !engine.devices.isEmpty {
-                    sectionTitle("Physical devices & emulators")
+                    sectionTitle("Mobile devices & emulators")
                     VStack(spacing: 5) {
                         ForEach(engine.devices) { device in
                             Button { engine.start(device) } label: {
@@ -73,11 +92,11 @@ struct MirrorView: View {
                                         .frame(width: 19).foregroundStyle(.secondary)
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(device.displayName).font(.system(size: 11, weight: .medium))
-                                        Text(device.serial).font(.system(size: 9, design: .monospaced))
+                                        Text(device.detailText).font(.system(size: 9, design: .monospaced))
                                             .foregroundStyle(.secondary).lineLimit(1)
                                     }
                                     Spacer()
-                                    Text(device.transport.label)
+                                    Text("\(device.platform.label) · \(device.transport.label)")
                                         .font(.system(size: 8, weight: .semibold))
                                         .padding(.horizontal, 6).padding(.vertical, 2)
                                         .background(.quaternary, in: Capsule())
@@ -86,15 +105,20 @@ struct MirrorView: View {
                             }
                             .buttonStyle(.plain)
                             .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
-                            .disabled(engine.toolProblem != nil)
+                            .disabled(engine.unavailableReason(for: device) != nil)
                         }
                     }
-                } else if !engine.isRefreshing && engine.toolProblem == nil {
+                } else if !engine.isRefreshing {
                     notice(icon: "iphone.slash", title: "No authorized target",
-                           detail: "Connect an Android device with USB debugging enabled, or start an Android emulator. Accept the authorization prompt on a physical device.")
+                           detail: "Connect and unlock an iPhone or iPad over USB, then trust this Mac. For Android, enable USB debugging or start an emulator.")
                 }
 
-                sectionTitle("Connect a physical device over Wi-Fi")
+                if let problem = engine.toolProblem {
+                    notice(icon: "wrench.and.screwdriver", title: "Android unavailable",
+                           detail: problem)
+                }
+
+                sectionTitle("Connect an Android device over Wi-Fi")
                 HStack(spacing: 6) {
                     TextField("192.168.0.24:5555", text: $networkAddress)
                         .textFieldStyle(.roundedBorder)
@@ -136,7 +160,7 @@ struct MirrorView: View {
 
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "lock.shield").foregroundStyle(.secondary)
-                    Text("Video travels directly through ADB over USB, Wi-Fi, or the emulator transport. Pass does not capture the Mac screen.")
+                    Text("Video travels directly through ADB for Android or Apple's trusted USB capture path for iOS. Pass does not capture the Mac screen.")
                         .font(.system(size: 9)).foregroundStyle(.secondary)
                 }
             }
@@ -153,13 +177,26 @@ struct MirrorView: View {
                     Image(nsImage: image)
                         .resizable().interpolation(.high).scaledToFit()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    inputOverlay(imageSize: image.size, container: geo.size)
+                    if device.supportsPointerInput {
+                        inputOverlay(imageSize: image.size, container: geo.size)
+                    }
                 }
                 if isLaunching || engine.frame == nil {
                     VStack(spacing: 9) {
                         ProgressView().controlSize(.small).tint(.white)
                         Text("Starting \(device.displayName)…")
                             .font(.system(size: 10)).foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                if !isLaunching, engine.frame != nil, !device.supportsPointerInput {
+                    VStack {
+                        Spacer()
+                        Text("Use the iPhone or iPad for input")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .background(.black.opacity(0.55), in: Capsule())
+                            .padding(9)
                     }
                 }
             }
@@ -194,7 +231,7 @@ struct MirrorView: View {
         VStack(spacing: 10) {
             Spacer()
             Image(systemName: "exclamationmark.triangle").font(.system(size: 25)).foregroundStyle(.orange)
-            Text("Device stream stopped").font(.system(size: 12, weight: .medium))
+            Text("Device mirror unavailable").font(.system(size: 12, weight: .medium))
             Text(message).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).textSelection(.enabled).padding(.horizontal, 12)
             Button("Back to devices") { engine.returnToPicker() }

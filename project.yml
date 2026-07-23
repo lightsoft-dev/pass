@@ -59,6 +59,7 @@ targets:
         LSUIElement: true
         LSMinimumSystemVersion: "14.0"
         NSAppleEventsUsageDescription: "Pass opens tmux sessions in your terminal (Ghostty or Terminal) when you choose to attach."
+        NSCameraUsageDescription: "Pass uses the trusted USB connection to display your iPhone or iPad screen in the attached device pane."
         CFBundleURLTypes:
           - CFBundleURLName: dev.lightsoft.pass.oauth
             CFBundleURLSchemes:
@@ -71,8 +72,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass
-        MARKETING_VERSION: "0.1.2"
-        CURRENT_PROJECT_VERSION: "3"
+        MARKETING_VERSION: "0.1.3"
+        CURRENT_PROJECT_VERSION: "4"
         # Stable signing via the free Apple Development cert. Ad-hoc ("-") builds, but its
         # cdhash changes every build and macOS then refuses notifications ("not allowed").
         # A real Development identity gives a stable code identity so notifications work.
@@ -139,8 +140,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass.share
-        MARKETING_VERSION: "0.1.2"
-        CURRENT_PROJECT_VERSION: "3"
+        MARKETING_VERSION: "0.1.3"
+        CURRENT_PROJECT_VERSION: "4"
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: H66C2M66DC

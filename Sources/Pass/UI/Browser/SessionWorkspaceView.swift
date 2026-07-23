@@ -26,11 +26,6 @@ struct SessionWorkspaceView<Terminal: View>: View {
         _ = appModel.configRevision
         return PassConfigStore.urls(projectRoot: session.projectRoot)
     }
-    private var hasProjectConfig: Bool {
-        _ = appModel.configRevision
-        return PassConfigStore.exists(projectRoot: session.projectRoot)
-    }
-
     var body: some View {
         if appModel.mirror?.attachedSessionName == session.name, let mirror = appModel.mirror {
             mirrorSplit(mirror)
@@ -83,11 +78,11 @@ struct SessionWorkspaceView<Terminal: View>: View {
     @ViewBuilder
     private var terminalWithURLBar: some View {
         let urls = configuredURLs
-        if urls.isEmpty && !hasProjectConfig {
+        if urls.isEmpty {
             terminal
         } else {
             VStack(spacing: 0) {
-                ConfigURLBar(session: session, items: urls) { item in
+                ConfigURLBar(items: urls) { item in
                     appModel.openConfiguredURL(item.url, for: session.name)
                 }
                 terminal
@@ -143,15 +138,12 @@ struct SessionWorkspaceView<Terminal: View>: View {
 }
 
 private struct ConfigURLBar: View {
-    let session: Session
     let items: [PassConfigStore.URLItem]
     let open: (PassConfigStore.URLItem) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ConfigURLAddButton(session: session)
-
                 ForEach(items) { item in
                     Button {
                         open(item)

@@ -30,19 +30,19 @@ enum OnboardingDiagnostics {
     static func scan() -> [OnboardingDependency] {
         [
             dependency(.tmux, name: "tmux",
-                       purpose: "세션을 앱 종료 뒤에도 살려두고 터미널을 연결합니다.",
+                       purpose: "Keeps sessions alive after Pass closes and powers terminal access.",
                        required: true, versionArgs: ["-V"]),
             dependency(.git, name: "Git",
-                       purpose: "프로젝트, 브랜치와 worktree를 식별합니다.",
+                       purpose: "Identifies projects, branches, and worktrees.",
                        required: false, versionArgs: ["--version"]),
             dependency(.claude, name: "Claude Code",
-                       purpose: "Claude 세션을 시작하고 필요한 순간을 Pass에 알립니다.",
+                       purpose: "Runs Claude sessions and reports when they need you.",
                        required: false, versionArgs: ["--version"]),
             dependency(.codex, name: "Codex",
-                       purpose: "Codex CLI 세션을 Pass에서 시작합니다.",
+                       purpose: "Runs Codex CLI sessions from Pass.",
                        required: false, versionArgs: ["--version"]),
             dependency(.pi, name: "pi",
-                       purpose: "pi coding agent 세션을 Pass에서 시작합니다.",
+                       purpose: "Runs pi coding-agent sessions from Pass.",
                        required: false, versionArgs: ["--version"]),
         ]
     }
@@ -83,7 +83,8 @@ final class OnboardingModel {
     var dependencies: [OnboardingDependency] = []
     var isScanning = false
     var installState: InstallState = .idle
-    var hooksInstalled = false
+    var installedHooks: [AgentKind: Bool] = [:]
+    var integrationError: String?
     var cliLinked = false
     var homebrewPath: String?
 
@@ -119,7 +120,7 @@ final class OnboardingModel {
             }.value
             dependencies = result.0
             homebrewPath = result.1
-            hooksInstalled = ClaudeHooksInstaller.isInstalled()
+            refreshHookStatus()
             cliLinked = CLIInstaller.isLinked
             isScanning = false
         }
@@ -148,14 +149,23 @@ final class OnboardingModel {
                 scan()
             } else {
                 let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-                installState = .failed(detail.isEmpty ? "tmux 설치에 실패했습니다." : detail)
+                installState = .failed(detail.isEmpty ? "Could not install tmux." : detail)
             }
         }
     }
 
-    func installHooks() {
-        appModel.installHooks()
-        hooksInstalled = ClaudeHooksInstaller.isInstalled()
+    func hooksInstalled(for agent: AgentKind) -> Bool {
+        installedHooks[agent] == true
+    }
+
+    func installHooks(for agent: AgentKind) {
+        integrationError = nil
+        let status = AgentHooksInstaller.install(for: agent)
+        refreshHookStatus()
+        appModel.needsHookInstall = !AgentHooksInstaller.isInstalled()
+        if case .failed(let message) = status {
+            integrationError = "Could not install \(agent.rawValue) hooks: \(message)"
+        }
     }
 
     func linkCLI() {
@@ -187,5 +197,11 @@ final class OnboardingModel {
 
     private func open(_ url: URL) {
         NSWorkspace.shared.open(url)
+    }
+
+    private func refreshHookStatus() {
+        installedHooks = Dictionary(uniqueKeysWithValues: AgentKind.launchable.map {
+            ($0, AgentHooksInstaller.isInstalled(for: $0))
+        })
     }
 }

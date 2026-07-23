@@ -2,6 +2,10 @@ import AppKit
 import SwiftUI
 import Observation
 
+enum AgentHookPromptPreference {
+    static let dismissedKey = "agentHooks.installPromptDismissed.v1"
+}
+
 /// Composition root + shared observable state for the whole app.
 @MainActor
 @Observable
@@ -12,8 +16,13 @@ final class AppModel {
     /// Non-nil when something is wrong the user must fix (tmux missing, port busy, hooks not installed).
     var setupProblem: String?
 
-    /// True when Claude Code hooks aren't installed yet (offer a one-click install).
+    /// True when one or more supported agent integrations aren't installed yet.
     var needsHookInstall: Bool = false
+
+    /// The warning may be acknowledged without installing. Settings still exposes the
+    /// integration status and installer after the home banner is dismissed.
+    var hookInstallPromptDismissed =
+        UserDefaults.standard.bool(forKey: AgentHookPromptPreference.dismissedKey)
 
     /// True when the hook server failed to bind its port.
     var hookServerFailed: Bool = false
@@ -55,6 +64,9 @@ final class AppModel {
 
     /// Set by the menu bar: the next panel show should land on the spec documents screen.
     var pendingOpenSpecs = false
+
+    /// Set by the native titlebar control: the panel should show feature documents.
+    var pendingOpenFeatures = false
 
     /// Dev-server sessions started from a spec document, per project root. Runtime-only —
     /// a local tmux session name has no business inside the portable, committable document.
@@ -102,6 +114,7 @@ final class AppModel {
     @ObservationIgnored private var remoteGatewayRestartTask: Task<Void, Never>?
     @ObservationIgnored private var remoteCredentialRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var remotePairingExpiryTask: Task<Void, Never>?
+    @ObservationIgnored private var projectSyncLoopTask: Task<Void, Never>?
     @ObservationIgnored private var remoteAccountService: RemoteAccountService!
 
     weak var panelController: PanelController?
@@ -154,6 +167,14 @@ final class AppModel {
         sessions.start()
         isReady = true
         installRemoteGateway()
+        syncProjectDirectories(automatic: true)
+        projectSyncLoopTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled, let self else { return }
+                self.syncProjectDirectories(automatic: true)
+            }
+        }
     }
 
     /// Re-read the feature configuration and replace the outbound relay connection. Settings
@@ -366,11 +387,16 @@ final class AppModel {
         panelController?.show(preselecting: nil)
     }
 
+    func showFeatures() {
+        pendingOpenFeatures = true
+        focusToken &+= 1
+    }
+
     func summon() {
         panelController?.toggle()
     }
 
-    /// Menu bar → attach the Android picker to the terminal workspace already on screen.
+    /// Menu bar → attach the mobile-device picker to the terminal workspace already on screen.
     func showDeviceMirror() {
         guard let focusedSessionName else {
             panelController?.show(preselecting: nil)
@@ -497,25 +523,138 @@ final class AppModel {
 
     // MARK: Project registration
 
-    /// Transient result of the last "Add projects…" action (shown in Settings).
+    /// Transient result of the last "Add directories…" action (shown in Settings).
     var lastProjectAddMessage: String?
+    var lastProjectSyncMessage: String?
+    var isProjectSyncing = false
 
     /// Register projects from picked folders. For each folder: if it's a git repo, register
     /// it; otherwise scan its immediate children and register every repo found. Handles
     /// single-project, parent-folder, and multi-select in one flow.
     func addProjects(dirs: [String]) {
+        guard !dirs.isEmpty else { return }
         Task { @MainActor in
             var added = 0
+            var addedDirectories = 0
             for dir in dirs {
+                if projects?.rememberDirectory(path: dir) == true {
+                    addedDirectories += 1
+                }
                 for root in await Self.resolveProjectRoots(under: dir) {
                     projects?.remember(rootPath: root)
                     added += 1
                 }
             }
-            lastProjectAddMessage = added == 0
-                ? "No git repositories found there."
-                : "Added \(added) project\(added == 1 ? "" : "s")."
-            Log.app.info("addProjects: \(added) registered from \(dirs.count) folder(s)")
+            if added == 0 {
+                lastProjectAddMessage = addedDirectories == 0
+                    ? "Already tracking those directories."
+                    : "Directory added; no git repositories found yet."
+            } else {
+                lastProjectAddMessage = "Tracking \(addedDirectories) new director\(addedDirectories == 1 ? "y" : "ies"); found \(added) project\(added == 1 ? "" : "s")."
+            }
+            Log.app.info("addProjects: \(added) projects from \(dirs.count) tracked folder(s)")
+        }
+    }
+
+    /// Re-scan every registered source. New repositories become available everywhere Pass
+    /// lists projects; project paths that no longer exist are removed unless a live session
+    /// still references them. Runs at launch and on demand from Settings.
+    func syncProjectDirectories(automatic: Bool = false) {
+        guard !isProjectSyncing else { return }
+        let directories = projects?.projectDirectories ?? []
+        guard !directories.isEmpty else {
+            if !automatic { lastProjectSyncMessage = "Add a directory before syncing." }
+            return
+        }
+
+        isProjectSyncing = true
+        if !automatic { lastProjectSyncMessage = nil }
+        Task { @MainActor in
+            let knownBefore = Set(projects?.projects.map(\.rootPath) ?? [])
+            var discovered: Set<String> = []
+            var availableDirectories: [String] = []
+            var unavailable = 0
+
+            for directory in directories {
+                if await Self.directoryExists(directory) {
+                    availableDirectories.append(directory)
+                    discovered.formUnion(await Self.resolveProjectRoots(under: directory))
+                } else {
+                    unavailable += 1
+                }
+            }
+
+            for root in discovered {
+                projects?.rememberIfNew(rootPath: root)
+            }
+
+            let liveRoots = Set(sessions?.sessions.map(\.projectRoot) ?? [])
+            let missing = (projects?.projects ?? []).filter { project in
+                Self.isPath(project.rootPath, insideAny: availableDirectories)
+                    && !FileManager.default.fileExists(atPath: project.rootPath)
+                    && !liveRoots.contains(project.rootPath)
+            }
+            missing.forEach { projects?.forget(rootPath: $0.rootPath) }
+
+            let added = discovered.subtracting(knownBefore).count
+            let unavailableSuffix = unavailable == 0
+                ? ""
+                : " · \(unavailable) unavailable director\(unavailable == 1 ? "y" : "ies")"
+            lastProjectSyncMessage = "Synced \(directories.count) director\(directories.count == 1 ? "y" : "ies") · \(added) new · \(missing.count) removed\(unavailableSuffix)"
+            isProjectSyncing = false
+            Log.app.info("project sync: \(discovered.count) found, \(added) new, \(missing.count) removed")
+        }
+    }
+
+    func setNewProjectParentDirectory(_ path: String) {
+        let normalized = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+        UserDefaults.standard.set(normalized, forKey: ProjectCreationService.defaultParentDirectoryKey)
+        projects?.rememberDirectory(path: normalized)
+    }
+
+    /// Create an empty Git repository from the ⌘N palette, register it, and launch its first
+    /// agent session. Returns a user-facing error; nil means the launch succeeded.
+    func createProject(named name: String, agent: AgentKind) async -> String? {
+        var parent = UserDefaults.standard.string(
+            forKey: ProjectCreationService.defaultParentDirectoryKey
+        ) ?? ""
+        if parent.isEmpty {
+            guard let picked = ProjectPicker.pickOne(
+                prompt: "Use for new projects",
+                message: "Choose where Pass should create new project folders"
+            ) else {
+                return "Choose a new-projects location in Settings › Projects."
+            }
+            setNewProjectParentDirectory(picked)
+            parent = picked
+        }
+
+        do {
+            let root = try await Task.detached { [parent] in
+                try ProjectCreationService.createProject(named: name, in: parent)
+            }.value
+            projects?.rememberDirectory(path: parent)
+            projects?.remember(rootPath: root)
+            _ = await sessions?.createSession(projectDir: root, agent: agent)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private static func directoryExists(_ path: String) async -> Bool {
+        await Task.detached {
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+        }.value
+    }
+
+    private static func isPath(_ path: String, insideAny directories: [String]) -> Bool {
+        let path = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+        return directories.contains { directory in
+            let directory = URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL.path
+            return path == directory || path.hasPrefix(directory == "/" ? "/" : directory + "/")
         }
     }
 
@@ -595,9 +734,18 @@ final class AppModel {
     }
 
     func installHooks() {
-        let status = ClaudeHooksInstaller.install()
-        needsHookInstall = !ClaudeHooksInstaller.isInstalled()
+        let status = AgentHooksInstaller.installAll()
+        needsHookInstall = !AgentHooksInstaller.isInstalled()
+        if !needsHookInstall {
+            hookInstallPromptDismissed = false
+            UserDefaults.standard.removeObject(forKey: AgentHookPromptPreference.dismissedKey)
+        }
         Log.hooks.info("hook install requested -> \(String(describing: status), privacy: .public)")
+    }
+
+    func dismissHookInstallPrompt() {
+        hookInstallPromptDismissed = true
+        UserDefaults.standard.set(true, forKey: AgentHookPromptPreference.dismissedKey)
     }
 
     func showOnboarding() {

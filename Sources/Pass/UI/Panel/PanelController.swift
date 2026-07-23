@@ -21,9 +21,20 @@ final class PanelController {
         let root = CommandView()
             .environment(appModel)
         panel.contentView = NSHostingView(rootView: root)
+        let titlebarAccessory = NSTitlebarAccessoryViewController()
+        titlebarAccessory.layoutAttribute = .right
+        let titlebarControls = NSHostingView(
+            rootView: PanelTitlebarControls().environment(appModel)
+        )
+        let titlebarSize = titlebarControls.fittingSize
+        titlebarControls.frame = NSRect(origin: .zero, size: titlebarSize)
+        titlebarAccessory.view = titlebarControls
+        titlebarAccessory.preferredContentSize = titlebarSize
+        panel.addTitlebarAccessoryViewController(titlebarAccessory)
         // Esc never closes the panel — it belongs to the embedded terminal (interrupting the
         // agent) and to in-view editing. Dismiss with the selected global shortcut instead.
         panel.onCancel = nil
+        panel.onRequestClose = { [weak self] in self?.hide() }
         panel.onGoBack = { [weak self] in self?.appModel.requestBack() }
         panel.onToggleFloat = { [weak self] in self?.toggleFloating() }
         panel.onNavigate = { [weak self] event in self?.appModel.keyHandler?(event) ?? false }
@@ -65,6 +76,11 @@ final class PanelController {
         onMove: { [weak self] origin in
             // Only remember drags in normal mode — floating mode re-centers itself each summon.
             if self?.isFloating == false { self?.savedOrigin = origin }
+        },
+        onMiniaturize: { [weak self] in self?.appModel.panelVisible = false },
+        onDeminiaturize: { [weak self] in
+            self?.appModel.panelVisible = true
+            self?.appModel.focusToken &+= 1
         }
     )
 
@@ -94,7 +110,10 @@ final class PanelController {
         applyMode()
     }
 
-    var isVisible: Bool { panel?.isVisible ?? false }
+    var isVisible: Bool {
+        guard let panel else { return false }
+        return panel.isVisible && !panel.isMiniaturized
+    }
 
     /// The panel currently owns the keyboard (it's the key window). Gate for panel-scoped
     /// modifier gestures like ⇧⇧ so they don't fire while typing in other apps.
@@ -112,6 +131,7 @@ final class PanelController {
     private func raise() {
         guard let panel else { return }
         NSApp.activate(ignoringOtherApps: true)
+        if panel.isMiniaturized { panel.deminiaturize(nil) }
         panel.makeKeyAndOrderFront(nil)
     }
 
@@ -127,6 +147,7 @@ final class PanelController {
         // off a disconnected screen; fall back to centering.
         if isFloating { centerOnActiveScreen(panel) } else { positionNormalWindow(panel) }
         NSApp.activate(ignoringOtherApps: true)
+        if panel.isMiniaturized { panel.deminiaturize(nil) }
         panel.makeKeyAndOrderFront(nil)
         appModel.panelVisible = true  // home attaches its live terminal only while visible
         appModel.focusToken &+= 1 // tell the omnibox to (re)take focus on every show
@@ -165,13 +186,50 @@ final class PanelController {
     }
 }
 
+/// Native titlebar content stays inside AppKit's reserved titlebar geometry, so it cannot
+/// overlap the extension launcher or a session's Readable/Terminal controls.
+private struct PanelTitlebarControls: View {
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        HStack(spacing: 7) {
+            if PassConfig.enableFeatureDocuments {
+                Button { appModel.showFeatures() } label: {
+                    Label("Features", systemImage: "doc.text.magnifyingglass")
+                }
+                .help("Executable software feature documents")
+            }
+            FeedbackButton()
+            SettingsLink {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .help("Open Settings")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .fixedSize()
+    }
+}
+
 /// NSWindowDelegate that reports the panel's new size/position when the user resizes or moves it.
 final class PanelResizeObserver: NSObject, NSWindowDelegate {
     private let onResize: (NSSize) -> Void
     private let onMove: (NSPoint) -> Void
-    init(onResize: @escaping (NSSize) -> Void, onMove: @escaping (NSPoint) -> Void = { _ in }) {
+    private let onMiniaturize: () -> Void
+    private let onDeminiaturize: () -> Void
+
+    init(
+        onResize: @escaping (NSSize) -> Void,
+        onMove: @escaping (NSPoint) -> Void = { _ in },
+        onMiniaturize: @escaping () -> Void = {},
+        onDeminiaturize: @escaping () -> Void = {}
+    ) {
         self.onResize = onResize
         self.onMove = onMove
+        self.onMiniaturize = onMiniaturize
+        self.onDeminiaturize = onDeminiaturize
     }
 
     func windowDidResize(_ notification: Notification) {
@@ -182,5 +240,13 @@ final class PanelResizeObserver: NSObject, NSWindowDelegate {
     func windowDidMove(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         onMove(window.frame.origin)
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        onMiniaturize()
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        onDeminiaturize()
     }
 }

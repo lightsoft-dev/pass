@@ -77,7 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         // Hooks: detect install state; offer one-click install (don't clobber the user's file).
-        appModel.needsHookInstall = !ClaudeHooksInstaller.isInstalled()
+        appModel.needsHookInstall = !AgentHooksInstaller.isInstalled()
         if ProcessInfo.processInfo.environment["PASS_DEBUG_INSTALL_HOOKS"] == "1" {
             appModel.installHooks()
         }

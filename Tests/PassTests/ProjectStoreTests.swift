@@ -100,4 +100,53 @@ final class ProjectStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.projects.map(\.rootPath), ["/a"])
         XCTAssertEqual(reloaded.emoji(forRoot: "/a"), "🎯")
     }
+
+    // MARK: project directories
+
+    func testRememberDirectoryNormalizesDedupesAndPersists() {
+        let (store, url) = makeStore()
+        XCTAssertTrue(store.rememberDirectory(path: "/work/projects/../projects"))
+        XCTAssertFalse(store.rememberDirectory(path: "/work/projects"))
+        XCTAssertEqual(store.projectDirectories, ["/work/projects"])
+
+        let reloaded = ProjectStore(fileURL: url)
+        XCTAssertEqual(reloaded.projectDirectories, ["/work/projects"])
+    }
+
+    func testForgetDirectoryDoesNotDeleteKnownProjects() {
+        let (store, _) = makeStore()
+        store.remember(rootPath: "/work/projects/pass")
+        store.rememberDirectory(path: "/work/projects")
+
+        store.forgetDirectory(path: "/work/projects")
+
+        XCTAssertTrue(store.projectDirectories.isEmpty)
+        XCTAssertEqual(store.projects.map(\.rootPath), ["/work/projects/pass"])
+    }
+
+    func testCountsProjectsInsideDirectoryWithoutPrefixCollisions() {
+        let (store, _) = makeStore()
+        store.remember(rootPath: "/work/projects/pass")
+        store.remember(rootPath: "/work/projects-two/other")
+        store.remember(rootPath: "/work/projects")
+
+        XCTAssertEqual(store.projectCount(inDirectory: "/work/projects"), 2)
+    }
+
+    func testLegacyProjectsSeedParentDirectoriesOnce() throws {
+        let (_, url) = makeStore()
+        let legacyProjects = [
+            Project(rootPath: "/work/projects/pass"),
+            Project(rootPath: "/work/projects/another"),
+            Project(rootPath: "/other/tool")
+        ]
+        try JSONEncoder().encode(legacyProjects).write(to: url)
+
+        let migrated = ProjectStore(fileURL: url)
+        XCTAssertEqual(migrated.projectDirectories, ["/other", "/work/projects"])
+
+        migrated.projectDirectories.forEach { migrated.forgetDirectory(path: $0) }
+        let reloaded = ProjectStore(fileURL: url)
+        XCTAssertTrue(reloaded.projectDirectories.isEmpty)
+    }
 }
