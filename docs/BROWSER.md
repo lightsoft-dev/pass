@@ -28,7 +28,9 @@ dev 서버 미리보기, PR 페이지, CI 로그, 에러 페이지 — 지금은
   "보여주기(open)"와 "관찰(screenshot/read)"까지.
 - 탭 스트립, 북마크, 다중 창 — v2. v1은 세션당 활성 페이지 1개 + 최근 URL 회상.
 - 다운로드 관리 — HTML이 아닌 응답은 기본 브라우저로 넘긴다.
-- Safari/Chrome 프로필·쿠키 공유 — pass 전용 저장소만 쓴다.
+- Safari 프로필 공유나 Chrome 프로필 직접 연결 — pass 전용 저장소를 유지한다.
+  단, 사용자가 Settings에서 명시적으로 선택한 로컬 Chrome 프로필의 쿠키는 일회성
+  스냅샷으로 가져올 수 있다(비밀번호·확장·기록은 제외, Chrome 원본은 읽기 전용).
 
 ## 2. 사용 시나리오
 
@@ -138,10 +140,13 @@ SessionWorkspaceView(session:, terminal:)
 - **⌘B** — 선택 세션의 브라우저 표시 토글. 탭이 없으면 빈 탭 + URL 필드 포커스.
 - **⌘L** — 브라우저가 보일 때 URL 필드로 포커스 이동(생략 스킴 보정은 §7.1 규칙).
 - **⌘⇧B** — 브라우저 확대 토글(터미널을 잠시 접고 전폭). 다시 누르면 스플릿 복귀.
+- **⌘+/⌘-/⌘0** — 표시 중인 페이지를 50–300% 범위로 확대·축소/초기화.
+- 첫 브라우저 pane이 열리면 Chrome 로그인 쿠키 가져오기를 한 번만 안내한다.
+  `Choose profile…`은 Settings › Integrations로 바로 이동하고, 닫으면 다시 표시하지 않는다.
 - **키보드 소유권은 기존 규칙 유지**: 일반 키는 터미널 소유. 웹 페이지 입력은 클릭으로
   포커스를 옮긴 뒤(패널이 key가 되므로 동작), 터미널 클릭/⌘P로 되돌아온다.
   ◀▶는 툴바 버튼 + (웹뷰 포커스 시) 표준 ⌘←/⌘→만 — 터미널의 방향키를 건드리지 않는다.
-- `PanelNavKey`에 `toggleBrowser`(⌘B), `focusAddress`(⌘L), `expandBrowser`(⌘⇧B) 추가,
+- `PanelNavKey`에 브라우저 표시/주소/전폭/페이지 확대·축소 키를 추가,
   SummonPanel.performKeyEquivalent → CommandView.handleNav 경유(기존 ⌘D/⌘N/⌘T와 동일 경로).
 
 ### 4.4 표면화(surfacing) 규칙 — CLI open이 도착했을 때

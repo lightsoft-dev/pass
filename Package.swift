@@ -37,6 +37,7 @@ let package = Package(
                 // AppKit / Apple-framework services (notifications, hotkey, login item,
                 // AppleScript terminal attach, NSWorkspace extension actions).
                 "Services/AttachService.swift",
+                "Services/ChromeProfileImportService.swift",
                 "Services/ExtensionRuntime.swift",
                 "Services/HotkeyService.swift",
                 "Services/LoginItemService.swift",
