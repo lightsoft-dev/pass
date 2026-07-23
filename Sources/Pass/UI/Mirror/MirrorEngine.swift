@@ -120,6 +120,35 @@ enum MirrorNetworkAddress {
     }
 }
 
+enum MirrorADBDisplaySizeParser {
+    static func parse(_ output: String) -> CGSize? {
+        let lines = output.split(separator: "\n").map(String.init)
+        for prefix in ["Override size:", "Physical size:"] {
+            guard let line = lines.first(where: { $0.hasPrefix(prefix) }) else { continue }
+            let value = line.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+            let parts = value.split(separator: "x", maxSplits: 1)
+            guard parts.count == 2,
+                  let width = Double(parts[0]), let height = Double(parts[1]),
+                  width > 0, height > 0 else { continue }
+            return CGSize(width: width, height: height)
+        }
+        return nil
+    }
+}
+
+enum MirrorInputCoordinates {
+    static func point(normalized: CGPoint, displaySize: CGSize, videoIsLandscape: Bool) -> CGPoint {
+        var size = displaySize
+        if (size.width > size.height) != videoIsLandscape {
+            size = CGSize(width: size.height, height: size.width)
+        }
+        return CGPoint(
+            x: min(1, max(0, normalized.x)) * size.width,
+            y: min(1, max(0, normalized.y)) * size.height
+        )
+    }
+}
+
 struct MirrorToolchain: Sendable {
     let adb: String
     let scrcpy: String
@@ -189,6 +218,7 @@ final class MirrorEngine {
     private(set) var toolProblem: String?
     private(set) var listError: String?
     private(set) var connectionMessage: String?
+    private(set) var inputError: String?
 
     @ObservationIgnored private var scrcpyProcess: Process?
     @ObservationIgnored private var ffmpegProcess: Process?
@@ -441,13 +471,26 @@ final class MirrorEngine {
         }
     }
 
-    func tap(x: Int, y: Int) {
-        runInput(["shell", "input", "tap", String(x), String(y)])
+    func tap(normalized point: CGPoint) {
+        runPointerInput { size, landscape in
+            let target = MirrorInputCoordinates.point(
+                normalized: point, displaySize: size, videoIsLandscape: landscape
+            )
+            return ["shell", "input", "tap", String(Int(target.x)), String(Int(target.y))]
+        }
     }
 
-    func swipe(from start: CGPoint, to end: CGPoint, duration: Int = 220) {
-        runInput(["shell", "input", "swipe", String(Int(start.x)), String(Int(start.y)),
-                  String(Int(end.x)), String(Int(end.y)), String(duration)])
+    func swipe(normalizedFrom start: CGPoint, to end: CGPoint, duration: Int = 220) {
+        runPointerInput { size, landscape in
+            let from = MirrorInputCoordinates.point(
+                normalized: start, displaySize: size, videoIsLandscape: landscape
+            )
+            let to = MirrorInputCoordinates.point(
+                normalized: end, displaySize: size, videoIsLandscape: landscape
+            )
+            return ["shell", "input", "swipe", String(Int(from.x)), String(Int(from.y)),
+                    String(Int(to.x)), String(Int(to.y)), String(duration)]
+        }
     }
 
     func returnToPicker() {
@@ -468,11 +511,29 @@ final class MirrorEngine {
 
     func shutdown() { detach() }
 
-    private func runInput(_ arguments: [String]) {
+    private func runPointerInput(
+        _ arguments: @escaping @Sendable (CGSize, Bool) -> [String]
+    ) {
         guard case .streaming(let device) = state,
               device.platform == .android,
               let adb = MirrorToolchain.locateADB() else { return }
-        Task.detached { _ = Shell.run(adb, ["-s", device.serial] + arguments) }
+        inputError = nil
+        let fallbackSize = frame?.size ?? CGSize(width: 1, height: 1)
+        let videoIsLandscape = fallbackSize.width > fallbackSize.height
+        Task { [weak self] in
+            let failure = await Task.detached {
+                let sizeResult = Shell.run(adb, ["-s", device.serial, "shell", "wm", "size"])
+                let displaySize = MirrorADBDisplaySizeParser.parse(sizeResult.stdout) ?? fallbackSize
+                let command = arguments(displaySize, videoIsLandscape)
+                let result = Shell.run(adb, ["-s", device.serial] + command)
+                guard !result.ok else { return Optional<String>.none }
+                let message = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                return message.isEmpty
+                    ? "Android input failed with exit code \(result.code)."
+                    : message
+            }.value
+            if let failure { self?.inputError = failure }
+        }
     }
 
     private func streamEnded(id: UUID, message explicitMessage: String? = nil) {
