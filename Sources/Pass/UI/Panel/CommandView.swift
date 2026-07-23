@@ -247,13 +247,7 @@ struct CommandView: View {
         case .newWorktree:
             // ⌘T — worktree session off the selected session, branch name prefilled: just ⏎.
             guard let s = selectedSession else { return true }
-            let root = s.git?.projectRoot ?? s.projectRoot
-            let existing = sessions.filter { $0.projectRoot == root && $0.git?.isLinkedWorktree == true }.count
-            status = nil
-            newSessionMode = false
-            showQuickCommand = true
-            query = "+wt-\(existing + 1)"
-            refocusField()
+            beginWorktreeSession(from: s)
             return true
         case .up:
             if e.command { navMove(-1); return true }
@@ -667,6 +661,7 @@ struct CommandView: View {
                             CompactSessionCard(session: s, selected: idx == selection,
                                                onSelect: { selection = idx },
                                                onMarkChecked: { appModel.markSessionChecked(s.name) },
+                                               onNewWorktree: { beginWorktreeSession(from: s) },
                                                onDelete: { pendingKill = s },
                                                browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
                                 .transition(rowTransition)
@@ -694,11 +689,13 @@ struct CommandView: View {
                                         session: s,
                                         terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
                                         onMarkChecked: { appModel.markSessionChecked(s.name) },
+                                        onNewWorktree: { beginWorktreeSession(from: s) },
                                         onDelete: { pendingKill = s }
                                     )
                                 } else {
                                     CompactSessionCard(session: s, onSelect: { selection = idx },
                                                        onMarkChecked: { appModel.markSessionChecked(s.name) },
+                                                       onNewWorktree: { beginWorktreeSession(from: s) },
                                                        browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
                                 }
                             }
@@ -996,6 +993,25 @@ struct CommandView: View {
         }
     }
 
+    /// Open the existing `+branch` flow for a specific session. Context menus can belong to an
+    /// unfocused row, so move the home cursor first; submitting the prefilled branch will then
+    /// inherit that session's project and agent.
+    private func beginWorktreeSession(from session: Session) {
+        if let idx = orderedSessions.firstIndex(where: { $0.name == session.name }) {
+            selection = idx
+        }
+        let root = session.git?.projectRoot ?? session.projectRoot
+        let existing = sessions.filter {
+            $0.projectRoot == root && $0.git?.isLinkedWorktree == true
+        }.count
+        status = nil
+        newSessionMode = false
+        showQuickCommand = true
+        jumpSelection = 0
+        query = "+wt-\(existing + 1)"
+        refocusField()
+    }
+
     /// A `+branch` entry spins off a git worktree of the focused session's project and starts
     /// a new session in it (same agent). ⏎ confirms and CLOSES the quick command — the new
     /// session card appears in the home; a failure reopens the bar with the error.
@@ -1109,6 +1125,7 @@ struct FocusedSessionCard: View {
     let session: Session
     var terminal: TerminalController?
     var onMarkChecked: (() -> Void)? = nil
+    var onNewWorktree: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
 
     @Environment(AppModel.self) private var appModel
@@ -1228,6 +1245,9 @@ struct FocusedSessionCard: View {
                 .keyboardShortcut("m", modifiers: .command)
         }
         Button("Rename...") { rename() }
+        if let onNewWorktree {
+            Button("New Session in Worktree...") { onNewWorktree() }
+        }
         Button("Open Mini Terminal") { appModel.miniTerminals.open(for: session) }
         ConfigURLContextMenu(session: session)
         if onDelete != nil { Divider() }
@@ -1291,6 +1311,7 @@ struct CompactSessionCard: View {
     var selected: Bool = false
     var onSelect: () -> Void = {}
     var onMarkChecked: (() -> Void)? = nil
+    var onNewWorktree: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     /// An agent opened/updated this session's browser page and the user hasn't seen it yet.
     var browserUnseen: Bool = false
@@ -1390,6 +1411,9 @@ struct CompactSessionCard: View {
                 .keyboardShortcut("m", modifiers: .command)
         }
         Button("Rename...") { rename() }
+        if let onNewWorktree {
+            Button("New Session in Worktree...") { onNewWorktree() }
+        }
         Button("Open Mini Terminal") { appModel.miniTerminals.open(for: session) }
         ConfigURLContextMenu(session: session)
         if onDelete != nil { Divider() }
