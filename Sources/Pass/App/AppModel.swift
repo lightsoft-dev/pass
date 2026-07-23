@@ -370,7 +370,7 @@ final class AppModel {
         panelController?.toggle()
     }
 
-    /// Menu bar → attach the Android picker to the terminal workspace already on screen.
+    /// Menu bar → attach the mobile-device picker to the terminal workspace already on screen.
     func showDeviceMirror() {
         guard let focusedSessionName else {
             panelController?.show(preselecting: nil)

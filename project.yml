@@ -59,6 +59,7 @@ targets:
         LSUIElement: true
         LSMinimumSystemVersion: "14.0"
         NSAppleEventsUsageDescription: "Pass opens tmux sessions in your terminal (Ghostty or Terminal) when you choose to attach."
+        NSCameraUsageDescription: "Pass uses the trusted USB connection to display your iPhone or iPad screen in the attached device pane."
         CFBundleURLTypes:
           - CFBundleURLName: dev.lightsoft.pass.oauth
             CFBundleURLSchemes:

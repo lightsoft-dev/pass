@@ -15,9 +15,55 @@ final class MirrorDeviceTests: XCTestCase {
         let devices = MirrorADBDevicesParser.parse(output)
 
         XCTAssertEqual(devices.map(\.serial), ["R5CT1234", "192.168.0.24:5555", "emulator-5554"])
+        XCTAssertEqual(devices.map(\.platform), [.android, .android, .android])
         XCTAssertEqual(devices.map(\.transport), [.usb, .network, .emulator])
         XCTAssertEqual(devices[0].displayName, "SM S918N")
         XCTAssertEqual(devices[1].displayName, "Pixel 7")
+    }
+
+    func testIOSScreenDeviceClassifierRejectsContinuityCamerasAndOtherVendors() {
+        XCTAssertTrue(MirrorIOSDeviceDiscovery.isIOSScreenCaptureDevice(
+            modelID: "iOS Device", manufacturer: "Apple Inc."
+        ))
+        XCTAssertTrue(MirrorIOSDeviceDiscovery.isIOSScreenCaptureDevice(
+            modelID: "IOS DEVICE", manufacturer: "APPLE INC."
+        ))
+        XCTAssertFalse(MirrorIOSDeviceDiscovery.isIOSScreenCaptureDevice(
+            modelID: "iPhone Camera", manufacturer: "Apple Inc."
+        ))
+        XCTAssertFalse(MirrorIOSDeviceDiscovery.isIOSScreenCaptureDevice(
+            modelID: "iOS Device", manufacturer: "Third Party"
+        ))
+    }
+
+    func testDeviceIdentityIsNamespacedByPlatformAndIOSIsViewOnly() {
+        let android = MirrorDevice(serial: "shared-id", name: "Pixel", product: nil,
+                                   transport: .usb)
+        let ios = MirrorDevice(serial: "shared-id", name: "iPhone", product: "iOS Device",
+                               platform: .iOS, transport: .usb)
+
+        XCTAssertNotEqual(android.id, ios.id)
+        XCTAssertEqual(android.detailText, "shared-id")
+        XCTAssertEqual(ios.detailText, "Trusted USB screen")
+        XCTAssertTrue(android.supportsPointerInput)
+        XCTAssertFalse(ios.supportsPointerInput)
+    }
+
+    func testPickerOrderingKeepsIOSFirstAndAndroidTransportPriority() {
+        let devices = [
+            MirrorDevice(serial: "emulator-5554", name: "A Emulator", product: nil,
+                         transport: .emulator),
+            MirrorDevice(serial: "wifi:5555", name: "A Wi-Fi", product: nil,
+                         transport: .network),
+            MirrorDevice(serial: "usb", name: "Z USB", product: nil, transport: .usb),
+            MirrorDevice(serial: "ios", name: "iPhone", product: "iOS Device",
+                         platform: .iOS, transport: .usb),
+        ]
+
+        XCTAssertEqual(
+            MirrorDevice.orderedForPicker(devices).map(\.serial),
+            ["ios", "usb", "wifi:5555", "emulator-5554"]
+        )
     }
 
     func testNetworkAddressDefaultsToADBPortAndValidatesExplicitPort() {

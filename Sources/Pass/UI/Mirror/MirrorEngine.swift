@@ -3,9 +3,21 @@ import Darwin
 import Foundation
 import Observation
 
-/// An Android target visible to adb. Physical devices and Android emulators use the same
-/// direct stream; only their transport label differs in the picker.
+/// A mobile target available for direct mirroring. Android targets come from adb; trusted
+/// iPhone and iPad screens come from macOS's native CoreMediaIO capture devices.
 struct MirrorDevice: Identifiable, Equatable, Sendable {
+    enum Platform: String, Sendable {
+        case android
+        case iOS
+
+        var label: String {
+            switch self {
+            case .android: return "Android"
+            case .iOS: return "iOS"
+            }
+        }
+    }
+
     enum Transport: String, Sendable {
         case usb
         case network
@@ -23,10 +35,35 @@ struct MirrorDevice: Identifiable, Equatable, Sendable {
     let serial: String
     let name: String
     let product: String?
+    let platform: Platform
     let transport: Transport
 
-    var id: String { serial }
+    init(serial: String, name: String, product: String?, platform: Platform = .android,
+         transport: Transport) {
+        self.serial = serial
+        self.name = name
+        self.product = product
+        self.platform = platform
+        self.transport = transport
+    }
+
+    var id: String { "\(platform.rawValue):\(serial)" }
     var displayName: String { name.isEmpty ? serial : name }
+    var detailText: String {
+        platform == .iOS ? "Trusted USB screen" : serial
+    }
+    var supportsPointerInput: Bool { platform == .android }
+
+    static func orderedForPicker(_ devices: [MirrorDevice]) -> [MirrorDevice] {
+        let transportRank: [Transport: Int] = [.usb: 0, .network: 1, .emulator: 2]
+        return devices.sorted {
+            if $0.platform != $1.platform { return $0.platform == .iOS }
+            if $0.transport != $1.transport {
+                return (transportRank[$0.transport] ?? 9) < (transportRank[$1.transport] ?? 9)
+            }
+            return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
+    }
 }
 
 struct MirrorADBDevicesParser {
@@ -102,9 +139,36 @@ struct MirrorToolchain: Sendable {
     }
 }
 
-/// Direct Android mirror attached to a Pass session workspace. scrcpy produces a headless
-/// Matroska stream and ffmpeg turns it into JPEG frames for the SwiftUI pane. This never reads
-/// a Mac window, so Screen Recording permission is neither requested nor required.
+private struct MirrorAndroidDiscoveryResult: Sendable {
+    let devices: [MirrorDevice]
+    let toolProblem: String?
+    let listError: String?
+
+    static func discover() -> MirrorAndroidDiscoveryResult {
+        guard let adb = MirrorToolchain.locateADB() else {
+            return MirrorAndroidDiscoveryResult(
+                devices: [],
+                toolProblem: "Android platform-tools are required for Android devices. Install them with: brew install --cask android-platform-tools",
+                listError: nil
+            )
+        }
+
+        let missing = ["scrcpy", "ffmpeg"].filter { Shell.resolveViaLoginShell($0) == nil }
+        let toolProblem = missing.isEmpty ? nil
+            : "Android mirroring requires \(missing.joined(separator: " and ")). Install with: brew install scrcpy ffmpeg"
+        let result = Shell.run(adb, ["devices", "-l"])
+        return MirrorAndroidDiscoveryResult(
+            devices: result.ok ? MirrorADBDevicesParser.parse(result.stdout) : [],
+            toolProblem: toolProblem,
+            listError: result.ok ? nil
+                : result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+}
+
+/// Direct mobile mirror attached to a Pass session workspace. Android frames come through
+/// scrcpy/ffmpeg and iOS frames through AVFoundation. Neither path reads a Mac window, so
+/// Screen Recording permission is neither requested nor required.
 @MainActor
 @Observable
 final class MirrorEngine {
@@ -133,6 +197,8 @@ final class MirrorEngine {
     @ObservationIgnored private var streamID: UUID?
     @ObservationIgnored private var logURL: URL?
     @ObservationIgnored private var logHandle: FileHandle?
+    @ObservationIgnored private var iosCapture: MirrorIOSCapture?
+    @ObservationIgnored private var startupTask: Task<Void, Never>?
 
     func openPicker(for sessionName: String) {
         if attachedSessionName != sessionName { stopStream() }
@@ -147,20 +213,14 @@ final class MirrorEngine {
         isRefreshing = true
         defer { isRefreshing = false }
         listError = nil
-        guard let adb = MirrorToolchain.locateADB() else {
-            devices = []
-            toolProblem = "Android platform-tools are required. Install them with: brew install --cask android-platform-tools"
-            return
-        }
-        let missing = ["scrcpy", "ffmpeg"].filter { Shell.resolveViaLoginShell($0) == nil }
-        toolProblem = missing.isEmpty ? nil : "Embedded mirroring requires \(missing.joined(separator: " and ")). Install with: brew install scrcpy ffmpeg"
-        let result = await Task.detached { Shell.run(adb, ["devices", "-l"]) }.value
-        guard result.ok else {
-            devices = []
-            listError = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            return
-        }
-        devices = MirrorADBDevicesParser.parse(result.stdout)
+        let iosTask = Task.detached { MirrorIOSDeviceDiscovery.discover() }
+        let androidTask = Task.detached { MirrorAndroidDiscoveryResult.discover() }
+        let iosDevices = await iosTask.value
+        let android = await androidTask.value
+
+        toolProblem = android.toolProblem
+        listError = android.listError
+        devices = MirrorDevice.orderedForPicker(iosDevices + android.devices)
     }
 
     func connectNetwork(_ rawAddress: String) async -> Bool {
@@ -221,6 +281,19 @@ final class MirrorEngine {
             state = .failed("Open a running terminal session before attaching a device pane.")
             return
         }
+        switch device.platform {
+        case .android:
+            startAndroid(device)
+        case .iOS:
+            startIOS(device)
+        }
+    }
+
+    func unavailableReason(for device: MirrorDevice) -> String? {
+        device.platform == .android ? toolProblem : nil
+    }
+
+    private func startAndroid(_ device: MirrorDevice) {
         guard let tools = MirrorToolchain.locate() else {
             state = .failed("Embedded mirroring requires adb, scrcpy, and ffmpeg.")
             return
@@ -246,12 +319,19 @@ final class MirrorEngine {
 
         let diagnostics = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("pass-device-pane-\(id.uuidString).log")
-        FileManager.default.createFile(atPath: diagnostics.path, contents: nil)
-        guard let diagnosticsHandle = FileHandle(forWritingAtPath: diagnostics.path) else {
+        guard FileManager.default.createFile(atPath: diagnostics.path, contents: nil) else {
+            streamID = nil
+            closePipesAndLog()
             state = .failed("Could not create the mirror diagnostic log.")
             return
         }
         logURL = diagnostics
+        guard let diagnosticsHandle = FileHandle(forWritingAtPath: diagnostics.path) else {
+            streamID = nil
+            closePipesAndLog()
+            state = .failed("Could not open the mirror diagnostic log.")
+            return
+        }
         logHandle = diagnosticsHandle
 
         let ffmpeg = Process()
@@ -287,8 +367,7 @@ final class MirrorEngine {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, self.streamID == id, let image = NSImage(data: jpeg) else { return }
-                    self.frame = image
-                    if case .launching = self.state { self.state = .streaming(device) }
+                    self.receiveFrame(image, from: device, streamID: id)
                 }
             }
         }
@@ -306,11 +385,59 @@ final class MirrorEngine {
             try scrcpy.run()
             ffmpegProcess = ffmpeg
             scrcpyProcess = scrcpy
+            scheduleStartupTimeout(
+                streamID: id,
+                message: "The Android device connected, but no video frames arrived."
+            )
         } catch {
             if ffmpeg.isRunning { ffmpeg.terminate() }
             streamID = nil
             closePipesAndLog()
             state = .failed("Could not start the embedded device stream: \(error.localizedDescription)")
+        }
+    }
+
+    private func startIOS(_ device: MirrorDevice) {
+        let id = UUID()
+        streamID = id
+        state = .launching(device)
+        frame = nil
+
+        Task { [weak self] in
+            let authorized = await MirrorIOSCapture.requestVideoAccess()
+            guard let self, self.streamID == id else { return }
+            guard authorized else {
+                self.streamID = nil
+                self.state = .failed(
+                    "Camera access is required for the trusted USB screen stream. Enable Pass in System Settings → Privacy & Security → Camera."
+                )
+                return
+            }
+
+            let capture = MirrorIOSCapture(
+                deviceID: device.serial,
+                frameHandler: { [weak self] cgImage in
+                    guard let self, self.streamID == id else { return }
+                    let image = NSImage(
+                        cgImage: cgImage,
+                        size: NSSize(width: cgImage.width, height: cgImage.height)
+                    )
+                    self.receiveFrame(image, from: device, streamID: id)
+                },
+                failureHandler: { [weak self] message in
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            self?.streamEnded(id: id, message: message)
+                        }
+                    }
+                }
+            )
+            self.iosCapture = capture
+            capture.start()
+            self.scheduleStartupTimeout(
+                streamID: id,
+                message: "The iPhone screen connected, but no video arrived. Keep the device unlocked and close QuickTime or other capture apps."
+            )
         }
     }
 
@@ -343,22 +470,45 @@ final class MirrorEngine {
 
     private func runInput(_ arguments: [String]) {
         guard case .streaming(let device) = state,
+              device.platform == .android,
               let adb = MirrorToolchain.locateADB() else { return }
         Task.detached { _ = Shell.run(adb, ["-s", device.serial] + arguments) }
     }
 
-    private func streamEnded(id: UUID) {
+    private func streamEnded(id: UUID, message explicitMessage: String? = nil) {
         guard streamID == id else { return }
-        let message = diagnosticTail()
+        let message = explicitMessage ?? diagnosticTail()
         stopStream()
         state = .failed(message.isEmpty ? "The device stream stopped unexpectedly." : message)
     }
 
+    private func receiveFrame(_ image: NSImage, from device: MirrorDevice, streamID id: UUID) {
+        guard streamID == id else { return }
+        frame = image
+        if case .launching = state { state = .streaming(device) }
+        startupTask?.cancel()
+        startupTask = nil
+    }
+
+    private func scheduleStartupTimeout(streamID id: UUID, message: String) {
+        startupTask?.cancel()
+        startupTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled, let self, self.streamID == id,
+                  case .launching = self.state else { return }
+            self.streamEnded(id: id, message: message)
+        }
+    }
+
     private func stopStream() {
         streamID = nil
+        startupTask?.cancel()
+        startupTask = nil
         framePipe?.fileHandleForReading.readabilityHandler = nil
         if scrcpyProcess?.isRunning == true { scrcpyProcess?.terminate() }
         if ffmpegProcess?.isRunning == true { ffmpegProcess?.terminate() }
+        iosCapture?.stop()
+        iosCapture = nil
         scrcpyProcess = nil
         ffmpegProcess = nil
         frame = nil
