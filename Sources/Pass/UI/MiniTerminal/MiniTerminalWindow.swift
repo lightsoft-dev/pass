@@ -150,9 +150,40 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
     }
 }
 
+enum MiniTerminalEditingShortcut {
+    static func selector(for event: NSEvent) -> Selector? {
+        guard event.modifierFlags.contains(.command) else { return nil }
+
+        // Match the physical key as well as the character. With a non-Latin input source,
+        // charactersIgnoringModifiers is the mapped glyph rather than "c", "v", or "a".
+        let character = event.charactersIgnoringModifiers?.lowercased()
+        switch event.keyCode {
+        case 8: return #selector(NSText.copy(_:))
+        case 9: return #selector(NSText.paste(_:))
+        case 0: return #selector(NSText.selectAll(_:))
+        default:
+            if character == "c" { return #selector(NSText.copy(_:)) }
+            if character == "v" { return #selector(NSText.paste(_:)) }
+            if character == "a" { return #selector(NSText.selectAll(_:)) }
+            return nil
+        }
+    }
+}
+
 private final class MiniTerminalPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    /// Pass is an accessory app, so the normal Edit-menu key equivalents are not reliably
+    /// dispatched for this standalone panel. Send them through the responder chain explicitly;
+    /// SwiftTerm implements copy, paste, and selectAll on its terminal view.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let selector = MiniTerminalEditingShortcut.selector(for: event),
+           NSApp.sendAction(selector, to: nil, from: self) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 private struct MiniTerminalContent: View {

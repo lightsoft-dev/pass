@@ -60,12 +60,12 @@ struct OnboardingView: View {
             }
             .padding(.bottom, 48)
 
-            ForEach(0..<3, id: \.self) { index in
+            ForEach(0..<4, id: \.self) { index in
                 railItem(index)
-                if index < 2 {
+                if index < 3 {
                     Rectangle()
                         .fill(index < model.step ? lavender.opacity(0.8) : Color.white.opacity(0.13))
-                        .frame(width: 1, height: 54)
+                        .frame(width: 1, height: 38)
                         .padding(.leading, 12)
                 }
             }
@@ -80,7 +80,7 @@ struct OnboardingView: View {
     }
 
     private func railItem(_ index: Int) -> some View {
-        let labels = ["Welcome", "Pre-flight check", "Connect agents"]
+        let labels = ["Welcome", "Pre-flight check", "Choose projects", "Connect agents"]
         let active = index == model.step
         let complete = index < model.step
         return HStack(spacing: 12) {
@@ -110,6 +110,7 @@ struct OnboardingView: View {
             switch model.step {
             case 0: welcome
             case 1: systemCheck
+            case 2: projectSelection
             default: integrations
             }
         }
@@ -215,6 +216,108 @@ struct OnboardingView: View {
         }
     }
 
+    private var projectSelection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            eyebrow("PROJECTS  /  PICK YOUR WORKSPACE")
+            Text("Where do your projects live?")
+                .font(.custom("Avenir Next", size: 28).weight(.heavy))
+                .foregroundStyle(paper)
+                .padding(.top, 8)
+            Text("Choose project folders or a parent folder. Pass finds Git repositories one level inside and keeps the list in sync.")
+                .font(.custom("Avenir Next", size: 13))
+                .foregroundStyle(.secondary)
+                .lineSpacing(3)
+                .frame(maxWidth: 500, alignment: .leading)
+                .padding(.top, 7)
+
+            VStack(spacing: 0) {
+                if model.projectDirectories.isEmpty {
+                    VStack(spacing: 13) {
+                        Image(systemName: "folder.badge.plus")
+                            .font(.system(size: 28, weight: .light))
+                            .foregroundStyle(signal)
+                        Text("No project directories selected")
+                            .font(.custom("Avenir Next", size: 13).weight(.bold))
+                            .foregroundStyle(paper)
+                        Text("You can skip this and add directories later in Settings.")
+                            .font(.custom("Avenir Next", size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 190)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(model.projectDirectories, id: \.self) { path in
+                                projectDirectoryRow(path)
+                                if path != model.projectDirectories.last {
+                                    Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 260)
+                }
+            }
+            .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 11))
+            .overlay(RoundedRectangle(cornerRadius: 11).stroke(Color.white.opacity(0.10)))
+            .padding(.top, 26)
+
+            Button { model.chooseProjectDirectories() } label: {
+                Label(
+                    model.projectDirectories.isEmpty ? "Choose directories…" : "Add more directories…",
+                    systemImage: "folder.badge.plus"
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .padding(.top, 14)
+
+            Spacer()
+            HStack {
+                Button("Back") { model.step = 1 }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                primaryButton(
+                    model.projectDirectories.isEmpty ? "Skip for now" : "Continue",
+                    icon: "arrow.right"
+                ) {
+                    model.step = 3
+                }
+            }
+        }
+    }
+
+    private func projectDirectoryRow(_ path: String) -> some View {
+        HStack(spacing: 13) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(lavender)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(URL(fileURLWithPath: path).lastPathComponent)
+                    .font(.custom("Avenir Next", size: 12).weight(.bold))
+                    .foregroundStyle(paper)
+                Text(path)
+                    .font(.custom("Menlo", size: 9))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer()
+            Button { model.removeProjectDirectory(path) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .help("Stop syncing this directory")
+        }
+        .padding(.horizontal, 15)
+        .padding(.vertical, 12)
+    }
+
     private var integrations: some View {
         VStack(alignment: .leading, spacing: 0) {
             eyebrow("CONNECT  /  CHOOSE YOUR CREW")
@@ -274,7 +377,7 @@ struct OnboardingView: View {
 
             Spacer()
             HStack {
-                Button("Back") { model.step = 1 }
+                Button("Back") { model.step = 2 }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                 Spacer()
