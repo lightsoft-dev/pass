@@ -430,6 +430,7 @@ struct CommandView: View {
                     Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(.secondary)
                     Text("Sessions").font(.system(size: 13, weight: .semibold))
                     Spacer()
+                    FeedbackButton()
                     if PassConfig.enableFeatureDocuments {
                         Button {
                             query = ""

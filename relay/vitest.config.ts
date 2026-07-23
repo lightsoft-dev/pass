@@ -16,6 +16,8 @@ export default defineConfig({
         bindings: {
           RELAY_AUTH_TOKEN: "test-only-pass-relay-token",
           DEVICE_CREDENTIAL_PEPPER: "test-only-device-credential-pepper",
+          NOTION_API_TOKEN: "test-only-notion-token",
+          NOTION_FEEDBACK_DATA_SOURCE_ID: "test-feedback-data-source",
           ALLOW_DEVELOPMENT_AUTH: "true",
           OIDC_ISSUER: "https://identity.pass.test/",
           OIDC_AUDIENCE: "pass-public-api",

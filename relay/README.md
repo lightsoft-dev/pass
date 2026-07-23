@@ -26,6 +26,8 @@ DEVICE_CREDENTIAL_PEPPER=<another-independent-random-value>
 OIDC_ISSUER=https://identity.example.com
 OIDC_AUDIENCE=pass-public-api
 OIDC_JWKS_URL=https://identity.example.com/.well-known/jwks.json
+NOTION_API_TOKEN=<notion-internal-integration-token>
+NOTION_FEEDBACK_DATA_SOURCE_ID=<feedback-data-source-id>
 # Optional comma-separated D1 account ids allowed to hide marketplace listings.
 MARKETPLACE_ADMIN_ACCOUNT_IDS=acct_...
 ```
@@ -48,6 +50,8 @@ a value to `wrangler.jsonc` or source code:
 ```sh
 npx wrangler secret put RELAY_AUTH_TOKEN
 npx wrangler secret put DEVICE_CREDENTIAL_PEPPER
+npx wrangler secret put NOTION_API_TOKEN
+npx wrangler secret put NOTION_FEEDBACK_DATA_SOURCE_ID
 npx wrangler secret put MARKETPLACE_ADMIN_ACCOUNT_IDS
 ```
 
@@ -80,6 +84,27 @@ Deck handoffs store only a hybrid-encrypted credential envelope until challenge 
 contains the approval secret but never the private polling secret or a usable relay credential.
 The Worker Rate Limiting API limits pairing routes to 20 requests per minute and other authenticated
 API/WebSocket handshakes to 120 per minute for each hashed credential key in a Cloudflare location.
+
+## Feedback API and Notion setup
+
+`POST /v2/feedback` accepts an in-app request, feedback note, or bug report and creates one page in
+the configured Notion data source. The route is intentionally narrow: request bodies are size
+limited and validated, Notion errors are not returned to clients, and anonymous submissions are
+limited to 10 per minute per source IP in a Cloudflare location.
+
+To configure it:
+
+1. Create a Notion internal integration with **Read content** and **Insert content** capabilities.
+2. Create or choose the feedback database, connect the integration to it, and copy its data source
+   id. The handler discovers the data source's title property name, so it does not have to be
+   called `Name`.
+3. Store the integration token and data source id using the two Wrangler secrets above.
+4. Build Pass with `PASS_FEEDBACK_URL=https://<worker-host>` (or
+   `PASS_PUBLIC_RELAY_URL=https://<worker-host>`). The app always appends `/v2/feedback` and rejects
+   non-HTTPS production endpoints.
+
+The Notion token is used only by the Worker and must never be added to the app, `project.yml`, or
+source control.
 
 ## In-app extension marketplace API
 
