@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             appModel.mirror?.shutdown()
+            appModel.miniTerminals?.closeAll()
             appModel.sessions?.flushSave()
         }
     }

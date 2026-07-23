@@ -76,6 +76,7 @@ final class AppModel {
     private(set) var features: FeatureStore!
     private(set) var browser: BrowserStore!
     private(set) var mirror: MirrorEngine!
+    private(set) var miniTerminals: MiniTerminalManager!
     private(set) var webViews: WebViewPool!
     private(set) var extensions: ExtensionStore!
     private(set) var extensionRuntime: ExtensionRuntime!
@@ -117,6 +118,7 @@ final class AppModel {
         features = FeatureStore()
         browser = BrowserStore()
         mirror = MirrorEngine()
+        miniTerminals = MiniTerminalManager()
         webViews = WebViewPool()
         webViews.store = browser
         // Tabs are data (BrowserStore); webviews are the pool — keep them in lockstep.

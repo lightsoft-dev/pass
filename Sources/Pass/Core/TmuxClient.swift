@@ -216,6 +216,15 @@ actor TmuxClient: TerminalPaneAccess {
         return await run(args).stdout
     }
 
+    /// Recent scrollback for semantic/readable renderers. This is intentionally separate from
+    /// `capturePane`: previews only need the visible grid, while conversation views need turns
+    /// that have already scrolled off-screen.
+    func capturePaneHistory(_ name: String, lines: Int = 2_000) async -> String {
+        await run([
+            "capture-pane", "-p", "-J", "-S", "-\(max(1, lines))", "-t", name,
+        ]).stdout
+    }
+
     /// Captures the visible terminal grid without joining wrapped rows. Cursor and dimensions
     /// let a remote terminal renderer reconstruct the current screen after every reconnect.
     func terminalSnapshot(_ name: String) async -> TerminalPaneSnapshot? {

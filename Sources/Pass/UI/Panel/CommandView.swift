@@ -22,6 +22,7 @@ struct CommandView: View {
     @FocusState private var omniboxFocused: Bool
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
+    @AppStorage("sessionDetailReadableMode") private var readableMode = false
     // Which agent ⌘N starts. Chosen from the dropdown in the new-session bar; remembered so the
     // next ⌘N defaults to your last pick.
     @AppStorage("newSessionAgent") private var newSessionAgentRaw = AgentKind.claude.rawValue
@@ -776,7 +777,7 @@ struct CommandView: View {
         // Its live terminal is on screen — that counts as checking the session (clears the
         // needs-you border, reconciles stale pending state), same as opening the detail view.
         if let s = sessions.first(where: { $0.name == name }) { appModel.reconcileOnOpen(s) }
-        if !showQuickCommand {
+        if !showQuickCommand && !readableMode {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { controller.focus() }
         }
     }
@@ -787,13 +788,31 @@ struct CommandView: View {
         // by same-color padding so it can breathe. A hairline key-hint strip sits under it.
         VStack(alignment: .leading, spacing: 0) {
             if let live = displayedTerminal, let s = selectedSession {
+                HStack {
+                    Text(s.displayName)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer()
+                    MiniTerminalButton(session: s)
+                    SessionPresentationPicker(readableMode: $readableMode) {
+                        DispatchQueue.main.async { live.focus() }
+                    }
+                }
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                Divider()
                 // Workspace = terminal │ (optional) browser split for the selected session.
                 SessionWorkspaceView(session: s) {
-                    TerminalPaneView(controller: live)
-                        .id(live.sessionName) // new session → new NSView (updateNSView can't swap it)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
-                        .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
+                    Group {
+                        if readableMode {
+                            ConversationPaneView(session: s)
+                        } else {
+                            TerminalPaneView(controller: live)
+                                .id(live.sessionName) // new session → new NSView (updateNSView can't swap it)
+                                .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
+                                .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if selectedSession?.launching == true {
@@ -807,7 +826,9 @@ struct CommandView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Divider()
-            Text("drag select · ⌘C copy · ⌥drag tmux · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text(readableMode
+                 ? "select text · tools expand on click · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand"
+                 : "drag select · ⌘C copy · ⌥drag tmux · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 8).padding(.vertical, 3)
         }
@@ -1092,15 +1113,19 @@ struct FocusedSessionCard: View {
     var onDelete: (() -> Void)? = nil
     var onSpecs: (() -> Void)? = nil
 
+    @Environment(AppModel.self) private var appModel
     @State private var renaming = false
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
+    @AppStorage("sessionDetailReadableMode") private var readableMode = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
                 .padding(.horizontal, 12).padding(.top, 10)
             terminalBody // full-bleed: the terminal spans the card edge-to-edge
-            Text("keys go to the session · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
+            Text(readableMode
+                 ? "select text · tools expand on click · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions"
+                 : "keys go to the session · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 12).padding(.bottom, 8)
         }
@@ -1131,11 +1156,17 @@ struct FocusedSessionCard: View {
             // reading as edge-to-edge while the content breathes. The workspace wrapper adds
             // the browser split when this session has a visible tab.
             SessionWorkspaceView(session: session) {
-                TerminalPaneView(controller: terminal)
-                    .id(terminal.sessionName) // new session → new NSView (updateNSView can't swap it)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
-                    .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
+                Group {
+                    if readableMode {
+                        ConversationPaneView(session: session)
+                    } else {
+                        TerminalPaneView(controller: terminal)
+                            .id(terminal.sessionName) // new session → new NSView (updateNSView can't swap it)
+                            .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
+                            .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity)
             .frame(height: 340)
@@ -1162,6 +1193,10 @@ struct FocusedSessionCard: View {
             }
             Spacer()
             attentionBadge
+            MiniTerminalButton(session: session)
+            SessionPresentationPicker(readableMode: $readableMode) {
+                DispatchQueue.main.async { terminal?.focus() }
+            }
             if let onSpecs {
                 Button(action: onSpecs) { Image(systemName: "doc.text") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -1200,6 +1235,7 @@ struct FocusedSessionCard: View {
                 .keyboardShortcut("m", modifiers: .command)
         }
         Button("Rename...") { rename() }
+        Button("Open Mini Terminal") { appModel.miniTerminals.open(for: session) }
         ConfigURLContextMenu(session: session)
         if let onSpecs {
             Button("Project Specs") { onSpecs() }
@@ -1273,6 +1309,7 @@ struct CompactSessionCard: View {
 
     @State private var hovering = false
     @State private var renaming = false
+    @Environment(AppModel.self) private var appModel
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1289,6 +1326,7 @@ struct CompactSessionCard: View {
                 // Keep the buttons mounted while the rename popover is open — otherwise moving
                 // the mouse onto the popover ends the hover and tears the popover down.
                 if hovering || renaming {
+                    MiniTerminalButton(session: session)
                     if let onSpecs {
                         Button(action: onSpecs) { Image(systemName: "doc.text") }
                             .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -1369,6 +1407,7 @@ struct CompactSessionCard: View {
                 .keyboardShortcut("m", modifiers: .command)
         }
         Button("Rename...") { rename() }
+        Button("Open Mini Terminal") { appModel.miniTerminals.open(for: session) }
         ConfigURLContextMenu(session: session)
         if let onSpecs {
             Button("Project Specs") { onSpecs() }
