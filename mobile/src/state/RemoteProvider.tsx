@@ -13,6 +13,7 @@ import * as Crypto from "expo-crypto";
 import { AppState, Platform } from "react-native";
 
 import { parsePairingPayload } from "../protocol/pairing";
+import { parseDeckPairingApproval } from "../protocol/pairing";
 import type {
   AgentKind,
   ClientCommandPayloadMap,
@@ -24,6 +25,7 @@ import type {
 import {
   claimDevicePairing,
   createDevelopmentPairing,
+  approveDeckPairing as approveDeckPairingRequest,
 } from "../services/pairingService";
 import {
   isUserSessionFresh,
@@ -63,6 +65,7 @@ interface RemoteContextValue {
   pairingBusy: boolean;
   pairingError: string | null;
   pair: (rawPayload: string) => Promise<CommandResult>;
+  approveDeckPairing: (rawPayload: string) => Promise<CommandResult>;
   completeSignIn: (session: UserSession) => Promise<void>;
   signOut: () => Promise<void>;
   forgetPairing: () => Promise<void>;
@@ -249,6 +252,34 @@ export function RemoteProvider({ children }: PropsWithChildren) {
     }
   }, [userSession]);
 
+  const approveDeckPairing = useCallback(async (rawPayload: string): Promise<CommandResult> => {
+    setPairingBusy(true);
+    setPairingError(null);
+    try {
+      if (!pairedDesktop) throw new Error("Pair this phone with a desktop first.");
+      if (!userSession) throw new Error("Sign in before approving a Steam Deck.");
+      let activeSession = userSession;
+      if (!isUserSessionFresh(activeSession)) {
+        activeSession = await refreshUserSession(activeSession);
+        await saveUserSession(activeSession);
+        setUserSession(activeSession);
+      }
+      const parsed = parseDeckPairingApproval(rawPayload);
+      if (parsed.relayUrl.replace(/\/+$/, "") !== pairedDesktop.relayUrl.replace(/\/+$/, "")) {
+        throw new Error("This Deck uses a different Pass relay.");
+      }
+      await approveDeckPairingRequest(parsed, {
+        userAccessToken: activeSession.accessToken,
+        desktopId: pairedDesktop.desktopId,
+      });
+      return { ok: true, commandId: parsed.pairingId };
+    } catch (error) {
+      const message = errorMessage(error);
+      setPairingError(message);
+      return { ok: false, error: message };
+    } finally { setPairingBusy(false); }
+  }, [pairedDesktop, userSession]);
+
   const completeSignIn = useCallback(async (session: UserSession) => {
     await saveUserSession(session);
     setUserSession(session);
@@ -322,6 +353,7 @@ export function RemoteProvider({ children }: PropsWithChildren) {
       pairingBusy,
       pairingError,
       pair,
+      approveDeckPairing,
       completeSignIn,
       signOut,
       forgetPairing,
@@ -361,6 +393,7 @@ export function RemoteProvider({ children }: PropsWithChildren) {
       forgetPairing,
       hydrated,
       pair,
+      approveDeckPairing,
       pairedDesktop,
       pairingBusy,
       pairingError,

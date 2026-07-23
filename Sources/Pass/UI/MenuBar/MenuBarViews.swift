@@ -35,6 +35,8 @@ struct MenuBarContent: View {
         Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
         Button("Back up all projects…") { appModel.exportAllProjects(optimizeGit: backupOptimizeGit) }
             .disabled(appModel.isExporting)
+        Button("Attach device pane…") { appModel.showDeviceMirror() }
+            .disabled(appModel.focusedSessionName == nil)
 
         if appModel.extensions?.activeExtensions.isEmpty == false {
             Menu("Extensions") {

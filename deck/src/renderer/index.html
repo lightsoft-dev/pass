@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:">
+  <title>Pass Deck</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <button class="brand" id="home-button" aria-label="세션 목록으로 돌아가기"><span class="brand-mark">P/</span><span>PASS DECK</span></button>
+      <div class="remote-route"><span>DECK</span><i></i><span>PASS RELAY</span><i></i><span>REMOTE HOST</span></div>
+      <div class="connection" id="connection"><i></i><span>BOOTING</span></div>
+    </header>
+
+    <main class="shell">
+      <aside class="rail">
+        <div class="rail-heading"><span>ACTIVE SESSIONS</span><strong id="session-count">00</strong></div>
+        <div id="session-list" class="session-list" role="listbox" aria-label="세션"></div>
+        <button id="new-session" class="new-session"><span>＋</span> NEW RUN</button>
+      </aside>
+
+      <section class="workspace" id="workspace">
+        <div class="empty-state" id="empty-state">
+          <div class="radar"><div class="radar-sweep"></div><span>P/</span></div>
+          <p class="overline">HANDHELD MISSION CONTROL</p>
+          <h1>에이전트를<br><em>손안에.</em></h1>
+          <p class="empty-copy">인터넷이 안정적인 원격 호스트에서 에이전트를 실행하고, Steam Deck에서는 세션을 지휘하고 확인하세요.</p>
+          <div class="deck-shortcuts"><kbd>A</kbd> 열기 <kbd>X</kbd> 입력 <kbd>RT</kbd> 전송</div>
+        </div>
+
+        <div class="session-view hidden" id="session-view">
+          <header class="session-header">
+            <div><p class="overline" id="session-agent">AGENT</p><h2 id="session-title"></h2><p id="session-meta"></p></div>
+            <button id="close-session" class="icon-button" aria-label="세션 닫기">×</button>
+          </header>
+          <div id="attention" class="attention hidden">
+            <div><strong>권한 확인 필요</strong><span id="attention-copy"></span></div>
+            <div><button data-decision="allowOnce">1 · ONCE</button><button data-decision="allowAll">2 · ALWAYS</button><button data-decision="deny" class="deny">3 · DENY</button></div>
+          </div>
+          <div id="terminal" class="terminal" aria-label="세션 터미널"></div>
+          <form id="composer" class="composer">
+            <span class="prompt">›</span>
+            <textarea id="message" rows="1" maxlength="65536" placeholder="에이전트에게 지시…  (Steam + X 키보드)"></textarea>
+            <button type="submit"><span>보내기</span><kbd>RT</kbd></button>
+          </form>
+          <p id="result" class="result" aria-live="polite"></p>
+        </div>
+
+        <div class="remote-setup hidden" id="remote-setup">
+          <p class="overline">REMOTE LINK</p><h2>데스크톱 연결</h2>
+          <div id="pairing-start">
+            <p>Relay 주소만 입력하면 일회용 QR이 만들어집니다. 휴대폰 Pass Remote 앱의 설정에서 <b>Pair a Steam Deck</b>을 선택해 스캔하세요.</p>
+            <div class="relay-entry"><input id="relay-url" inputmode="url" spellcheck="false" placeholder="https://relay.example.com"><button id="start-pairing" class="primary-button">MAKE QR</button></div>
+          </div>
+          <div id="qr-panel" class="qr-panel hidden">
+            <div class="qr-frame"><img id="pairing-qr" alt="Pass Deck one-time pairing QR code"></div>
+            <div class="qr-copy"><span class="pulse-dot"></span><strong>휴대폰 승인 대기 중</strong><p><span id="pairing-device">Steam Deck</span> · 5분 후 만료</p></div>
+          </div>
+          <details class="manual-pairing"><summary>개발용 JSON 직접 입력</summary><textarea id="pairing" rows="5" spellcheck="false" placeholder='{"relayUrl":"https://relay.example.com","desktopId":"desk_...","credential":"..."}'></textarea><button id="connect-remote" class="primary-button">CONNECT MANUALLY</button></details>
+          <p id="pairing-error" class="error"></p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="controller-bar"><span><kbd>☰</kbd> MENU</span><span><kbd>ⓐ</kbd> SELECT</span><span><kbd>ⓑ</kbd> BACK</span><span><kbd>ⓧ</kbd> MESSAGE</span><span><kbd>RT</kbd> SEND</span></footer>
+  </div>
+
+  <dialog id="create-dialog">
+    <form id="create-form" method="dialog">
+      <div class="dialog-head"><div><p class="overline">NEW RUN</p><h2>세션 시작</h2></div><button value="cancel" class="icon-button">×</button></div>
+      <label>PROJECT<select id="project"></select></label>
+      <label>PROJECT PATH<input id="project-path" placeholder="/home/deck/projects/my-app"></label>
+      <fieldset><legend>AGENT</legend><div class="agent-options"><label><input type="radio" name="agent" value="claude" checked><span>✳<b>CLAUDE</b></span></label><label><input type="radio" name="agent" value="codex"><span>⬢<b>CODEX</b></span></label><label><input type="radio" name="agent" value="pi"><span>π<b>PI</b></span></label></div></fieldset>
+      <label>INITIAL INSTRUCTION<textarea id="initial-prompt" rows="3" placeholder="선택 사항"></textarea></label>
+      <p id="create-error" class="error"></p>
+      <button id="create-submit" value="default" class="primary-button">LAUNCH SESSION</button>
+    </form>
+  </dialog>
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -26,6 +26,8 @@ DEVICE_CREDENTIAL_PEPPER=<another-independent-random-value>
 OIDC_ISSUER=https://identity.example.com
 OIDC_AUDIENCE=pass-public-api
 OIDC_JWKS_URL=https://identity.example.com/.well-known/jwks.json
+# Optional comma-separated D1 account ids allowed to hide marketplace listings.
+MARKETPLACE_ADMIN_ACCOUNT_IDS=acct_...
 ```
 
 For example, `openssl rand -hex 32` can generate a local token. The token is never declared as a
@@ -46,11 +48,18 @@ a value to `wrangler.jsonc` or source code:
 ```sh
 npx wrangler secret put RELAY_AUTH_TOKEN
 npx wrangler secret put DEVICE_CREDENTIAL_PEPPER
+npx wrangler secret put MARKETPLACE_ADMIN_ACCOUNT_IDS
 ```
 
 Configure `OIDC_ISSUER`, `OIDC_AUDIENCE`, and `OIDC_JWKS_URL` as deployment environment values or
 secrets. `OIDC_ISSUER` must exactly match the token's `iss` claim, including a trailing slash when
-the provider includes one. Apply D1 migrations before deploying the Worker.
+the provider includes one. `MARKETPLACE_ADMIN_ACCOUNT_IDS` is optional and accepts comma-separated
+`acct_...` ids. Apply D1 migrations before deploying the Worker, including the marketplace schema:
+
+```sh
+npx wrangler d1 migrations apply pass-mobile-control-dev --remote
+npx wrangler deploy
+```
 
 ## Public account API
 
@@ -59,13 +68,48 @@ the provider includes one. Apply D1 migrations before deploying the Worker.
 - `DELETE /v2/desktops/:id` revokes a desktop and its credentials.
 - `POST /v2/pairings` creates a five-minute, one-time code using a desktop access credential.
 - `POST /v2/pairings/:id/claim` claims that code for a signed-in mobile on the same account.
+- `POST /v2/deck-pairings` creates a public five-minute Deck challenge with an ephemeral RSA key.
+- `POST /v2/deck-pairings/:id/approve` lets a signed-in phone authorize the Deck for one desktop.
+- `POST /v2/deck-pairings/:id/poll` returns the credential envelope encrypted to that Deck only.
 - `POST /v2/token/refresh` rotates a desktop or mobile refresh credential.
 - `GET /v2/devices` lists paired devices; `DELETE /v2/devices/:id` revokes one immediately.
 
 Account API calls use the OIDC bearer. Pairing creation, refresh, and `/connect` use issued opaque
 credentials. Only credential hashes are stored in D1; raw credentials are returned once.
+Deck handoffs store only a hybrid-encrypted credential envelope until challenge expiry; the QR
+contains the approval secret but never the private polling secret or a usable relay credential.
 The Worker Rate Limiting API limits pairing routes to 20 requests per minute and other authenticated
 API/WebSocket handshakes to 120 per minute for each hashed credential key in a Cloudflare location.
+
+## In-app extension marketplace API
+
+Marketplace routes accept only an issued desktop access credential. Mobile credentials and OIDC
+tokens cannot browse or mutate the catalog, and there is no anonymous storefront endpoint.
+Executable files remain in the submitted public HTTPS Git repository; D1 stores discovery metadata
+and a validated snapshot of `extension.json`.
+
+- `GET|POST /v2/marketplace/extensions` searches/lists or publishes extensions. List filters are
+  `q`, `category`, `owner=me`, `limit`, and opaque `cursor`; `q` covers names, summaries,
+  descriptions, manifest ids, and tags.
+- `GET|PATCH|DELETE /v2/marketplace/extensions/:id` reads a listing, lets its owner update it, and
+  lets its owner or a configured marketplace administrator soft-delete it. Administrator deletion
+  is the recovery path for a repository or manifest-id squatting dispute.
+- `POST /v2/marketplace/extensions/:id/install` records one install per account, so retries do not
+  inflate the count.
+- `POST /v2/marketplace/extensions/:id/reports` creates or updates the caller's report.
+- `PATCH /v2/marketplace/extensions/:id/moderation` with `{ "hidden": true }` hides a listing when
+  the caller's account is in `MARKETPLACE_ADMIN_ACCOUNT_IDS`. Owners and admins can still inspect a
+  hidden listing; ordinary catalog and detail requests cannot.
+
+Every extension DTO includes `isOwner` and `canModerate` for in-app action gating. Hidden DTOs are
+returned only to their owner or an administrator and also include `isHidden: true`. Administrator
+DTOs additionally include the unresolved `reportCount`; that field is omitted for every other
+account.
+
+Repository URLs must be public HTTPS URLs without embedded credentials, query strings, or
+fragments. Active repository URLs and manifest ids are unique, and both are immutable after
+publication so accumulated install counts cannot be transferred to different code. Marketplace
+mutations are also written to the existing `audit_events` table.
 
 ## WebSocket handshake
 

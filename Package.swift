@@ -64,6 +64,8 @@ let package = Package(
             exclude: [
                 // Tests the CLIAPI↔AppModel adapter, which is excluded above.
                 "CLIAPITests.swift",
+                // Tests AppKit UI mirror types, excluded from the portable Pass target.
+                "MirrorDeviceTests.swift",
                 // Tests SwiftUI/AppKit terminal views, excluded from the portable Pass target.
                 "TerminalMouseInteractionPolicyTests.swift",
             ]

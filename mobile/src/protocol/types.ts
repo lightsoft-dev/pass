@@ -222,6 +222,15 @@ export type PairingQrPayload =
   | DevelopmentPairingQrPayload
   | DevicePairingQrPayload;
 
+export interface DeckPairingApprovalPayload {
+  v: 3;
+  relayUrl: string;
+  pairingId: string;
+  approvalSecret: string;
+  deviceName: string;
+  expiresAt: string;
+}
+
 export interface PairedDesktop {
   protocolVersion: ProtocolVersion;
   relayUrl: string;

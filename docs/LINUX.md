@@ -80,15 +80,21 @@ docker run --rm -v "$PWD/.build/aarch64-swift-linux-musl/debug":/spike:ro <linux
    without it the 6.x default language mode surfaces strict-concurrency errors the app
    target doesn't have (e.g. `ExtensionStore.defaultDirectory` needed `nonisolated`).
 
+## Steam Deck UI
+
+The first Linux UI now lives in `deck/`. It is an Electron remote client sized for the Deck's
+1280×800 display, with Gamepad API bindings for D-pad/A/B/X/RT. Agents and tmux stay on an
+internet-connected Pass host; the Deck uses the existing remote relay protocol for control and
+terminal snapshots. The static Swift core remains a separate headless portability path.
+
 ## What this spike deliberately did not cover
 
 - SteamOS on real hardware: `~/.local/bin` install, distrobox/Nix tmux (and the
   latency of distrobox-exported tmux wrappers vs the 2 s reconcile loop), Claude Code
   native install, HTTP hooks fired by *Linux* Claude Code, `pane_current_command`
   values under bash (agent-kind inference in `Models.swift`).
-- Any UI. The strategy question (TUI first vs Electron vs Swift+GTK) is documented in
-  the port feasibility study; nothing here forecloses any of them — this package is the
-  headless core all of them would sit on.
+- Native GTK UI or direct embedding of the static Swift core. The Electron Deck client is a
+  remote-only surface; the portable package remains the headless core for a possible host port.
 - `prepareForAttach` still sets tmux's *server-global* `copy-command` to `pbcopy`
   (macOS-only, and rude to a user's own tmux server on Linux — scope it per-session and
   probe for `wl-copy`/`xclip` when the Linux front-end lands).

@@ -20,6 +20,8 @@ Implemented:
 - persisted notification and voice-mode preferences
 - capability-gated voice-management placeholder (no microphone capture or audio upload)
 - bounded snapshot handling with a visible partial-snapshot warning
+- Steam Deck approval: scan a Deck-displayed five-minute QR from Settings and authorize it as a
+  separate revocable device without copying credentials
 
 ## Requirements
 

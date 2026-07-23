@@ -6,6 +6,7 @@ import {
   tokensMatch,
 } from "./auth";
 import { handleControlRequest } from "./control";
+import { handleMarketplaceRequest } from "./marketplace";
 
 import {
   MAX_FRAME_BYTES,
@@ -1020,12 +1021,14 @@ export default {
       });
     }
     if (url.pathname === "/connect" || url.pathname === "/v2" || url.pathname.startsWith("/v2/")) {
-      const limiter = url.pathname.startsWith("/v2/pairings")
+      const limiter = url.pathname.startsWith("/v2/pairings") || url.pathname.startsWith("/v2/deck-pairings")
         ? env.PAIRING_RATE_LIMITER
         : env.AUTH_RATE_LIMITER;
       const limited = await enforceRateLimit(request, limiter);
       if (limited !== null) return limited;
     }
+    const marketplaceResponse = await handleMarketplaceRequest(request, env);
+    if (marketplaceResponse !== null) return marketplaceResponse;
     const controlResponse = await handleControlRequest(request, env);
     if (controlResponse !== null) return controlResponse;
     if (url.pathname !== "/connect") {

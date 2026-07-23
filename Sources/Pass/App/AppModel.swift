@@ -75,11 +75,14 @@ final class AppModel {
     private(set) var specs: SpecStore!
     private(set) var features: FeatureStore!
     private(set) var browser: BrowserStore!
+    private(set) var mirror: MirrorEngine!
+    private(set) var miniTerminals: MiniTerminalManager!
     private(set) var webViews: WebViewPool!
     private(set) var extensions: ExtensionStore!
     private(set) var extensionRuntime: ExtensionRuntime!
     private(set) var extensionWindows: ExtensionWindowManager!
     private(set) var extensionBuilder: ExtensionBuilder!
+    private(set) var extensionMarketplace: ExtensionMarketplaceService!
 
     /// Outbound-only mobile control plane. The gateway is disabled unless its feature flag is
     /// enabled, so normal desktop launches never make a relay connection.
@@ -99,7 +102,6 @@ final class AppModel {
     @ObservationIgnored private var remoteAccountService: RemoteAccountService!
 
     weak var panelController: PanelController?
-
     /// Set by AppDelegate — clears a session's delivered notifications.
     var clearSessionNotifications: ((String) -> Void)?
 
@@ -108,19 +110,25 @@ final class AppModel {
     /// Build the stores and start the reconcile loop. Called once from AppDelegate.
     func configure() {
         remoteAccountService = RemoteAccountService()
+        extensionMarketplace = ExtensionMarketplaceService(accountService: remoteAccountService)
         refreshRemoteAccountState()
         projects = ProjectStore()
         sessions = SessionStore(projects: projects)
         specs = SpecStore()
         features = FeatureStore()
         browser = BrowserStore()
+        mirror = MirrorEngine()
+        miniTerminals = MiniTerminalManager()
         webViews = WebViewPool()
         webViews.store = browser
         // Tabs are data (BrowserStore); webviews are the pool — keep them in lockstep.
         browser.onTabOpened = { [weak self] tab in self?.webViews?.load(tab) }
         browser.onTabClosed = { [weak self] id in self?.webViews?.drop(id) }
         // Session died → its tab/webview go with it (same lifecycle as the terminal pool).
-        sessions.onReconciled = { [weak self] live in self?.browser?.pruneSessions(alive: live) }
+        sessions.onReconciled = { [weak self] live in
+            self?.browser?.pruneSessions(alive: live)
+            self?.mirror?.pruneSessions(alive: live)
+        }
         extensions = ExtensionStore()
         extensionWindows = ExtensionWindowManager(store: extensions)
         extensionRuntime = ExtensionRuntime(store: extensions, windows: extensionWindows, appModel: self)
@@ -134,6 +142,9 @@ final class AppModel {
                 created.filter { !self.extensionBuilder.ownsSession($0.name) })
             self.extensionRuntime?.sessionsEnded(
                 ended.filter { !self.extensionBuilder.ownsSession($0) })
+        }
+        sessions.onSessionInventory = { [weak self] liveNames in
+            self?.extensions?.reconcileTerminalExecutions(liveSessionNames: liveNames)
         }
         sessions.start()
         isReady = true
@@ -352,6 +363,16 @@ final class AppModel {
 
     func summon() {
         panelController?.toggle()
+    }
+
+    /// Menu bar → attach the Android picker to the terminal workspace already on screen.
+    func showDeviceMirror() {
+        guard let focusedSessionName else {
+            panelController?.show(preselecting: nil)
+            return
+        }
+        mirror.openPicker(for: focusedSessionName)
+        panelController?.show(preselecting: focusedSessionName)
     }
 
     func hidePanel() {
@@ -621,7 +642,9 @@ final class AppModel {
         if let existing = specPreviewSessions[projectRoot], sessions.session(named: existing) != nil {
             return .success(existing)
         }
-        let name = await sessions.createCommandSession(projectDir: cwd, slug: "dev", command: command)
+        guard let name = await sessions.createCommandSession(
+            projectDir: cwd, slug: "dev", command: command
+        ) else { return .failure("Could not start the development session.") }
         specPreviewSessions[projectRoot] = name
         sessions.setAlias(name, "Dev · \(doc.title.isEmpty ? URL(fileURLWithPath: projectRoot).lastPathComponent : doc.title)")
         return .success(name)
@@ -799,11 +822,11 @@ final class AppModel {
         if let existing = featurePreviewSessions[key], sessions.session(named: existing) != nil {
             return .success(existing)
         }
-        let name = await sessions.createCommandSession(
+        guard let name = await sessions.createCommandSession(
             projectDir: cwd,
             slug: "preview-\(featureID)",
             command: command
-        )
+        ) else { return .failure("Could not start the preview session.") }
         featurePreviewSessions[key] = name
         sessions.setAlias(name, "Preview · \(document.title)")
         return .success(name)

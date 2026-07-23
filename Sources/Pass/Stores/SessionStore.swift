@@ -41,6 +41,10 @@ final class SessionStore {
     var onReconciled: ((Set<String>) -> Void)?
     /// Extension-runtime tap: sessions that appeared / vanished, reported once per reconcile.
     var onSessionsChanged: (@MainActor (_ created: [Session], _ ended: [String]) -> Void)?
+    /// Authoritative tmux inventory, including ephemeral command sessions and a real empty
+    /// server. Durable extension execution leases use this instead of the event stream, whose
+    /// recursion guard intentionally omits report sessions.
+    var onSessionInventory: (@MainActor (_ liveNames: Set<String>) -> Void)?
     /// Remote control-plane tap. AppModel wires this to a debounced snapshot publisher so
     /// mobile clients see the same state transitions as the local UI without polling tmux.
     var onRemoteStateChanged: (@MainActor () -> Void)?
@@ -54,6 +58,9 @@ final class SessionStore {
     /// The name-based tag is authoritative — the ~/.pass path heuristic alone can be escaped
     /// when git hoists the projectRoot (e.g. a dotfiles setup where $HOME itself is a repo).
     private var ephemeralSessions: Set<String> = []
+    /// Names selected by concurrent launch tasks but not yet durably present in tmux. A separate
+    /// in-process reservation is required because `has-session` awaits and MainActor is reentrant.
+    private var reservedSessionNames: Set<String> = []
 
     /// Descriptors for the CURRENT live launchable-agent sessions, mirrored to state.json so a
     /// session can be recreated after its tmux server dies. Rebuilt on every non-empty reconcile.
@@ -68,13 +75,17 @@ final class SessionStore {
 
     private let tmux: TmuxClient
     private let projects: ProjectStore
+    private let inventoryProvider: @Sendable () async -> TmuxSessionInventory
+    private var inventoryRequestGeneration: UInt64 = 0
     private var pollTask: Task<Void, Never>?
     private var remoteStreamTask: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
 
-    init(tmux: TmuxClient = .shared, projects: ProjectStore) {
+    init(tmux: TmuxClient = .shared, projects: ProjectStore,
+         inventoryProvider: (@Sendable () async -> TmuxSessionInventory)? = nil) {
         self.tmux = tmux
         self.projects = projects
+        self.inventoryProvider = inventoryProvider ?? { await tmux.sessionInventory() }
         loadPersistedState()
     }
 
@@ -189,7 +200,14 @@ final class SessionStore {
     // MARK: Reconcile
 
     func reconcile() async {
-        let raw = await tmux.listSessions()
+        inventoryRequestGeneration &+= 1
+        let requestGeneration = inventoryRequestGeneration
+        let inventory = await inventoryProvider()
+        // MainActor methods are reentrant at await. A query started before a terminal launch can
+        // otherwise return after the launch's newer inventory and erase its durable lease.
+        guard requestGeneration == inventoryRequestGeneration else { return }
+        guard case .reliable(let raw) = inventory else { return }
+        onSessionInventory?(Set(raw.map(\.name)))
         // Snapshot BEFORE the pruning below drops dead ephemerals — the created/ended diff at
         // the end must still know a just-vanished report session was ephemeral.
         let ephemeralSnapshot = ephemeralSessions
@@ -414,7 +432,8 @@ final class SessionStore {
         let repo = git?.repoName ?? dirRepo
         let branch = git?.isLinkedWorktree == true ? (git?.branch ?? git?.worktreeDirName) : nil
         var name = Slug.sessionName(repo: repo, branch: branch)
-        name = await uniqueName(name)
+        name = await reserveUniqueName(name)
+        defer { reservedSessionNames.remove(name) }
         let projectRoot = git?.projectRoot ?? projectDir
         if !rememberProject { ephemeralSessions.insert(name) } // before reconcile can see it
         var launch = LaunchCommands.command(for: agent)
@@ -444,20 +463,41 @@ final class SessionStore {
     /// report script) — they must not pollute the project MRU.
     @discardableResult
     func createCommandSession(projectDir: String, slug: String, command: String,
-                              rememberProject: Bool = true) async -> String {
+                              rememberProject: Bool = true) async -> String? {
+        await createCommandSession(
+            projectDir: projectDir, slug: slug, command: command,
+            rememberProject: rememberProject, beforeLaunch: { _ in true },
+            launchFinished: { _ in })
+    }
+
+    /// Reserved command-session launch. `beforeLaunch` runs after the unique name is known but
+    /// before tmux exists or receives the command, allowing callers to persist ownership without
+    /// a crash window. Returning false aborts without creating a placeholder or process.
+    @discardableResult
+    func createCommandSession(projectDir: String, slug: String, command: String,
+                              rememberProject: Bool = true,
+                              beforeLaunch: @MainActor (String) -> Bool,
+                              launchFinished: @MainActor (String) -> Void) async -> String? {
         let git = await resolveGit(projectDir)
         let projectRoot = git?.projectRoot ?? projectDir
         let repo = git?.repoName ?? URL(fileURLWithPath: projectRoot).lastPathComponent
         let base = "\(PassConfig.sessionPrefix)\(Slug.make(repo))--\(Slug.make(slug))"
-        let name = await uniqueName(base)
+        let name = await reserveUniqueName(base)
+        defer { reservedSessionNames.remove(name) }
+        guard beforeLaunch(name) else { return nil }
 
         if !rememberProject { ephemeralSessions.insert(name) } // before reconcile can see it
         upsertLaunching(name: name, projectRoot: projectRoot, cwd: projectDir, agent: .shell, git: git)
-        await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
-                              agent: .shell, launchCommand: command)
-        if rememberProject { projects.remember(rootPath: projectRoot) }
+        let launched = await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
+                                             agent: .shell, launchCommand: command)
+        if launched, rememberProject { projects.remember(rootPath: projectRoot) }
+        if !launched {
+            ephemeralSessions.remove(name)
+            sessions.removeAll { $0.name == name }
+        }
         await reconcile()
-        return name
+        launchFinished(name)
+        return launched ? name : nil
     }
 
     /// Insert or refresh an optimistic launching placeholder in the live list.
@@ -494,14 +534,26 @@ final class SessionStore {
         }
     }
 
-    private func uniqueName(_ base: String) async -> String {
+    private func reserveUniqueName(_ base: String) async -> String {
         var name = base
         var n = 2
-        while await tmux.hasSession(name) {
-            name = "\(base)-\(n)"
-            n += 1
+        while true {
+            if reservedSessionNames.contains(name) {
+                name = "\(base)-\(n)"
+                n += 1
+                continue
+            }
+            let exists = await tmux.hasSession(name)
+            // Another MainActor task may have reserved this candidate while the tmux actor was
+            // answering. Re-check after the await before claiming it.
+            guard !exists, !reservedSessionNames.contains(name) else {
+                name = "\(base)-\(n)"
+                n += 1
+                continue
+            }
+            reservedSessionNames.insert(name)
+            return name
         }
-        return name
     }
 
     func kill(_ name: String) async {

@@ -53,6 +53,8 @@ targets:
       properties:
         CFBundleName: Pass
         CFBundleDisplayName: Pass
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIconFile: AppIcon
         LSUIElement: true
         LSMinimumSystemVersion: "14.0"
@@ -68,8 +70,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.1.1"
+        CURRENT_PROJECT_VERSION: "2"
         # Stable signing via the free Apple Development cert. Ad-hoc ("-") builds, but its
         # cdhash changes every build and macOS then refuses notifications ("not allowed").
         # A real Development identity gives a stable code identity so notifications work.
@@ -121,6 +123,8 @@ targets:
       properties:
         CFBundleName: Pass
         CFBundleDisplayName: Pass
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIconFile: AppIcon
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
@@ -134,6 +138,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass.share
+        MARKETING_VERSION: "0.1.1"
+        CURRENT_PROJECT_VERSION: "2"
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: H66C2M66DC

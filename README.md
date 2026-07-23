@@ -49,6 +49,13 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
   natural-language goal into a disabled Claude work session, then shows every generated file and
   permission for feedback or explicit fingerprint approval. Enabled extensions also appear in the
   Pass panel's top launcher and the macOS menu-bar menu. Design & schema: `docs/EXTENSIONS.md`.
+- **Attached device pane** — Vysor-style Android video and basic pointer control for physical
+  devices (USB/Wi-Fi) and Android emulators. The stream is decoded inside the running session's
+  terminal workspace instead of opening a separate window; the divider is draggable and an open
+  browser tab remains available when the device pane closes. Pass never captures a Mac window, so
+  Screen Recording permission is not required. Install the runtime once with
+  `brew install scrcpy ffmpeg`, then use the device button in a session header or menu bar →
+  **Attach device pane…**. iPhone direct streaming still requires a ReplayKit broadcaster.
 - **Mobile remote developer preview** — an outbound-only macOS gateway, Cloudflare
   Worker/Durable Object relay, and Expo client can list/create sessions, send messages, and answer
   decisions. The current shared-token pairing is explicitly development-only; device-key pairing
@@ -79,6 +86,13 @@ The implementation and its security boundary are documented in
 [`docs/mobile-remote-architecture.md`](docs/mobile-remote-architecture.md). Relay setup lives in
 [`relay/README.md`](relay/README.md), and Expo setup lives in
 [`mobile/README.md`](mobile/README.md). No relay is deployed automatically.
+
+## Steam Deck client
+
+[`deck/`](deck/) contains a controller-first SteamOS remote client. Agents run on an
+internet-connected Pass host while the Deck connects through the existing relay protocol for
+session discovery/creation, terminal input, messages, and structured permission answers. See
+[`deck/README.md`](deck/README.md) for setup and Deck controls.
 
 ## How it fits together
 
