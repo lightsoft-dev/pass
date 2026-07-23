@@ -62,6 +62,9 @@ final class AppModel {
 
     /// Bumped to move keyboard focus into the visible browser's address field (⌘L).
     var browserFocusToken: Int = 0
+    /// Prevents two simultaneously mounted session workspaces from both claiming the one-time
+    /// Chrome import prompt before UserDefaults observation propagates through SwiftUI.
+    @ObservationIgnored private var browserProfilePromptClaimed = false
 
     /// The session whose workspace (terminal │ browser) is on screen right now — the home
     /// selection or the open detail view. A CLI browser open targeting it may show
@@ -459,6 +462,29 @@ final class AppModel {
             browser.toggleHidden(session: session) // un-hide
         }
         browserFocusToken &+= 1
+    }
+
+    /// Standard browser zoom shortcuts target only a browser pane that is currently visible.
+    /// A hidden tab is left untouched, so ⌘-/⌘+ remain available to the normal responder chain
+    /// on screens with no browser.
+    func zoomBrowser(for session: String, action: BrowserZoomAction) {
+        guard let tab = browser?.visibleTab(for: session) else { return }
+        webViews?.zoom(tab.id, action: action)
+    }
+
+    /// The first browser pane ever mounted gets one concise Chrome-profile import prompt.
+    /// Recording the claim immediately makes this genuinely one-time across sessions/relaunches;
+    /// the full import control remains available in Settings if the prompt is dismissed.
+    func claimBrowserProfileImportPrompt() -> Bool {
+        let defaults = UserDefaults.standard
+        guard !browserProfilePromptClaimed,
+              !defaults.bool(forKey: BrowserProfileImportPreference.promptShownKey),
+              !defaults.bool(forKey: BrowserProfileImportPreference.importedKey) else {
+            return false
+        }
+        browserProfilePromptClaimed = true
+        defaults.set(true, forKey: BrowserProfileImportPreference.promptShownKey)
+        return true
     }
 
     /// A CLI `browser open` landed — open the tab and surface per BROWSER.md §4.4:

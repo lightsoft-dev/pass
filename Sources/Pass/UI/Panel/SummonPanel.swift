@@ -25,6 +25,8 @@ enum PanelNavKey {
     case focusAddress
     /// ⌘⇧B — expand the browser over the whole workspace / back to the split.
     case expandBrowser
+    /// ⌘+/⌘-/⌘0 — zoom the visible embedded browser page.
+    case browserZoomIn, browserZoomOut, browserZoomReset
 }
 
 struct PanelNavEvent {
@@ -39,6 +41,8 @@ struct PanelNavEvent {
 /// hide on focus loss, so you can copy from your editor into a reply field.
 final class SummonPanel: NSPanel {
     var onCancel: (() -> Void)?
+    /// The red traffic-light button hides the reusable panel instead of terminating Pass.
+    var onRequestClose: (() -> Void)?
     /// ⌘[ — used to step back from an embedded terminal (which consumes Esc itself).
     var onGoBack: (() -> Void)?
     /// ⌘⇧F — toggle floating vs normal window.
@@ -51,7 +55,14 @@ final class SummonPanel: NSPanel {
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
-            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView, .resizable],
+            styleMask: [
+                .nonactivatingPanel,
+                .titled,
+                .closable,
+                .miniaturizable,
+                .fullSizeContentView,
+                .resizable,
+            ],
             backing: .buffered,
             defer: false
         )
@@ -63,9 +74,8 @@ final class SummonPanel: NSPanel {
         isMovableByWindowBackground = true
         hidesOnDeactivate = false
         animationBehavior = .utilityWindow
-        standardWindowButton(.closeButton)?.isHidden = true
-        standardWindowButton(.miniaturizeButton)?.isHidden = true
-        standardWindowButton(.zoomButton)?.isHidden = true
+        standardWindowButton(.closeButton)?.target = self
+        standardWindowButton(.closeButton)?.action = #selector(requestClose(_:))
         isReleasedWhenClosed = false
         // Show over full-screen spaces. (canJoinAllSpaces and moveToActiveSpace are
         // mutually exclusive — use only canJoinAllSpaces.)
@@ -75,6 +85,10 @@ final class SummonPanel: NSPanel {
     // Required so the panel (and its text fields) can receive keyboard input.
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    @objc private func requestClose(_ sender: Any?) {
+        onRequestClose?()
+    }
 
     /// An accessory (LSUIElement) app doesn't own the menu bar, so its main-menu key
     /// equivalents (⌘X/C/V/A/Z) never fire. Route them to the first responder ourselves —
@@ -87,6 +101,21 @@ final class SummonPanel: NSPanel {
             let ch = event.charactersIgnoringModifiers?.lowercased()
             let code = event.keyCode
             func key(_ letter: String, _ kc: UInt16) -> Bool { ch == letter || code == kc }
+
+            // Browser zoom follows the standard macOS/Chrome chords. Match physical key
+            // codes as well so these still work with a non-Latin input source.
+            if key("-", 27),
+               onNavigate?(PanelNavEvent(key: .browserZoomOut, command: true, option: false)) == true {
+                return true
+            }
+            if key("=", 24) || key("+", 24),
+               onNavigate?(PanelNavEvent(key: .browserZoomIn, command: true, option: false)) == true {
+                return true
+            }
+            if key("0", 29),
+               onNavigate?(PanelNavEvent(key: .browserZoomReset, command: true, option: false)) == true {
+                return true
+            }
 
             // ⌘[ or ⌘W step back to the list (the embedded terminal owns Esc, so we can't
             // use it here). ⌘W is intercepted so it never closes the whole panel window.

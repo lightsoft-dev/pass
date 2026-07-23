@@ -10,10 +10,15 @@ struct BrowserPaneView: View {
     @Environment(AppModel.self) private var appModel
     @State private var address = ""
     @State private var addressError: String?
+    @State private var showChromeProfilePrompt = false
     @FocusState private var addressFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
+            if showChromeProfilePrompt {
+                chromeProfileImportPrompt
+                Divider()
+            }
             toolbar
             if let addressError {
                 Text(addressError)
@@ -28,6 +33,7 @@ struct BrowserPaneView: View {
         }
         .onAppear {
             address = displayAddress
+            showChromeProfilePrompt = appModel.claimBrowserProfileImportPrompt()
             // A blank tab exists to be typed into (⌘B with no page yet) — take the keyboard.
             if address.isEmpty { addressFocused = true }
         }
@@ -44,6 +50,44 @@ struct BrowserPaneView: View {
     }
 
     private var webView: WKWebView? { appModel.webViews?.peek(tab.id) }
+
+    private var chromeProfileImportPrompt: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "person.crop.circle.badge.arrow.forward")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Bring your Chrome login into Pass")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Import cookies from an installed Chrome profile.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            SettingsLink {
+                Text("Choose profile…")
+            }
+            .controlSize(.small)
+            .simultaneousGesture(TapGesture().onEnded {
+                UserDefaults.standard.set(
+                    SettingsSection.integrations.rawValue,
+                    forKey: SettingsSection.storageKey
+                )
+                showChromeProfilePrompt = false
+            })
+            Button {
+                showChromeProfilePrompt = false
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Not now")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.accentColor.opacity(0.08))
+    }
 
     private var toolbar: some View {
         HStack(spacing: 8) {

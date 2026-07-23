@@ -202,7 +202,7 @@ struct CommandView: View {
     /// is first responder, and plain keys (arrows, ⏎, Esc, Tab, digits…) belong to the TUI
     /// running in the session. Only ⌘-chords and message-bar editing are handled here.
     private func handleNav(_ e: PanelNavEvent) -> Bool {
-        // Browser keys (⌘B/⌘L/⌘⇧B) work wherever a session workspace is on screen —
+        // Browser keys work wherever a session workspace is on screen —
         // the home terminal AND the detail view — so they're routed before the list guard.
         switch e.key {
         case .toggleBrowser:
@@ -217,6 +217,21 @@ struct CommandView: View {
             guard let name = workspaceSessionName,
                   appModel.browser?.visibleTab(for: name) != nil else { return true }
             appModel.browser?.expanded.toggle()
+            return true
+        case .browserZoomIn:
+            guard let name = workspaceSessionName,
+                  appModel.browser?.visibleTab(for: name) != nil else { return false }
+            appModel.zoomBrowser(for: name, action: .zoomIn)
+            return true
+        case .browserZoomOut:
+            guard let name = workspaceSessionName,
+                  appModel.browser?.visibleTab(for: name) != nil else { return false }
+            appModel.zoomBrowser(for: name, action: .zoomOut)
+            return true
+        case .browserZoomReset:
+            guard let name = workspaceSessionName,
+                  appModel.browser?.visibleTab(for: name) != nil else { return false }
+            appModel.zoomBrowser(for: name, action: .reset)
             return true
         case .markChecked:
             guard let name = workspaceSessionName else { return true }
@@ -321,7 +336,8 @@ struct CommandView: View {
             }
             // The terminal owns Esc (interrupting the agent). Use the selected global shortcut.
             return false
-        case .toggleBrowser, .focusAddress, .expandBrowser:
+        case .toggleBrowser, .focusAddress, .expandBrowser,
+             .browserZoomIn, .browserZoomOut, .browserZoomReset:
             return true // handled above, before the route guard
         }
     }

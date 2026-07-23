@@ -6,11 +6,15 @@ import CoreImage.CIFilterBuiltins
 /// launch-at-login, and one-time setup (hooks, notifications) live.
 struct SettingsView: View {
     @Environment(AppModel.self) private var appModel
-    @State private var selection: SettingsSection = .general
+    @AppStorage(SettingsSection.storageKey) private var selectionRaw = SettingsSection.general.rawValue
     @State private var launchAtLogin = LoginItemService.isEnabled
     @State private var floating = true
     @State private var cliLinked = false
     @State private var advertiseOn = false
+    @State private var chromeProfiles: [ChromeProfile] = []
+    @State private var selectedChromeProfileID = ""
+    @State private var chromeImportBusy = false
+    @State private var chromeImportStatus: String?
     @State private var showExtensionBuilder = false
     @State private var showExtensionMarketplace = false
     @State private var extensionRepository = ""
@@ -27,11 +31,11 @@ struct SettingsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            SettingsSidebar(selection: $selection)
+            SettingsSidebar(selection: settingsSelection)
                 .frame(width: 184)
             Divider()
             VStack(alignment: .leading, spacing: 0) {
-                SettingsHeader(section: selection)
+                SettingsHeader(section: selectedSection)
                 Form {
                     detailSections
                 }
@@ -45,6 +49,7 @@ struct SettingsView: View {
             floating = appModel.panelFloating
             cliLinked = CLIInstaller.isLinked
             advertiseOn = ClaudeHooksInstaller.isAdvertiseInstalled()
+            refreshChromeProfiles()
             // Keep the existing summon panel on screen, but below the Settings window while
             // Settings has focus. Its floating level is restored when Settings closes.
             appModel.setSettingsPresented(true)
@@ -63,7 +68,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var detailSections: some View {
-        switch selection {
+        switch selectedSection {
         case .general:
             shortcutSection
             generalSection
@@ -89,6 +94,17 @@ struct SettingsView: View {
             developmentSection
             #endif
         }
+    }
+
+    private var selectedSection: SettingsSection {
+        SettingsSection(rawValue: selectionRaw) ?? .general
+    }
+
+    private var settingsSelection: Binding<SettingsSection> {
+        Binding(
+            get: { selectedSection },
+            set: { selectionRaw = $0.rawValue }
+        )
     }
 
     private var shortcutSection: some View {
@@ -464,6 +480,85 @@ struct SettingsView: View {
             Button("Clear browser website data") {
                 Task { await WebViewPool.clearWebsiteData() }
             }
+            Divider()
+            LabeledContent("Chrome profile") {
+                if chromeProfiles.isEmpty {
+                    Text("No profiles found").foregroundStyle(.secondary)
+                } else {
+                    Picker("Chrome profile", selection: $selectedChromeProfileID) {
+                        ForEach(chromeProfiles) { profile in
+                            Text(profile.displayName).tag(profile.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
+                }
+            }
+            HStack {
+                Button {
+                    importChromeProfile()
+                } label: {
+                    if chromeImportBusy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Import Chrome login session")
+                    }
+                }
+                .disabled(chromeImportBusy || selectedChromeProfile == nil)
+                Button("Refresh profiles") { refreshChromeProfiles() }
+                    .disabled(chromeImportBusy)
+                if let chromeImportStatus {
+                    Text(chromeImportStatus)
+                        .font(.caption)
+                        .foregroundStyle(chromeImportStatus.hasPrefix("Imported") ? .green : .orange)
+                }
+            }
+            Text("Copies cookies from the selected local Chrome profile into Pass once. Passwords, extensions, history, and Chrome files are never copied or changed. Imported logins are readable by agents through the embedded browser.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var selectedChromeProfile: ChromeProfile? {
+        chromeProfiles.first { $0.id == selectedChromeProfileID }
+    }
+
+    private func refreshChromeProfiles() {
+        let previous = selectedChromeProfileID
+        Task {
+            let profiles = await Task.detached {
+                ChromeProfileImportService.discoverProfiles()
+            }.value
+            chromeProfiles = profiles
+            if profiles.contains(where: { $0.id == previous }) {
+                selectedChromeProfileID = previous
+            } else {
+                selectedChromeProfileID = profiles.first?.id ?? ""
+            }
+            if profiles.isEmpty {
+                chromeImportStatus = "No local Chrome profiles found."
+            } else if chromeImportStatus == "No local Chrome profiles found." {
+                chromeImportStatus = nil
+            }
+        }
+    }
+
+    private func importChromeProfile() {
+        guard let profile = selectedChromeProfile else { return }
+        chromeImportBusy = true
+        chromeImportStatus = nil
+        Task {
+            defer { chromeImportBusy = false }
+            do {
+                let result = try await WebViewPool.importChromeProfile(profile)
+                UserDefaults.standard.set(
+                    true,
+                    forKey: BrowserProfileImportPreference.importedKey
+                )
+                chromeImportStatus =
+                    "Imported \(result.imported) cookies (\(result.skipped) skipped)."
+            } catch {
+                chromeImportStatus = error.localizedDescription
+            }
         }
     }
 
@@ -596,7 +691,8 @@ struct SettingsView: View {
     }
 }
 
-private enum SettingsSection: String, CaseIterable, Identifiable {
+enum SettingsSection: String, CaseIterable, Identifiable {
+    static let storageKey = "settings.selectedSection"
     case general
     case home
     case projects
