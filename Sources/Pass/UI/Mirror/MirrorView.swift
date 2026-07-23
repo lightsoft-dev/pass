@@ -1,193 +1,228 @@
 import AppKit
 import SwiftUI
 
-/// Content of the device-mirror panel: a window picker until a source is chosen, then the
-/// live mirror with a small overlay toolbar (back to the picker / keep-on-top).
+/// Device picker and live video surface rendered inside a session workspace split.
 struct MirrorView: View {
     let engine: MirrorEngine
-    let onToggleFloat: () -> Void
 
-    // Shared with MirrorWindowController, which applies the actual window level.
-    @AppStorage("mirror.floating") private var floats = true
-    @State private var hoveringControls = false
+    @State private var networkAddress = ""
+    @State private var pairingAddress = ""
+    @State private var pairingCode = ""
 
     var body: some View {
-        switch engine.state {
-        case .pickingSource:
-            picker
-        case .streaming:
-            live
-        case .failed(let message):
-            failed(message)
+        VStack(spacing: 0) {
+            paneHeader
+            Divider()
+            switch engine.state {
+            case .pickingDevice:
+                picker
+            case .launching(let device):
+                streamSurface(device: device, isLaunching: true)
+            case .streaming(let device):
+                streamSurface(device: device, isLaunching: false)
+            case .failed(let message):
+                failed(message)
+            }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    // MARK: Source picker
-
-    private var picker: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "iphone").foregroundStyle(.secondary)
-                Text("Mirror a device window").font(.system(size: 13, weight: .semibold))
-                Spacer()
-                if engine.isRefreshing { ProgressView().controlSize(.small) }
-                Button {
-                    Task { await engine.refreshSources() }
-                } label: {
+    private var paneHeader: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "iphone.and.arrow.forward")
+                .foregroundStyle(.secondary)
+            Text("Device")
+                .font(.system(size: 11, weight: .semibold))
+            if case .streaming(let device) = engine.state {
+                Text("· \(device.displayName)")
+                    .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            if case .pickingDevice = engine.state {
+                if engine.isRefreshing { ProgressView().controlSize(.mini) }
+                Button { Task { await engine.refreshDevices() } } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .buttonStyle(.borderless)
-                .help("Refresh window list")
-            }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            Divider()
-
-            if engine.permissionDenied {
-                permissionHelp
-            } else if engine.sources.isEmpty && !engine.isRefreshing {
-                emptyHelp
+                .buttonStyle(.plain).help("Refresh devices")
             } else {
-                sourceList
+                Button("Devices") { engine.returnToPicker() }
+                    .buttonStyle(.plain).font(.system(size: 10))
             }
-
-            Divider()
-            Text("Real device? Mirror an iPhone with QuickTime (File → New Movie Recording) or an Android device with scrcpy, then pick that window here.")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14).padding(.vertical, 8)
+            Button { engine.detach() } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain).help("Close device pane")
         }
-        .task { await engine.refreshSources() }
+        .padding(.horizontal, 10).frame(height: 31)
     }
 
-    private var sourceList: some View {
+    private var picker: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                let devices = engine.sources.filter(\.isDeviceLike)
-                let others = engine.sources.filter { !$0.isDeviceLike }
-                if !devices.isEmpty {
-                    sectionHeader("Device windows")
-                    ForEach(devices) { sourceRow($0) }
+            VStack(alignment: .leading, spacing: 13) {
+                if let problem = engine.toolProblem {
+                    notice(icon: "wrench.and.screwdriver", title: "Tools required", detail: problem)
                 }
-                if !others.isEmpty {
-                    sectionHeader(devices.isEmpty ? "Windows" : "Other windows")
-                    ForEach(others) { sourceRow($0) }
+
+                if !engine.devices.isEmpty {
+                    sectionTitle("Physical devices & emulators")
+                    VStack(spacing: 5) {
+                        ForEach(engine.devices) { device in
+                            Button { engine.start(device) } label: {
+                                HStack(spacing: 9) {
+                                    Image(systemName: icon(for: device.transport))
+                                        .frame(width: 19).foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(device.displayName).font(.system(size: 11, weight: .medium))
+                                        Text(device.serial).font(.system(size: 9, design: .monospaced))
+                                            .foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Text(device.transport.label)
+                                        .font(.system(size: 8, weight: .semibold))
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(.quaternary, in: Capsule())
+                                }
+                                .padding(8).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
+                            .disabled(engine.toolProblem != nil)
+                        }
+                    }
+                } else if !engine.isRefreshing && engine.toolProblem == nil {
+                    notice(icon: "iphone.slash", title: "No authorized target",
+                           detail: "Connect an Android device with USB debugging enabled, or start an Android emulator. Accept the authorization prompt on a physical device.")
+                }
+
+                sectionTitle("Connect a physical device over Wi-Fi")
+                HStack(spacing: 6) {
+                    TextField("192.168.0.24:5555", text: $networkAddress)
+                        .textFieldStyle(.roundedBorder)
+                    Button(engine.isConnecting ? "…" : "Connect") {
+                        Task {
+                            if await engine.connectNetwork(networkAddress) { networkAddress = "" }
+                        }
+                    }
+                    .disabled(engine.isConnecting || networkAddress.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+
+                DisclosureGroup("Pair Android 11+ wireless debugging") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Pairing IP:port", text: $pairingAddress).textFieldStyle(.roundedBorder)
+                        HStack(spacing: 6) {
+                            TextField("6-digit code", text: $pairingCode).textFieldStyle(.roundedBorder)
+                            Button(engine.isPairing ? "…" : "Pair") {
+                                Task {
+                                    if await engine.pairNetwork(pairingAddress, code: pairingCode) {
+                                        pairingAddress = ""; pairingCode = ""
+                                    }
+                                }
+                            }
+                            .disabled(engine.isPairing || pairingAddress.isEmpty || pairingCode.isEmpty)
+                        }
+                        Text("Pairing and connection ports shown by Android are often different.")
+                            .font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 6)
+                }
+                .font(.system(size: 10, weight: .medium))
+
+                if let message = engine.connectionMessage {
+                    Text(message).font(.system(size: 9)).foregroundStyle(.green)
+                }
+                if let error = engine.listError, !error.isEmpty {
+                    Text(error).font(.system(size: 9)).foregroundStyle(.red).textSelection(.enabled)
+                }
+
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "lock.shield").foregroundStyle(.secondary)
+                    Text("Video travels directly through ADB over USB, Wi-Fi, or the emulator transport. Pass does not capture the Mac screen.")
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
                 }
             }
-            .padding(8)
+            .padding(11)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task { await engine.refreshDevices() }
     }
 
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
-            .padding(.horizontal, 6).padding(.top, 6).padding(.bottom, 2)
-    }
-
-    private func sourceRow(_ source: MirrorSource) -> some View {
-        Button {
-            Task { await engine.start(source) }
-        } label: {
-            HStack(spacing: 8) {
-                if let icon = source.icon {
-                    Image(nsImage: icon).resizable().frame(width: 20, height: 20)
-                } else {
-                    Image(systemName: "macwindow").frame(width: 20, height: 20)
+    private func streamSurface(device: MirrorDevice, isLaunching: Bool) -> some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black
+                if let image = engine.frame {
+                    Image(nsImage: image)
+                        .resizable().interpolation(.high).scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    inputOverlay(imageSize: image.size, container: geo.size)
                 }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(source.displayTitle).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                    Text(source.appName).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer()
-                if source.isDeviceLike {
-                    Image(systemName: "iphone").font(.system(size: 11)).foregroundStyle(.secondary)
+                if isLaunching || engine.frame == nil {
+                    VStack(spacing: 9) {
+                        ProgressView().controlSize(.small).tint(.white)
+                        Text("Starting \(device.displayName)…")
+                            .font(.system(size: 10)).foregroundStyle(.white.opacity(0.8))
+                    }
                 }
             }
-            .padding(.horizontal, 8).padding(.vertical, 5)
+        }
+    }
+
+    private func inputOverlay(imageSize: NSSize, container: CGSize) -> some View {
+        let scale = min(container.width / max(1, imageSize.width),
+                        container.height / max(1, imageSize.height))
+        let shown = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        let origin = CGPoint(x: (container.width - shown.width) / 2,
+                             y: (container.height - shown.height) / 2)
+        return Color.clear
+            .frame(width: shown.width, height: shown.height)
+            .position(x: origin.x + shown.width / 2, y: origin.y + shown.height / 2)
             .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var permissionHelp: some View {
-        VStack(spacing: 10) {
-            Spacer()
-            Image(systemName: "eye.slash").font(.system(size: 30)).foregroundStyle(.secondary)
-            Text("Screen Recording permission needed").font(.system(size: 14, weight: .medium))
-            Text("Grant pass Screen Recording access in System Settings, then relaunch pass. Mirroring only reads the chosen window's pixels — nothing leaves your Mac.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
-            HStack {
-                Button("Open System Settings") {
-                    let raw = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-                    if let url = URL(string: raw) { NSWorkspace.shared.open(url) }
-                }
-                Button("Check again") { Task { await engine.refreshSources() } }
-            }
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
-    }
-
-    private var emptyHelp: some View {
-        VStack(spacing: 10) {
-            Spacer()
-            Image(systemName: "macwindow.badge.plus").font(.system(size: 30)).foregroundStyle(.secondary)
-            Text("No windows to mirror").font(.system(size: 14, weight: .medium))
-            Text(engine.listError ?? "Start the iOS Simulator or an Android emulator (or bring the device window on screen), then refresh.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
-    }
-
-    // MARK: Live mirror
-
-    private var live: some View {
-        MirrorFrameView(engine: engine)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .bottom) { controls }
-            .onHover { hoveringControls = $0 }
-    }
-
-    /// Compact toolbar floating over the video — near-invisible until the mouse is over the
-    /// mirror, so the panel reads as a pure device screen.
-    private var controls: some View {
-        HStack(spacing: 10) {
-            Button { engine.returnToPicker() } label: { Image(systemName: "chevron.left") }
-                .help("Back to the window list")
-            Text(engine.activeSource?.displayTitle ?? "")
-                .font(.system(size: 11, weight: .medium)).lineLimit(1)
-            Spacer(minLength: 12)
-            Button { onToggleFloat() } label: { Image(systemName: floats ? "pin.fill" : "pin") }
-                .help(floats ? "Stop floating above other windows" : "Float above other windows")
-        }
-        .buttonStyle(.borderless)
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .padding(8)
-        .opacity(hoveringControls ? 1 : 0.25)
-        .animation(.easeOut(duration: 0.15), value: hoveringControls)
+            .gesture(DragGesture(minimumDistance: 0)
+                .onEnded { value in
+                    let start = CGPoint(x: value.startLocation.x / scale,
+                                        y: value.startLocation.y / scale)
+                    let end = CGPoint(x: value.location.x / scale,
+                                      y: value.location.y / scale)
+                    if hypot(end.x - start.x, end.y - start.y) < 8 {
+                        engine.tap(x: Int(end.x), y: Int(end.y))
+                    } else {
+                        engine.swipe(from: start, to: end)
+                    }
+                })
     }
 
     private func failed(_ message: String) -> some View {
         VStack(spacing: 10) {
             Spacer()
-            Image(systemName: "exclamationmark.triangle").font(.system(size: 30)).foregroundStyle(.orange)
-            Text("Mirror stopped").font(.system(size: 14, weight: .medium))
-            Text(message)
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
-            Button("Choose a window") { engine.returnToPicker() }
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 25)).foregroundStyle(.orange)
+            Text("Device stream stopped").font(.system(size: 12, weight: .medium))
+            Text(message).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).textSelection(.enabled).padding(.horizontal, 12)
+            Button("Back to devices") { engine.returnToPicker() }
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title.uppercased()).font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+    }
+
+    private func notice(icon: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 10, weight: .semibold))
+                Text(detail).font(.system(size: 9)).foregroundStyle(.secondary)
+            }
+        }
+        .padding(9).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func icon(for transport: MirrorDevice.Transport) -> String {
+        switch transport {
+        case .usb: return "cable.connector"
+        case .network: return "wifi"
+        case .emulator: return "apps.iphone"
+        }
     }
 }

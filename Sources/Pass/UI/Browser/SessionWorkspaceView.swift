@@ -13,6 +13,8 @@ struct SessionWorkspaceView<Terminal: View>: View {
     @Environment(AppModel.self) private var appModel
     /// Browser's share of the width (0.2…0.8), persisted like the panel size.
     @AppStorage("browser.split") private var browserFraction = 0.45
+    /// Device pane's share of the width, independent from the browser split.
+    @AppStorage("mirror.split") private var mirrorFraction = 0.42
 
     init(session: Session, @ViewBuilder terminal: () -> Terminal) {
         self.session = session
@@ -30,7 +32,9 @@ struct SessionWorkspaceView<Terminal: View>: View {
     }
 
     var body: some View {
-        if let tab {
+        if appModel.mirror?.attachedSessionName == session.name, let mirror = appModel.mirror {
+            mirrorSplit(mirror)
+        } else if let tab {
             if appModel.browser?.expanded == true {
                 BrowserPaneView(tab: tab).id(tab.id)
             } else {
@@ -38,6 +42,19 @@ struct SessionWorkspaceView<Terminal: View>: View {
             }
         } else {
             terminalWithURLBar
+        }
+    }
+
+    private func mirrorSplit(_ mirror: MirrorEngine) -> some View {
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                terminalWithURLBar
+                    .frame(width: mirrorTerminalWidth(total: geo.size.width))
+                mirrorDivider(total: geo.size.width)
+                MirrorView(engine: mirror)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .coordinateSpace(name: "mirror-workspace")
         }
     }
 
@@ -57,6 +74,10 @@ struct SessionWorkspaceView<Terminal: View>: View {
 
     private func terminalWidth(total: CGFloat) -> CGFloat {
         max(120, total * (1 - browserFraction) - dividerWidth)
+    }
+
+    private func mirrorTerminalWidth(total: CGFloat) -> CGFloat {
+        max(120, total * (1 - mirrorFraction) - dividerWidth)
     }
 
     @ViewBuilder
@@ -91,6 +112,28 @@ struct SessionWorkspaceView<Terminal: View>: View {
                     .onChanged { value in
                         guard total > 0 else { return }
                         browserFraction = min(0.8, max(0.2, 1 - value.location.x / total))
+                    }
+            )
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+    }
+
+    private func mirrorDivider(total: CGFloat) -> some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.05))
+            .frame(width: dividerWidth)
+            .overlay(
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color.primary.opacity(0.25))
+                    .frame(width: 2, height: 28)
+            )
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .named("mirror-workspace"))
+                    .onChanged { value in
+                        guard total > 0 else { return }
+                        mirrorFraction = min(0.8, max(0.2, 1 - value.location.x / total))
                     }
             )
             .onHover { inside in
