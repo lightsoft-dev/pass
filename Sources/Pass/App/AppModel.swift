@@ -47,6 +47,9 @@ final class AppModel {
     /// of the focus chain after a mouse click moves real AppKit first-responder status.
     var keyHandler: ((PanelNavEvent) -> Bool)?
 
+    /// AppDelegate wires this to the reusable first-run window.
+    var showOnboardingHandler: (() -> Void)?
+
     /// Set to force the panel to open a specific session's terminal (used for testing).
     var forceOpenSession: String?
 
@@ -104,6 +107,8 @@ final class AppModel {
     weak var panelController: PanelController?
     /// Set by AppDelegate — clears a session's delivered notifications.
     var clearSessionNotifications: ((String) -> Void)?
+    /// Set by AppDelegate — applies the selected global summon shortcut immediately.
+    @ObservationIgnored var summonShortcutModeChanged: ((SummonShortcutMode) -> Void)?
 
     nonisolated init() {}
 
@@ -382,6 +387,8 @@ final class AppModel {
     var panelFloating: Bool { panelController?.isFloating ?? true }
     func setPanelFloating(_ on: Bool) { panelController?.isFloating = on }
     func togglePanelFloating() { panelController?.toggleFloating() }
+    func setSettingsPresented(_ presented: Bool) { panelController?.setSettingsPresented(presented) }
+    func setSummonShortcutMode(_ mode: SummonShortcutMode) { summonShortcutModeChanged?(mode) }
 
     // MARK: Session actions (called from the panel)
 
@@ -591,6 +598,15 @@ final class AppModel {
         let status = ClaudeHooksInstaller.install()
         needsHookInstall = !ClaudeHooksInstaller.isInstalled()
         Log.hooks.info("hook install requested -> \(String(describing: status), privacy: .public)")
+    }
+
+    func showOnboarding() {
+        showOnboardingHandler?()
+    }
+
+    func refreshRuntimeAvailability() async {
+        await sessions?.refreshTmuxAvailability()
+        setupProblem = sessions?.tmuxMissing == true ? "tmux가 필요합니다" : nil
     }
 
     /// Send a text reply into a session from the home input (without opening the terminal).

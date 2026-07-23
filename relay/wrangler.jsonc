@@ -9,7 +9,12 @@
   // Declaring only the name keeps credentials out of source control and lets
   // `wrangler types` generate the binding type.
   "secrets": {
-    "required": ["RELAY_AUTH_TOKEN", "DEVICE_CREDENTIAL_PEPPER"]
+    "required": [
+      "RELAY_AUTH_TOKEN",
+      "DEVICE_CREDENTIAL_PEPPER",
+      "NOTION_API_TOKEN",
+      "NOTION_FEEDBACK_DATA_SOURCE_ID"
+    ]
   },
 
   // The deployed worker is still the developer environment. Production must
@@ -37,6 +42,11 @@
       "name": "PAIRING_RATE_LIMITER",
       "namespace_id": "24002",
       "simple": { "limit": 20, "period": 60 }
+    },
+    {
+      "name": "FEEDBACK_RATE_LIMITER",
+      "namespace_id": "24003",
+      "simple": { "limit": 10, "period": 60 }
     }
   ],
 

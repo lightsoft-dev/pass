@@ -6,6 +6,7 @@ import {
   tokensMatch,
 } from "./auth";
 import { handleControlRequest } from "./control";
+import { handleFeedbackRequest } from "./feedback";
 import { handleMarketplaceRequest } from "./marketplace";
 
 import {
@@ -1021,12 +1022,16 @@ export default {
       });
     }
     if (url.pathname === "/connect" || url.pathname === "/v2" || url.pathname.startsWith("/v2/")) {
-      const limiter = url.pathname.startsWith("/v2/pairings") || url.pathname.startsWith("/v2/deck-pairings")
+      const limiter = url.pathname === "/v2/feedback"
+        ? env.FEEDBACK_RATE_LIMITER
+        : url.pathname.startsWith("/v2/pairings") || url.pathname.startsWith("/v2/deck-pairings")
         ? env.PAIRING_RATE_LIMITER
         : env.AUTH_RATE_LIMITER;
       const limited = await enforceRateLimit(request, limiter);
       if (limited !== null) return limited;
     }
+    const feedbackResponse = await handleFeedbackRequest(request, env);
+    if (feedbackResponse !== null) return feedbackResponse;
     const marketplaceResponse = await handleMarketplaceRequest(request, env);
     if (marketplaceResponse !== null) return marketplaceResponse;
     const controlResponse = await handleControlRequest(request, env);

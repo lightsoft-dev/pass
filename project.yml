@@ -64,14 +64,15 @@ targets:
             CFBundleURLSchemes:
               - pass
         PassPublicRelayURL: $(PASS_PUBLIC_RELAY_URL)
+        PassFeedbackURL: $(PASS_FEEDBACK_URL)
         PassOIDCIssuer: $(PASS_OIDC_ISSUER)
         PassOIDCClientID: $(PASS_OIDC_CLIENT_ID)
         PassOIDCAudience: $(PASS_OIDC_AUDIENCE)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass
-        MARKETING_VERSION: "0.1.1"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "0.1.2"
+        CURRENT_PROJECT_VERSION: "3"
         # Stable signing via the free Apple Development cert. Ad-hoc ("-") builds, but its
         # cdhash changes every build and macOS then refuses notifications ("not allowed").
         # A real Development identity gives a stable code identity so notifications work.
@@ -138,8 +139,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass.share
-        MARKETING_VERSION: "0.1.1"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "0.1.2"
+        CURRENT_PROJECT_VERSION: "3"
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: H66C2M66DC

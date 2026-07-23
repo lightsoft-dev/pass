@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 import CoreImage.CIFilterBuiltins
-import KeyboardShortcuts
 
 /// Settings window (⌘,). Keyboard-first users rarely open it, but it's where the hotkey,
 /// launch-at-login, and one-time setup (hooks, notifications) live.
@@ -18,6 +17,7 @@ struct SettingsView: View {
     @State private var extensionSharingBusy = false
     @State private var extensionSharingMessage: String?
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
+    @AppStorage(SummonShortcutMode.storageKey) private var summonShortcutModeRaw = SummonShortcutMode.doubleCommand.rawValue
     @AppStorage(SessionStore.restoreDefaultsKey) private var restoreSessions = true
     @AppStorage("backupOptimizeGit") private var backupOptimizeGit = true
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
@@ -45,10 +45,13 @@ struct SettingsView: View {
             floating = appModel.panelFloating
             cliLinked = CLIInstaller.isLinked
             advertiseOn = ClaudeHooksInstaller.isAdvertiseInstalled()
-            // The summon panel floats above normal windows, so it would sit on top of Settings.
-            // Hide it and pull the app forward so Settings is actually visible/focused.
-            appModel.hidePanel()
+            // Keep the existing summon panel on screen, but below the Settings window while
+            // Settings has focus. Its floating level is restored when Settings closes.
+            appModel.setSettingsPresented(true)
             NSApp.activate(ignoringOtherApps: true)
+        }
+        .onDisappear {
+            appModel.setSettingsPresented(false)
         }
         .sheet(isPresented: $showExtensionBuilder) {
             ExtensionBuilderView().environment(appModel)
@@ -82,12 +85,27 @@ struct SettingsView: View {
         case .system:
             notificationsSection
             hookListenerSection
+            #if DEBUG
+            developmentSection
+            #endif
         }
     }
 
     private var shortcutSection: some View {
         Section("Shortcut") {
-            KeyboardShortcuts.Recorder("Summon pass:", name: .summonPass)
+            Picker("Summon pass", selection: $summonShortcutModeRaw) {
+                ForEach(SummonShortcutMode.allCases) { mode in
+                    Text(mode.label).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: summonShortcutModeRaw) { _, raw in
+                guard let mode = SummonShortcutMode(rawValue: raw) else { return }
+                appModel.setSummonShortcutMode(mode)
+            }
+            Text("Choose one global shortcut. The other shortcut is disabled.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -470,6 +488,21 @@ struct SettingsView: View {
             }
         }
     }
+
+    #if DEBUG
+    private var developmentSection: some View {
+        Section("Development") {
+            Button {
+                appModel.showOnboarding()
+            } label: {
+                Label("Run onboarding again…", systemImage: "arrow.counterclockwise.circle")
+            }
+            Text("Starts at the welcome screen and re-checks the current tmux, Git, agent, hook, and CLI installation state. It does not uninstall or overwrite anything.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+    #endif
 
     private var remoteGatewayStatus: (label: String, color: Color) {
         switch appModel.remoteGatewayState {

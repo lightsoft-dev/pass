@@ -112,6 +112,14 @@ final class SessionStore {
         startPolling()
     }
 
+    /// Re-check a runtime installed by the first-run assistant without requiring a restart.
+    func refreshTmuxAvailability() async {
+        tmuxMissing = !(await tmux.refreshAvailability())
+        if !tmuxMissing {
+            await reconcile()
+        }
+    }
+
     private func startPolling() {
         pollTask?.cancel()
         pollTask = Task { [weak self] in

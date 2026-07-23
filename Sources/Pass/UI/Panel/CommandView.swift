@@ -325,7 +325,7 @@ struct CommandView: View {
                 if !sessions.isEmpty { hideQuickCommand() } // Esc closes the ⌘P bar
                 return true
             }
-            // The terminal owns Esc (interrupting the agent). Close the panel with ⌘⌘/⌥Space.
+            // The terminal owns Esc (interrupting the agent). Use the selected global shortcut.
             return false
         case .toggleBrowser, .focusAddress, .expandBrowser:
             return true // handled above, before the route guard
@@ -430,6 +430,7 @@ struct CommandView: View {
                     Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(.secondary)
                     Text("Sessions").font(.system(size: 13, weight: .semibold))
                     Spacer()
+                    FeedbackButton()
                     if PassConfig.enableFeatureDocuments {
                         Button {
                             query = ""
@@ -667,7 +668,6 @@ struct CommandView: View {
                                                onSelect: { selection = idx },
                                                onMarkChecked: { appModel.markSessionChecked(s.name) },
                                                onDelete: { pendingKill = s },
-                                               onSpecs: { route = .specs(s.projectRoot) },
                                                browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
                                 .transition(rowTransition)
                         }
@@ -694,8 +694,7 @@ struct CommandView: View {
                                         session: s,
                                         terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
                                         onMarkChecked: { appModel.markSessionChecked(s.name) },
-                                        onDelete: { pendingKill = s },
-                                        onSpecs: { route = .specs(s.projectRoot) }
+                                        onDelete: { pendingKill = s }
                                     )
                                 } else {
                                     CompactSessionCard(session: s, onSelect: { selection = idx },
@@ -1111,7 +1110,6 @@ struct FocusedSessionCard: View {
     var terminal: TerminalController?
     var onMarkChecked: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
-    var onSpecs: (() -> Void)? = nil
 
     @Environment(AppModel.self) private var appModel
     @State private var renaming = false
@@ -1197,11 +1195,6 @@ struct FocusedSessionCard: View {
             SessionPresentationPicker(readableMode: $readableMode) {
                 DispatchQueue.main.async { terminal?.focus() }
             }
-            if let onSpecs {
-                Button(action: onSpecs) { Image(systemName: "doc.text") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .font(.system(size: 11)).help("Project spec document (⌘D)")
-            }
             SessionRenameButton(session: session, show: $renaming)
             if let onDelete {
                 Button(action: onDelete) { Image(systemName: "trash") }
@@ -1237,10 +1230,6 @@ struct FocusedSessionCard: View {
         Button("Rename...") { rename() }
         Button("Open Mini Terminal") { appModel.miniTerminals.open(for: session) }
         ConfigURLContextMenu(session: session)
-        if let onSpecs {
-            Button("Project Specs") { onSpecs() }
-                .keyboardShortcut("d", modifiers: .command)
-        }
         if onDelete != nil { Divider() }
         if let onDelete {
             Button("Delete", role: .destructive) { onDelete() }
@@ -1303,7 +1292,6 @@ struct CompactSessionCard: View {
     var onSelect: () -> Void = {}
     var onMarkChecked: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
-    var onSpecs: (() -> Void)? = nil
     /// An agent opened/updated this session's browser page and the user hasn't seen it yet.
     var browserUnseen: Bool = false
 
@@ -1327,11 +1315,6 @@ struct CompactSessionCard: View {
                 // the mouse onto the popover ends the hover and tears the popover down.
                 if hovering || renaming {
                     MiniTerminalButton(session: session)
-                    if let onSpecs {
-                        Button(action: onSpecs) { Image(systemName: "doc.text") }
-                            .buttonStyle(.plain).foregroundStyle(.secondary)
-                            .font(.system(size: 11)).help("Project spec document (⌘D)")
-                    }
                     SessionRenameButton(session: session, show: $renaming)
                     if let onDelete {
                         Button(action: onDelete) { Image(systemName: "trash") }
@@ -1409,10 +1392,6 @@ struct CompactSessionCard: View {
         Button("Rename...") { rename() }
         Button("Open Mini Terminal") { appModel.miniTerminals.open(for: session) }
         ConfigURLContextMenu(session: session)
-        if let onSpecs {
-            Button("Project Specs") { onSpecs() }
-                .keyboardShortcut("d", modifiers: .command)
-        }
         if onDelete != nil { Divider() }
         if let onDelete {
             Button("Delete", role: .destructive) { onDelete() }

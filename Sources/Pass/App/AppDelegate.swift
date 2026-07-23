@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var eventRouter: EventRouter?
     private var doubleTapHotkey: DoubleTapHotkey?
     private var shiftTapHotkey: DoubleTapHotkey?
+    private var onboardingController: OnboardingWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Always called on the main thread; assert it so we can touch main-actor state.
@@ -18,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
+            doubleTapHotkey?.invalidate()
+            shiftTapHotkey?.invalidate()
             appModel.mirror?.shutdown()
             appModel.miniTerminals?.closeAll()
             appModel.sessions?.flushSave()
@@ -45,14 +48,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Panel (non-activating, keyboard-first).
         panelController = PanelController(appModel: appModel)
         appModel.panelController = panelController
+        let onboardingController = OnboardingWindowController(appModel: appModel)
+        self.onboardingController = onboardingController
+        appModel.showOnboardingHandler = { [weak onboardingController] in
+            onboardingController?.show()
+        }
 
-        // Global hotkeys → toggle the panel: ⌘⌘ double-tap (primary) + ⌥Space (rebindable).
+        // Global summon hotkey: Settings chooses exactly one of ⌘⌘ or ⌥Space.
         HotkeyService.registerSummon { [weak self] in
             self?.panelController.toggle()
         }
-        doubleTapHotkey = DoubleTapHotkey { [weak self] in
-            self?.panelController.toggle()
+        appModel.summonShortcutModeChanged = { [weak self] mode in
+            self?.applySummonShortcutMode(mode)
         }
+        applySummonShortcutMode(.current)
         // ⇧⇧ hops to the next session waiting for input — only while the panel has the
         // keyboard, so shift taps in other apps never move pass's selection.
         shiftTapHotkey = DoubleTapHotkey(modifier: .shift) { [weak self] in
@@ -110,7 +119,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         appModel.isReady = true
+        let completedOnboarding = UserDefaults.standard.bool(
+            forKey: OnboardingPreference.completedKey
+        )
+        if !completedOnboarding || Shell.resolveViaLoginShell("tmux") == nil {
+            DispatchQueue.main.async { onboardingController.show() }
+        }
         Log.app.info("pass launched (accessory, hook port \(PassConfig.hookPort))")
+    }
+
+    @MainActor
+    private func applySummonShortcutMode(_ mode: SummonShortcutMode) {
+        switch mode {
+        case .doubleCommand:
+            HotkeyService.setOptionSpaceEnabled(false)
+            if doubleTapHotkey == nil {
+                doubleTapHotkey = DoubleTapHotkey { [weak self] in
+                    self?.panelController.toggle()
+                }
+            }
+        case .optionSpace:
+            doubleTapHotkey?.invalidate()
+            doubleTapHotkey = nil
+            HotkeyService.setOptionSpaceEnabled(true)
+        }
+        Log.app.info("summon shortcut selected (\(mode.rawValue))")
     }
 
     @MainActor

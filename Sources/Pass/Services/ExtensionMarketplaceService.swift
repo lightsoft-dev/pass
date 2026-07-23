@@ -85,12 +85,11 @@ enum ExtensionMarketplaceError: Error, LocalizedError, Equatable {
     }
 }
 
-/// Authenticated, app-only client for the Cloudflare marketplace API. It reuses the desktop
-/// credential already kept in Keychain for Remote Access, so no marketplace token is exposed
-/// to extension code or persisted in settings.
+/// App-only client for the Cloudflare marketplace API. Public discovery requests can be
+/// anonymous; account-scoped and mutating requests reuse the desktop credential in Keychain.
 @MainActor
 final class ExtensionMarketplaceService {
-    typealias Authorization = (baseURL: URL, accessToken: String)
+    typealias Authorization = (baseURL: URL, accessToken: String?)
     typealias AuthorizationProvider = @MainActor () async throws -> Authorization
 
     struct Page: Sendable {
@@ -123,8 +122,14 @@ final class ExtensionMarketplaceService {
             do {
                 let registration = try await accountService.refreshDesktopRegistrationIfNeeded()
                 return (registration.relayURL, registration.credentials.accessToken)
-            } catch RemoteAccountError.configurationUnavailable {
-                throw ExtensionMarketplaceError.signInRequired
+            } catch {
+                guard let relayURL = RemotePublicConfiguration.loadRelayURL() else {
+                    if error is RemoteAccountError {
+                        throw ExtensionMarketplaceError.signInRequired
+                    }
+                    throw error
+                }
+                return (relayURL, nil)
             }
         }
     }
@@ -147,76 +152,96 @@ final class ExtensionMarketplaceService {
         if ownedOnly { queryItems.append(URLQueryItem(name: "owner", value: "me")) }
         if let cursor { queryItems.append(URLQueryItem(name: "cursor", value: cursor)) }
         components.queryItems = queryItems
-        let response: PageResponse = try await request(path: components.string ?? components.path)
+        let response: PageResponse = try await request(
+            path: components.string ?? components.path,
+            requiresAuthentication: ownedOnly)
         return Page(extensions: response.extensions, nextCursor: response.nextCursor)
     }
 
     func details(id: String) async throws -> MarketplaceExtension {
-        let response: ItemResponse = try await request(path: "v2/marketplace/extensions/\(id)")
+        let response: ItemResponse = try await request(
+            path: "v2/marketplace/extensions/\(id)",
+            requiresAuthentication: false)
         return response.extension
     }
 
     func publish(_ draft: MarketplaceExtensionDraft) async throws -> MarketplaceExtension {
         let response: ItemResponse = try await request(
-            path: "v2/marketplace/extensions", method: "POST", body: draft)
+            path: "v2/marketplace/extensions", method: "POST", body: draft,
+            requiresAuthentication: true)
         return response.extension
     }
 
     func update(id: String, draft: MarketplaceExtensionDraft) async throws -> MarketplaceExtension {
         let response: ItemResponse = try await request(
-            path: "v2/marketplace/extensions/\(id)", method: "PATCH", body: draft)
+            path: "v2/marketplace/extensions/\(id)", method: "PATCH", body: draft,
+            requiresAuthentication: true)
         return response.extension
     }
 
     func delete(id: String) async throws {
         let _: EmptyResponse = try await request(
-            path: "v2/marketplace/extensions/\(id)", method: "DELETE")
+            path: "v2/marketplace/extensions/\(id)", method: "DELETE",
+            requiresAuthentication: true)
     }
 
     func report(id: String, reason: String, details: String? = nil) async throws {
         struct Report: Encodable { var reason: String; var details: String? }
         let _: EmptyResponse = try await request(
             path: "v2/marketplace/extensions/\(id)/reports", method: "POST",
-            body: Report(reason: reason, details: details))
+            body: Report(reason: reason, details: details), requiresAuthentication: true)
     }
 
     func recordInstall(id: String) async throws {
         let _: EmptyResponse = try await request(
-            path: "v2/marketplace/extensions/\(id)/install", method: "POST")
+            path: "v2/marketplace/extensions/\(id)/install", method: "POST",
+            requiresAuthentication: true)
     }
 
     func setHidden(id: String, hidden: Bool) async throws -> MarketplaceExtension {
         struct Moderation: Encodable { var hidden: Bool }
         let response: ItemResponse = try await request(
             path: "v2/marketplace/extensions/\(id)/moderation", method: "PATCH",
-            body: Moderation(hidden: hidden))
+            body: Moderation(hidden: hidden), requiresAuthentication: true)
         return response.extension
     }
 
     private struct EmptyResponse: Decodable {}
 
-    private func request<Response: Decodable>(path: String, method: String = "GET") async throws -> Response {
-        try await request(path: path, method: method, bodyData: nil)
+    private func request<Response: Decodable>(
+        path: String,
+        method: String = "GET",
+        requiresAuthentication: Bool
+    ) async throws -> Response {
+        try await request(
+            path: path, method: method, bodyData: nil,
+            requiresAuthentication: requiresAuthentication)
     }
 
     private func request<Response: Decodable, Body: Encodable>(
-        path: String, method: String, body: Body
+        path: String, method: String, body: Body, requiresAuthentication: Bool
     ) async throws -> Response {
-        try await request(path: path, method: method, bodyData: try JSONEncoder().encode(body))
+        try await request(
+            path: path, method: method, bodyData: try JSONEncoder().encode(body),
+            requiresAuthentication: requiresAuthentication)
     }
 
     private func request<Response: Decodable>(
-        path: String, method: String, bodyData: Data?
+        path: String, method: String, bodyData: Data?, requiresAuthentication: Bool
     ) async throws -> Response {
         let authorization = try await resolvedAuthorization()
         try Task.checkCancellation()
+        if requiresAuthentication && authorization.accessToken == nil {
+            throw ExtensionMarketplaceError.signInRequired
+        }
         guard let url = URL(string: path, relativeTo: authorization.baseURL)?.absoluteURL else {
             throw ExtensionMarketplaceError.invalidResponse
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("Bearer \(authorization.accessToken)",
-                         forHTTPHeaderField: "Authorization")
+        if let accessToken = authorization.accessToken {
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let bodyData {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

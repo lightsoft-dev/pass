@@ -71,11 +71,16 @@ export async function handleMarketplaceRequest(
     return null;
   }
 
-  const context = await marketplaceContext(request, env);
+  const publicRead = request.method === "GET" && (
+    url.pathname === MARKETPLACE_PREFIX ||
+    new RegExp(`^${MARKETPLACE_PREFIX}/mkt_[a-f0-9]{32}$`).test(url.pathname)
+  );
+  const context = await marketplaceContext(request, env, !publicRead);
   if (context instanceof Response) return context;
 
   if (url.pathname === MARKETPLACE_PREFIX) {
     if (request.method === "GET") return handleList(url, env, context);
+    if (context === null) return apiError(401, "unauthorized", "Sign in to use the marketplace.");
     if (request.method === "POST") return handleCreate(request, env, context);
     return methodNotAllowed("GET, POST");
   }
@@ -86,6 +91,11 @@ export async function handleMarketplaceRequest(
   const extensionId = route?.[1];
   const action = route?.[2];
   if (!extensionId) return apiError(404, "not_found", "Marketplace route not found.");
+
+  if (action === undefined && request.method === "GET") {
+    return handleDetail(env, context, extensionId);
+  }
+  if (context === null) return apiError(401, "unauthorized", "Sign in to use the marketplace.");
 
   if (action === "install") {
     return request.method === "POST"
@@ -102,7 +112,6 @@ export async function handleMarketplaceRequest(
       ? handleModeration(request, env, context, extensionId)
       : methodNotAllowed("PATCH");
   }
-  if (request.method === "GET") return handleDetail(env, context, extensionId);
   if (request.method === "PATCH") return handleUpdate(request, env, context, extensionId);
   if (request.method === "DELETE") return handleDelete(env, context, extensionId);
   return methodNotAllowed("GET, PATCH, DELETE");
@@ -111,7 +120,9 @@ export async function handleMarketplaceRequest(
 async function marketplaceContext(
   request: Request,
   env: MarketplaceEnv,
-): Promise<MarketplaceContext | Response> {
+  required: boolean,
+): Promise<MarketplaceContext | null | Response> {
+  if (!required && request.headers.get("Authorization") === null) return null;
   const authenticated = await authenticateDeviceCredential(request, env, "access");
   if (!authenticated.ok) return authenticationError(authenticated);
   if (authenticated.value.role !== "desktop" || authenticated.value.subjectType !== "desktop") {
@@ -126,7 +137,7 @@ async function marketplaceContext(
 async function handleList(
   url: URL,
   env: MarketplaceEnv,
-  context: MarketplaceContext,
+  context: MarketplaceContext | null,
 ): Promise<Response> {
   const parsed = parseListQuery(url);
   if (parsed instanceof Response) return parsed;
@@ -134,9 +145,12 @@ async function handleList(
   const where = ["e.deleted_at IS NULL"];
   const bindings: unknown[] = [];
   if (parsed.owner === "me") {
+    if (context === null) {
+      return apiError(401, "unauthorized", "Sign in to view your marketplace listings.");
+    }
     where.push("e.owner_account_id = ?");
     bindings.push(context.credential.accountId);
-  } else if (!context.isAdmin) {
+  } else if (context?.isAdmin !== true) {
     where.push("e.hidden_at IS NULL");
   }
   if (parsed.q !== null) {
@@ -178,7 +192,7 @@ async function handleList(
 
 async function handleDetail(
   env: MarketplaceEnv,
-  context: MarketplaceContext,
+  context: MarketplaceContext | null,
   extensionId: string,
 ): Promise<Response> {
   const row = await findExtension(env.CONTROL_DB, extensionId);
@@ -988,11 +1002,14 @@ function extensionSelect(): string {
             JOIN accounts a ON a.id = e.owner_account_id`;
 }
 
-function extensionDTO(row: ExtensionRow, context: MarketplaceContext): Record<string, unknown> {
+function extensionDTO(
+  row: ExtensionRow,
+  context: MarketplaceContext | null,
+): Record<string, unknown> {
   const manifest = parseStoredObject(row.manifest_json);
   const tags = parseStoredStringArray(row.tags_json);
   if (manifest === null || tags === null) throw new Error("Invalid marketplace JSON in D1.");
-  const isOwner = row.owner_account_id === context.credential.accountId;
+  const isOwner = row.owner_account_id === context?.credential.accountId;
   return {
     id: row.id,
     repositoryUrl: row.repository_url,
@@ -1008,20 +1025,23 @@ function extensionDTO(row: ExtensionRow, context: MarketplaceContext): Record<st
       ...(row.owner_display_name === null ? {} : { displayName: row.owner_display_name }),
     },
     installCount: row.install_count,
-    ...(context.isAdmin ? { reportCount: row.report_count } : {}),
+    ...(context?.isAdmin === true ? { reportCount: row.report_count } : {}),
     isOwner,
-    canModerate: context.isAdmin,
+    canModerate: context?.isAdmin === true,
     createdAt: isoDate(row.created_at),
     updatedAt: isoDate(row.updated_at),
-    ...(row.hidden_at !== null && (isOwner || context.isAdmin) ? { isHidden: true } : {}),
+    ...(row.hidden_at !== null && (isOwner || context?.isAdmin === true) ? { isHidden: true } : {}),
   };
 }
 
-function canRead(row: ExtensionRow | null, context: MarketplaceContext): row is ExtensionRow {
+function canRead(
+  row: ExtensionRow | null,
+  context: MarketplaceContext | null,
+): row is ExtensionRow {
   return row !== null && (
     row.hidden_at === null ||
-    row.owner_account_id === context.credential.accountId ||
-    context.isAdmin
+    row.owner_account_id === context?.credential.accountId ||
+    context?.isAdmin === true
   );
 }
 

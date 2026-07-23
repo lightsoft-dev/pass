@@ -38,7 +38,7 @@ protocol TerminalPaneAccess: Sendable {
 actor TmuxClient: TerminalPaneAccess {
     static let shared = TmuxClient()
 
-    private let tmuxPath: String?
+    private var tmuxPath: String?
 
     init() {
         self.tmuxPath = Shell.resolveViaLoginShell("tmux")
@@ -47,6 +47,12 @@ actor TmuxClient: TerminalPaneAccess {
     }
 
     var isAvailable: Bool { tmuxPath != nil }
+
+    /// Re-resolve after the first-run assistant installs tmux while Pass is already running.
+    func refreshAvailability() -> Bool {
+        tmuxPath = Shell.resolveViaLoginShell("tmux")
+        return tmuxPath != nil
+    }
 
     private let fieldSep = "\t" // tmux escapes non-printable control bytes in -F output, so
                                 // a real separator (tab) is required. Paths with tabs are pathological.

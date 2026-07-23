@@ -75,10 +75,19 @@ make logs     # stream the app's OSLog
 
 ## First-time setup (in the app)
 
-1. **Settings › Install hooks** — merges pass's hooks into `~/.claude/settings.json` (backed up
-   first; never touches your other hooks). New Claude sessions then report to pass.
-2. **Settings › Notifications** — if blocked, enable pass in System Settings.
-3. Summon with ⌥Space, `@` to jump, `New session…` from the menu bar to start one.
+The first launch opens a three-step setup assistant:
+
+1. **Runtime check** — detects `tmux` (required) and Git (recommended). If Homebrew is available,
+   Pass can install `tmux` in place and re-detect it without an app restart; otherwise it opens
+   the Homebrew installation guide.
+2. **Agent check** — detects Claude Code, Codex, and pi independently. Only one is needed; missing
+   optional agents link to their official installation guides.
+3. **Integrations** — installs Claude hooks by merging them into `~/.claude/settings.json`
+   (backed up first; never touches other hooks) and links the bundled `passcli`.
+
+The assistant can be reopened any time from the menu bar. If notifications are blocked, enable
+Pass in System Settings. Summon with the shortcut selected in Settings (⌘⌘ or ⌥Space), `@` to
+jump, or use `New session…` from the menu bar.
 
 ## Mobile remote developer preview
 

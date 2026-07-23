@@ -1,19 +1,50 @@
 import AppKit
 import KeyboardShortcuts
 
+enum SummonShortcutMode: String, CaseIterable, Identifiable {
+    static let storageKey = "summonShortcutMode"
+
+    case doubleCommand
+    case optionSpace
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .doubleCommand: "Double Command  ⌘⌘"
+        case .optionSpace: "Option Space  ⌥Space"
+        }
+    }
+
+    static var current: Self {
+        guard let raw = UserDefaults.standard.string(forKey: storageKey),
+              let mode = Self(rawValue: raw) else { return .doubleCommand }
+        return mode
+    }
+}
+
 extension KeyboardShortcuts.Name {
-    /// Secondary summon (⌥Space by default) — rebindable via the Recorder in Settings.
-    /// The primary summon is a ⌘ double-tap (DoubleTapHotkey below).
+    /// Fixed ⌥Space summon option. Settings chooses this OR ⌘⌘, never both.
     static let summonPass = Self("summonPass", default: .init(.space, modifiers: [.option]))
 }
 
 enum HotkeyService {
-    /// Register the global summon hotkey. `handler` runs on the main actor.
+    /// Register the fixed ⌥Space global summon handler. Its enabled state follows the selected
+    /// SummonShortcutMode, while the handler itself only needs to be installed once.
     static func registerSummon(_ handler: @escaping @MainActor () -> Void) {
+        KeyboardShortcuts.setShortcut(.init(.space, modifiers: [.option]), for: .summonPass)
         KeyboardShortcuts.onKeyUp(for: .summonPass) {
             MainActor.assumeIsolated { handler() }
         }
         Log.app.info("global hotkey registered (summonPass)")
+    }
+
+    static func setOptionSpaceEnabled(_ enabled: Bool) {
+        if enabled {
+            KeyboardShortcuts.enable(.summonPass)
+        } else {
+            KeyboardShortcuts.disable(.summonPass)
+        }
     }
 }
 
@@ -64,6 +95,13 @@ final class DoubleTapHotkey {
             monitors.append(m)
         }
         Log.app.info("double-tap hotkey registered (\(self.modifier.rawValue))")
+    }
+
+    func invalidate() {
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors.removeAll()
+        cmdDownAt = nil
+        lastTapAt = nil
     }
 
     private func handleFlags(_ e: NSEvent) {
