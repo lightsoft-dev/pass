@@ -41,6 +41,8 @@ let package = Package(
                 "Services/HotkeyService.swift",
                 "Services/LoginItemService.swift",
                 "Services/NotificationService.swift",
+                // Guided macOS setup orchestrates AppModel and AppKit-only services.
+                "Services/OnboardingService.swift",
             ]
         ),
         .executableTarget(
