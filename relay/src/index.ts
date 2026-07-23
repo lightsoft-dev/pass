@@ -1020,7 +1020,7 @@ export default {
       });
     }
     if (url.pathname === "/connect" || url.pathname === "/v2" || url.pathname.startsWith("/v2/")) {
-      const limiter = url.pathname.startsWith("/v2/pairings")
+      const limiter = url.pathname.startsWith("/v2/pairings") || url.pathname.startsWith("/v2/deck-pairings")
         ? env.PAIRING_RATE_LIMITER
         : env.AUTH_RATE_LIMITER;
       const limited = await enforceRateLimit(request, limiter);

@@ -12,7 +12,7 @@ import {
   type CommandValidationCode,
 } from "./commands.ts";
 import { parseServerEvent } from "./guards.ts";
-import { parsePairingPayload } from "./pairing.ts";
+import { parseDeckPairingApproval, parsePairingPayload } from "./pairing.ts";
 
 const session = {
   name: "pass-my-app",
@@ -363,6 +363,20 @@ test("accepts an unexpired one-time v2 pairing payload without a bearer token", 
     assert.equal(parsed.value.expiresAt, "2026-07-18T12:05:00.000Z");
     assert.equal("authorizationToken" in parsed.value, false);
   }
+});
+
+test("parses a Deck approval QR without treating it as a phone credential", () => {
+  const parsed = parseDeckPairingApproval(JSON.stringify({
+    v: 3,
+    relayUrl: "https://relay.example.com",
+    pairingId: "deckpair_123",
+    approvalSecret: "approve_secret",
+    deviceName: "Steam Deck OLED",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }));
+  assert.equal(parsed.v, 3);
+  assert.equal(parsed.deviceName, "Steam Deck OLED");
+  assert.equal("pollSecret" in parsed, false);
 });
 
 test("rejects an expired one-time v2 pairing payload", () => {

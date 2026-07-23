@@ -85,6 +85,13 @@ The implementation and its security boundary are documented in
 [`relay/README.md`](relay/README.md), and Expo setup lives in
 [`mobile/README.md`](mobile/README.md). No relay is deployed automatically.
 
+## Steam Deck client
+
+[`deck/`](deck/) contains a controller-first SteamOS remote client. Agents run on an
+internet-connected Pass host while the Deck connects through the existing relay protocol for
+session discovery/creation, terminal input, messages, and structured permission answers. See
+[`deck/README.md`](deck/README.md) for setup and Deck controls.
+
 ## How it fits together
 
 ```

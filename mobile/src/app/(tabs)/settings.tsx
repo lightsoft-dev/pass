@@ -110,6 +110,13 @@ export default function SettingsScreen() {
             <AppButton compact variant="secondary" label="Reconnect" onPress={reconnect} />
             <AppButton compact variant="danger" label="Forget desktop" onPress={unpair} />
           </View>
+          {deviceCredential && userSession ? (
+            <AppButton
+              variant="secondary"
+              label="Pair a Steam Deck"
+              onPress={() => router.push("/pair-deck")}
+            />
+          ) : null}
         </View>
 
         {!deviceCredential ? (
