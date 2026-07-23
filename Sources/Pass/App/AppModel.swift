@@ -104,6 +104,8 @@ final class AppModel {
     weak var panelController: PanelController?
     /// Set by AppDelegate — clears a session's delivered notifications.
     var clearSessionNotifications: ((String) -> Void)?
+    /// Set by AppDelegate — applies the selected global summon shortcut immediately.
+    @ObservationIgnored var summonShortcutModeChanged: ((SummonShortcutMode) -> Void)?
 
     nonisolated init() {}
 
@@ -382,6 +384,8 @@ final class AppModel {
     var panelFloating: Bool { panelController?.isFloating ?? true }
     func setPanelFloating(_ on: Bool) { panelController?.isFloating = on }
     func togglePanelFloating() { panelController?.toggleFloating() }
+    func setSettingsPresented(_ presented: Bool) { panelController?.setSettingsPresented(presented) }
+    func setSummonShortcutMode(_ mode: SummonShortcutMode) { summonShortcutModeChanged?(mode) }
 
     // MARK: Session actions (called from the panel)
 

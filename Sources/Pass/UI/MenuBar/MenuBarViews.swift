@@ -24,7 +24,6 @@ struct MenuBarContent: View {
 
     var body: some View {
         Button("Open pass") { appModel.summon() }
-            .keyboardShortcut(.space, modifiers: .option)
 
         Menu("New session") {
             ForEach(AgentKind.launchable, id: \.self) { agent in
@@ -84,8 +83,8 @@ struct MenuBarContent: View {
 
         Divider()
         // SettingsLink is the reliable way to open the Settings scene (the old
-        // showSettingsWindow: selector is flaky on recent macOS). SettingsView.onAppear then
-        // hides the floating panel and activates, so Settings isn't stuck behind the panel.
+        // showSettingsWindow: selector is flaky on recent macOS). SettingsView temporarily
+        // lowers the floating panel so both windows remain visible with Settings in front.
         SettingsLink { Text("Settings…") }
             .keyboardShortcut(",")
         Button("Quit pass") { NSApp.terminate(nil) }

@@ -38,19 +38,13 @@ struct ExtensionMarketplaceView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if appModel.remoteUsesPublicCredentials {
-                marketContent
-            } else {
-                signedOutView
-            }
+            marketContent
         }
         .frame(width: 900, height: 680)
-        .onAppear {
-            if appModel.remoteUsesPublicCredentials { startLoad(reset: true) }
-        }
-        .onChange(of: appModel.remoteUsesPublicCredentials) { _, isAvailable in
-            if isAvailable { startLoad(reset: true) }
-            else { cancelListLoad() }
+        .onAppear { startLoad(reset: true) }
+        .onChange(of: appModel.remoteUsesPublicCredentials) { _, isSignedIn in
+            if !isSignedIn && scope == .mine { scope = .discover }
+            else { startLoad(reset: true) }
         }
         .onDisappear { cancelListLoad() }
         .sheet(item: $editorSeed) { seed in
@@ -99,6 +93,8 @@ struct ExtensionMarketplaceView: View {
                     Label("Publish", systemImage: "plus")
                 }
                 .disabled(appModel.extensions?.loaded.isEmpty ?? true)
+            } else {
+                Button("Sign in") { appModel.signInForRemoteAccess() }
             }
             Button("Done") { dismiss() }
         }
@@ -110,7 +106,10 @@ struct ExtensionMarketplaceView: View {
             VStack(spacing: 0) {
                 VStack(spacing: 10) {
                     Picker("Scope", selection: $scope) {
-                        ForEach(Scope.allCases) { Text($0.rawValue).tag($0) }
+                        Text(Scope.discover.rawValue).tag(Scope.discover)
+                        if appModel.remoteUsesPublicCredentials {
+                            Text(Scope.mine.rawValue).tag(Scope.mine)
+                        }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
@@ -240,18 +239,23 @@ struct ExtensionMarketplaceView: View {
                         } label: { Image(systemName: "ellipsis.circle") }
                         .menuStyle(.borderlessButton).fixedSize()
                     }
-                    if !item.isOwner {
+                    if appModel.remoteUsesPublicCredentials && !item.isOwner {
                         Button { reporting = item } label: { Image(systemName: "flag") }
                             .buttonStyle(.borderless).help("Report this extension")
                     }
-                    Button {
-                        Task { await install(item) }
-                    } label: {
-                        if installingID == item.id { ProgressView().controlSize(.small) }
-                        else { Label("Install", systemImage: "square.and.arrow.down") }
+                    if appModel.remoteUsesPublicCredentials {
+                        Button {
+                            Task { await install(item) }
+                        } label: {
+                            if installingID == item.id { ProgressView().controlSize(.small) }
+                            else { Label("Install", systemImage: "square.and.arrow.down") }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(installingID != nil)
+                    } else {
+                        Button("Sign in to install") { appModel.signInForRemoteAccess() }
+                            .buttonStyle(.borderedProminent)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(installingID != nil)
                 }
 
                 // The market's visual anchor: provenance and execution risk remain adjacent,
@@ -336,16 +340,6 @@ struct ExtensionMarketplaceView: View {
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var signedOutView: some View {
-        ContentUnavailableView {
-            Label("Sign in to browse the market", systemImage: "person.crop.circle.badge.exclamationmark")
-        } description: {
-            Text("Marketplace publisher identities and reports use your Pass account. No browser storefront is exposed.")
-        } actions: {
-            Button("Sign in") { appModel.signInForRemoteAccess() }.buttonStyle(.borderedProminent)
-        }
     }
 
     @discardableResult

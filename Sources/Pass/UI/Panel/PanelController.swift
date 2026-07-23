@@ -7,6 +7,7 @@ import SwiftUI
 final class PanelController {
     private let appModel: AppModel
     private var panel: SummonPanel?
+    private var settingsPresented = false
 
     private let defaultSize = NSSize(width: 680, height: 460)
 
@@ -21,7 +22,7 @@ final class PanelController {
             .environment(appModel)
         panel.contentView = NSHostingView(rootView: root)
         // Esc never closes the panel — it belongs to the embedded terminal (interrupting the
-        // agent) and to in-view editing. Dismiss with ⌘⌘ / ⌥Space instead.
+        // agent) and to in-view editing. Dismiss with the selected global shortcut instead.
         panel.onCancel = nil
         panel.onGoBack = { [weak self] in self?.appModel.requestBack() }
         panel.onToggleFloat = { [weak self] in self?.toggleFloating() }
@@ -79,11 +80,18 @@ final class PanelController {
     private func applyMode() {
         guard let panel else { return }
         panel.isFloatingPanel = isFloating
-        panel.level = isFloating ? .floating : .normal
+        // Keep the summon panel visible while Settings is open, but temporarily lower it so
+        // the normal Settings window can sit in front. Closing Settings restores floating mode.
+        panel.level = isFloating && !settingsPresented ? .floating : .normal
         panel.collectionBehavior = isFloating
             ? [.canJoinAllSpaces, .fullScreenAuxiliary]
             : [.fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
+    }
+
+    func setSettingsPresented(_ presented: Bool) {
+        settingsPresented = presented
+        applyMode()
     }
 
     var isVisible: Bool { panel?.isVisible ?? false }

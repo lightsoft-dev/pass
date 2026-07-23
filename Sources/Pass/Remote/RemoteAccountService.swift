@@ -56,6 +56,23 @@ struct RemotePublicConfiguration: Equatable, Sendable {
             redirectURL: redirectURL
         )
     }
+
+    /// The extension market only needs the public relay. Keep this separate from the complete
+    /// OIDC configuration so signed-out users can browse even when account sign-in is unavailable.
+    static func loadRelayURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundleValues: [String: Any] = Bundle.main.infoDictionary ?? [:]
+    ) -> URL? {
+        let raw = environment["PASS_PUBLIC_RELAY_URL"]
+            ?? bundleValues[RemotePublicConfigurationKey.relayURL] as? String
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard
+            let url = URL(string: trimmed),
+            url.scheme?.lowercased() == "https",
+            url.host != nil
+        else { return nil }
+        return url
+    }
 }
 
 struct RemoteCredentialPair: Codable, Equatable, Sendable {

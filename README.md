@@ -12,7 +12,7 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
 
 ## What works today
 
-- **Global hotkey** (default ⌥Space) summons the panel over any app, any Space, without
+- **Global hotkey** — choose ⌘⌘ (default) or ⌥Space in Settings — summons the panel over any app, any Space, without
   disruptively stealing your editor's focus. **Resizable** (drag edges; size is remembered) and
   toggleable between **floating** (always-on-top) and a **normal window** you keep beside your
   editor (⌘⇧F).
@@ -78,7 +78,7 @@ make logs     # stream the app's OSLog
 1. **Settings › Install hooks** — merges pass's hooks into `~/.claude/settings.json` (backed up
    first; never touches your other hooks). New Claude sessions then report to pass.
 2. **Settings › Notifications** — if blocked, enable pass in System Settings.
-3. Summon with ⌥Space, `@` to jump, `New session…` from the menu bar to start one.
+3. Summon with the shortcut selected in Settings (⌘⌘ or ⌥Space), `@` to jump, `New session…` from the menu bar to start one.
 
 ## Mobile remote developer preview
 

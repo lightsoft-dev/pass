@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
+            doubleTapHotkey?.invalidate()
+            shiftTapHotkey?.invalidate()
             appModel.mirror?.shutdown()
             appModel.miniTerminals?.closeAll()
             appModel.sessions?.flushSave()
@@ -46,13 +48,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         panelController = PanelController(appModel: appModel)
         appModel.panelController = panelController
 
-        // Global hotkeys → toggle the panel: ⌘⌘ double-tap (primary) + ⌥Space (rebindable).
+        // Global summon hotkey: Settings chooses exactly one of ⌘⌘ or ⌥Space.
         HotkeyService.registerSummon { [weak self] in
             self?.panelController.toggle()
         }
-        doubleTapHotkey = DoubleTapHotkey { [weak self] in
-            self?.panelController.toggle()
+        appModel.summonShortcutModeChanged = { [weak self] mode in
+            self?.applySummonShortcutMode(mode)
         }
+        applySummonShortcutMode(.current)
         // ⇧⇧ hops to the next session waiting for input — only while the panel has the
         // keyboard, so shift taps in other apps never move pass's selection.
         shiftTapHotkey = DoubleTapHotkey(modifier: .shift) { [weak self] in
@@ -111,6 +114,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         appModel.isReady = true
         Log.app.info("pass launched (accessory, hook port \(PassConfig.hookPort))")
+    }
+
+    @MainActor
+    private func applySummonShortcutMode(_ mode: SummonShortcutMode) {
+        switch mode {
+        case .doubleCommand:
+            HotkeyService.setOptionSpaceEnabled(false)
+            if doubleTapHotkey == nil {
+                doubleTapHotkey = DoubleTapHotkey { [weak self] in
+                    self?.panelController.toggle()
+                }
+            }
+        case .optionSpace:
+            doubleTapHotkey?.invalidate()
+            doubleTapHotkey = nil
+            HotkeyService.setOptionSpaceEnabled(true)
+        }
+        Log.app.info("summon shortcut selected (\(mode.rawValue))")
     }
 
     @MainActor

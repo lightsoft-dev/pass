@@ -108,10 +108,10 @@ source control.
 
 ## In-app extension marketplace API
 
-Marketplace routes accept only an issued desktop access credential. Mobile credentials and OIDC
-tokens cannot browse or mutate the catalog, and there is no anonymous storefront endpoint.
-Executable files remain in the submitted public HTTPS Git repository; D1 stores discovery metadata
-and a validated snapshot of `extension.json`.
+Public list, search, and detail GETs do not require a credential. Account-scoped reads and every
+mutation accept only an issued desktop access credential; mobile credentials and OIDC tokens
+cannot perform them. Executable files remain in the submitted public HTTPS Git repository; D1
+stores discovery metadata and a validated snapshot of `extension.json`.
 
 - `GET|POST /v2/marketplace/extensions` searches/lists or publishes extensions. List filters are
   `q`, `category`, `owner=me`, `limit`, and opaque `cursor`; `q` covers names, summaries,

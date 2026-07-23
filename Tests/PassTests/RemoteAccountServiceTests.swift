@@ -34,6 +34,15 @@ final class RemoteAccountServiceTests: XCTestCase {
         XCTAssertNil(configuration)
     }
 
+    func testMarketplaceRelayLoadsWithoutOIDCConfiguration() throws {
+        let relayURL = try XCTUnwrap(RemotePublicConfiguration.loadRelayURL(
+            environment: ["PASS_PUBLIC_RELAY_URL": "https://relay.example.com/"],
+            bundleValues: [:]
+        ))
+
+        XCTAssertEqual(relayURL.absoluteString, "https://relay.example.com/")
+    }
+
     func testSecureDesktopRegistrationDefinesGatewayIdentity() throws {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

@@ -140,15 +140,19 @@ beforeAll(async () => {
 });
 
 describe("extension marketplace", () => {
-  it("requires an active desktop credential", async () => {
-    const missing = await api("/v2/marketplace/extensions");
-    expect(missing.status).toBe(401);
+  it("allows anonymous discovery but requires a desktop credential for account scope", async () => {
+    const publicList = await api("/v2/marketplace/extensions");
+    expect(publicList.status).toBe(200);
+    await expect(publicList.json()).resolves.toMatchObject({ extensions: [] });
 
     const mobile = await api("/v2/marketplace/extensions", { as: "mobile" });
     expect(mobile.status).toBe(403);
     await expect(mobile.json()).resolves.toMatchObject({
       error: { code: "forbidden" },
     });
+
+    const mine = await api("/v2/marketplace/extensions?owner=me");
+    expect(mine.status).toBe(401);
   });
 
   it("publishes validated metadata and supports detail, search, pagination, and conflicts", async () => {
@@ -172,6 +176,12 @@ describe("extension marketplace", () => {
     const detail = await api(`/v2/marketplace/extensions/${String(first.id)}`, { as: "other" });
     expect(detail.status).toBe(200);
     expect(nested(asObject(await detail.json()), "extension").isOwner).toBe(false);
+    const publicDetail = await api(`/v2/marketplace/extensions/${String(first.id)}`);
+    expect(publicDetail.status).toBe(200);
+    expect(nested(asObject(await publicDetail.json()), "extension")).toMatchObject({
+      isOwner: false,
+      canModerate: false,
+    });
 
     const second = await create("catalog-beta");
     const pageOne = await api(

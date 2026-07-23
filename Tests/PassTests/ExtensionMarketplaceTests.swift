@@ -34,6 +34,39 @@ final class ExtensionMarketplaceTests: XCTestCase {
         XCTAssertEqual(page.nextCursor, "next-page")
     }
 
+    func testAnonymousDiscoveryOmitsAuthorizationHeader() async throws {
+        let session = makeSession()
+        MarketplaceURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            return (200, Self.pageJSON)
+        }
+        let service = ExtensionMarketplaceService(session: session) {
+            (URL(string: "https://relay.example/")!, nil)
+        }
+
+        let page = try await service.list(query: "timer")
+
+        XCTAssertEqual(page.extensions.map(\.name), ["Focus Timer"])
+    }
+
+    func testAnonymousAccountScopeRequiresSignInBeforeRequest() async throws {
+        let session = makeSession()
+        MarketplaceURLProtocol.handler = { _ in
+            XCTFail("Account-scoped request must not reach the network without a credential.")
+            return (500, "{}")
+        }
+        let service = ExtensionMarketplaceService(session: session) {
+            (URL(string: "https://relay.example/")!, nil)
+        }
+
+        do {
+            _ = try await service.list(ownedOnly: true)
+            XCTFail("Expected sign-in requirement.")
+        } catch let error as ExtensionMarketplaceError {
+            XCTAssertEqual(error, .signInRequired)
+        }
+    }
+
     func testPublishEncodesManifestAndSurfacesServerMessage() async throws {
         let session = makeSession()
         var capturedBody: [String: Any]?
