@@ -3,31 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pass — Mission control for Claude Code</title>
-<meta name="description" content="Pass is a keyboard-driven macOS menu-bar panel for every Claude Code session across your projects. Agents run on their own; only the sessions that need you surface. tmux-backed, one hotkey away.">
-<meta name="theme-color" content="#0b0a08">
-<meta property="og:title" content="Pass — Mission control for Claude Code">
-<meta property="og:description" content="Run ten agents. Answer the one that needs you. A tmux-backed macOS menu-bar mission control for Claude Code sessions.">
+<title>Pass — Mission control for coding agents</title>
+<meta name="description" content="Pass is a keyboard-driven macOS mission control for Claude Code, Codex, and pi sessions across your projects. Agents run on their own; only the sessions that need you surface.">
+<meta name="theme-color" content="#0e0c14">
+<meta property="og:title" content="Pass — Mission control for coding agents">
+<meta property="og:description" content="Run ten agents. Answer the one that needs you. A tmux-backed macOS mission control for Claude Code, Codex, and pi.">
 <meta property="og:type" content="website">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0a08'/%3E%3Cpath d='M22 18h14a10 10 0 0 1 0 20h-6v8h-8z' fill='%23ffb000'/%3E%3C/svg%3E">
+<meta property="og:image" content="app-icon.svg">
+<link rel="icon" href="app-icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
 <style>
 /* ————————————————————————————————— tokens */
 :root{
-  --bg:#0b0a08;
-  --bg-raised:#100e0a;
-  --panel:#14110b;
-  --panel-edge:#282216;
-  --line:#242017;
-  --ink:#ece7d9;
-  --ink-dim:#a29a86;
-  --ink-faint:#5f5847;
-  --amber:#ffb000;
-  --amber-hot:#ffcf4d;
-  --amber-dim:rgba(255,176,0,.14);
-  --green:#3ddc84;
+  --bg:#0e0c14;
+  --bg-raised:#14101f;
+  --panel:#171222;
+  --panel-edge:#382b58;
+  --line:#2b223b;
+  --ink:#f2f0e7;
+  --ink-dim:#aaa4b8;
+  --ink-faint:#6d667b;
+  --amber:#f3ef63;
+  --amber-hot:#fff878;
+  --amber-dim:rgba(243,239,99,.14);
+  --violet:#6546ea;
+  --violet-mid:#8f7bea;
+  --violet-soft:#c1b9e9;
+  --violet-dim:rgba(101,70,234,.18);
+  --green:#8f7bea;
   --red:#ff5f56;
   --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
   --display:"Archivo Black","Arial Black",sans-serif;
@@ -36,7 +41,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html{overflow-x:clip}
 @media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
-::selection{background:var(--amber);color:#0b0a08}
+::selection{background:var(--amber);color:var(--bg)}
 body{
   background:var(--bg);
   color:var(--ink);
@@ -48,10 +53,12 @@ body{
 /* dot-grid field */
 body::before{
   content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
-  background-image:radial-gradient(rgba(236,231,217,.05) 1px,transparent 1px);
+  background-image:
+    radial-gradient(circle at 83% 2%,rgba(101,70,234,.23),transparent 36%),
+    radial-gradient(rgba(242,240,231,.05) 1px,transparent 1px);
   background-size:26px 26px;
-  mask-image:radial-gradient(ellipse 90% 70% at 50% 0%,#000 0%,transparent 75%);
-  -webkit-mask-image:radial-gradient(ellipse 90% 70% at 50% 0%,#000 0%,transparent 75%);
+  mask-image:linear-gradient(#000 0 72%,transparent 100%);
+  -webkit-mask-image:linear-gradient(#000 0 72%,transparent 100%);
 }
 a{color:inherit}
 :focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:2px}
@@ -64,14 +71,16 @@ section{scroll-margin-top:calc(var(--bar-h) + 24px)}
   display:flex;align-items:center;gap:18px;
   padding:0 clamp(14px,2.5vw,28px);
   font-size:12.5px;letter-spacing:.02em;
-  background:rgba(11,10,8,.86);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  background:rgba(14,12,20,.88);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
   border-bottom:1px solid var(--line);
   white-space:nowrap;
 }
 .bar .sess{
-  background:var(--amber);color:#0b0a08;font-weight:700;
-  padding:2px 9px;border-radius:3px;text-decoration:none;
+  color:var(--ink);font-weight:700;
+  padding:0 8px 0 0;border-radius:7px;text-decoration:none;
+  display:inline-flex;align-items:center;gap:8px;
 }
+.brand-icon{width:25px;height:25px;border-radius:6px;box-shadow:0 0 0 1px rgba(243,239,99,.2)}
 .bar nav{display:flex;gap:14px;overflow:hidden}
 .bar nav a{color:var(--ink-faint);text-decoration:none;transition:color .15s}
 .bar nav a:hover{color:var(--ink)}
@@ -115,8 +124,8 @@ h1 .cursor{
   transition:transform .15s,background .15s,border-color .15s,box-shadow .15s;
 }
 .btn-amber{
-  background:var(--amber);color:#0b0a08;border:1px solid #000;
-  box-shadow:0 0 0 1px rgba(255,176,0,.22),0 10px 30px -10px rgba(255,176,0,.4);
+  background:var(--amber);color:var(--bg);border:1px solid #000;
+  box-shadow:0 0 0 1px rgba(243,239,99,.22),0 10px 30px -10px rgba(243,239,99,.38);
 }
 .btn-amber:hover{background:var(--amber-hot);transform:translateY(-1px)}
 .btn-amber:active{transform:translateY(0)}
@@ -138,13 +147,13 @@ h1 .cursor{
   display:flex;justify-content:flex-end;align-items:center;gap:14px;
   font-size:11.5px;color:var(--ink-faint);
   border:1px solid var(--line);border-bottom:none;border-radius:10px 10px 0 0;
-  background:rgba(20,17,11,.6);padding:6px 12px;
+  background:rgba(23,18,34,.72);padding:6px 12px;
 }
 .menubar .badge{color:var(--amber);font-weight:700}
 .mock{
   position:relative;border:1px solid var(--panel-edge);border-radius:0 0 12px 12px;
-  background:linear-gradient(180deg,#14110b 0%,#0e0c08 100%);
-  box-shadow:0 30px 80px -30px rgba(0,0,0,.9),0 0 90px -30px rgba(255,176,0,.18);
+  background:linear-gradient(180deg,#191329 0%,#0f0c16 100%);
+  box-shadow:0 30px 80px -30px rgba(0,0,0,.9),0 0 100px -28px rgba(101,70,234,.34);
   overflow:hidden;font-size:12.5px;line-height:1.5;
 }
 .mock::after{ /* scanlines */
@@ -162,13 +171,13 @@ h1 .cursor{
   margin-left:auto;border:1px solid var(--line);border-radius:3px;
   padding:1px 7px;font-size:10.5px;letter-spacing:.08em;color:var(--ink-faint);
 }
-.chip.on{color:var(--amber);border-color:rgba(255,176,0,.35)}
+.chip.on{color:var(--amber);border-color:rgba(243,239,99,.35)}
 .stack{display:flex;flex-direction:column;gap:8px;padding:12px}
 .card{
   border:1px solid var(--line);border-radius:8px;background:rgba(236,231,217,.02);
   padding:10px 12px;position:relative;transition:border-color .3s,background .3s;
 }
-.card.attn{border-color:rgba(255,176,0,.5);background:rgba(255,176,0,.05)}
+.card.attn{border-color:rgba(243,239,99,.5);background:rgba(243,239,99,.05)}
 .card.attn::before{
   content:"";position:absolute;left:-1px;top:10px;bottom:10px;width:2px;
   background:var(--amber);border-radius:2px;
@@ -179,8 +188,8 @@ h1 .cursor{
 }
 .card-h{display:flex;align-items:center;gap:8px;color:var(--ink-dim);font-size:11.5px}
 .led{width:7px;height:7px;border-radius:50%;background:var(--ink-faint);flex:none}
-.card.run .led{background:var(--green);box-shadow:0 0 8px rgba(61,220,132,.6)}
-.card.attn .led{background:var(--amber);box-shadow:0 0 8px rgba(255,176,0,.7)}
+.card.run .led{background:var(--green);box-shadow:0 0 8px rgba(143,123,234,.65)}
+.card.attn .led{background:var(--amber);box-shadow:0 0 8px rgba(243,239,99,.7)}
 .card-h .nm{color:var(--ink);font-weight:700}
 .card-h .br{color:var(--ink-faint)}
 .card-h .wt{color:var(--ink-faint)}
@@ -194,7 +203,7 @@ h1 .cursor{
 .menu .sel{color:var(--amber)}
 .kbd-inline{
   display:inline-block;border:1px solid var(--panel-edge);border-bottom-width:2px;border-radius:4px;
-  padding:0 5px;font-size:10.5px;color:var(--ink);background:#1a160e;line-height:1.6;
+  padding:0 5px;font-size:10.5px;color:var(--ink);background:#20172e;line-height:1.6;
 }
 .omni{
   display:flex;align-items:center;gap:8px;margin:4px 12px 12px;
@@ -215,11 +224,11 @@ h1 .cursor{
 /* ————————————————————————————————— amber statement strip */
 .strip{
   margin-top:clamp(60px,10vh,120px);
-  background:var(--amber);color:#0b0a08;position:relative;z-index:1;
+  background:var(--amber);color:var(--bg);position:relative;z-index:1;
 }
 .strip .hazard{
   height:10px;
-  background:repeating-linear-gradient(-45deg,#0b0a08 0 12px,var(--amber) 12px 24px);
+  background:repeating-linear-gradient(-45deg,var(--violet) 0 12px,var(--amber) 12px 24px);
 }
 .strip-inner{padding:clamp(48px,7vw,84px) 0}
 .strip h2{
@@ -247,7 +256,7 @@ h1 .cursor{
   display:flex;flex-direction:column;gap:10px;min-height:190px;
   transition:background .2s;
 }
-.feat:hover{background:rgba(255,176,0,.035)}
+.feat:hover{background:rgba(101,70,234,.075)}
 .feat .no{font-size:12px;font-weight:700;letter-spacing:.14em;color:var(--ink-faint);transition:color .2s}
 .feat:hover .no{color:var(--amber)}
 .feat h3{
@@ -285,11 +294,11 @@ h1 .cursor{
   border:1px solid var(--line);border-radius:8px;padding:14px 18px;
   background:rgba(16,14,10,.5);transition:border-color .15s,transform .12s;
 }
-.keyrow:hover{border-color:rgba(255,176,0,.4)}
+.keyrow:hover{border-color:rgba(143,123,234,.55)}
 .keyrow:hover kbd{transform:translateY(1px);border-bottom-width:2px}
 kbd{
   font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--ink);
-  background:linear-gradient(180deg,#1e1a11,#131009);
+  background:linear-gradient(180deg,#251b35,#171020);
   border:1px solid var(--panel-edge);border-bottom-width:3px;border-radius:6px;
   padding:5px 9px;min-width:32px;text-align:center;display:inline-block;
   transition:transform .12s,border-bottom-width .12s;
@@ -306,7 +315,7 @@ kbd{
   display:flex;flex-direction:column;gap:10px;min-height:210px;
 }
 .road:first-child{border-left:none}
-.road .tag{align-self:flex-start;border:1px solid rgba(255,176,0,.35);border-radius:100px;padding:3px 10px;color:var(--amber);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.road .tag{align-self:flex-start;border:1px solid rgba(143,123,234,.5);border-radius:100px;padding:3px 10px;color:var(--violet-soft);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 .road h3{font-family:var(--display);font-weight:400;font-size:20px;letter-spacing:.005em;text-transform:uppercase;line-height:1.15}
 .road p{color:var(--ink-dim);font-size:13.5px}
 .road p b{color:var(--ink);font-weight:500}
@@ -322,7 +331,7 @@ kbd{
 .req{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
 .req span{border:1px solid var(--line);border-radius:100px;padding:4px 13px;font-size:11.5px;color:var(--ink-dim);letter-spacing:.04em}
 .term{
-  border:1px solid var(--panel-edge);border-radius:10px;background:#0d0b08;overflow:hidden;
+  border:1px solid var(--panel-edge);border-radius:10px;background:#100c19;overflow:hidden;
 }
 .term-t{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);color:var(--ink-faint);font-size:11.5px}
 .term-t .cp{
@@ -330,7 +339,7 @@ kbd{
   color:var(--ink-dim);font-family:var(--mono);font-size:11px;padding:3px 10px;cursor:pointer;
   letter-spacing:.06em;transition:color .15s,border-color .15s;
 }
-.term-t .cp:hover{color:var(--amber);border-color:rgba(255,176,0,.4)}
+.term-t .cp:hover{color:var(--amber);border-color:rgba(243,239,99,.4)}
 .term pre{padding:18px 20px;font-size:13px;line-height:1.9;overflow-x:auto}
 .term .ps1{color:var(--amber);user-select:none}
 .term .c{color:var(--ink-faint)}
@@ -353,7 +362,7 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
   display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;
   padding:16px clamp(20px,4vw,48px);font-size:12px;color:var(--ink-faint);
 }
-.foot-bar .sess{background:var(--amber);color:#0b0a08;font-weight:700;padding:1px 8px;border-radius:3px}
+.foot-bar .sess{display:inline-flex;align-items:center;gap:8px;color:var(--ink);font-weight:700}
 .foot-bar a{color:var(--ink-dim);text-decoration:none}
 .foot-bar a:hover{color:var(--amber)}
 .foot-bar .right{margin-left:auto;display:flex;gap:18px;flex-wrap:wrap}
@@ -366,7 +375,7 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
 
 <!-- ————————————————— tmux-style status bar -->
 <header class="bar">
-  <a class="sess" href="#top">pass</a>
+  <a class="sess" href="#top"><img class="brand-icon" src="app-icon.svg" alt="">pass</a>
   <nav aria-label="Sections">
     <a href="#top" class="cur" data-spy="top">0:overview</a>
     <a href="#features" data-spy="features">1:features</a>
@@ -387,10 +396,10 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
   <section class="hero wrap" aria-label="Overview">
     <div class="hero-grid">
       <div>
-        <p class="kicker rise">Menu-bar mission control · Claude Code · tmux-backed</p>
+        <p class="kicker rise">Local mission control · Claude Code · Codex · pi</p>
         <h1 class="rise d1">Run ten agents. Answer the one that <span class="hl">needs&nbsp;you</span><span class="cursor" aria-hidden="true"></span></h1>
         <p class="lede rise d2">
-          Pass is a keyboard-driven macOS panel over <strong>every Claude Code session in every project</strong>.
+          Pass is a keyboard-driven macOS panel over <strong>every coding-agent session in every project</strong>.
           Agents run on their own; the moment one is blocked on a permission, a question, or a review,
           it surfaces — <strong>one hotkey away, one keystroke to clear</strong>. Share links,
           notes, files, and screenshots into the exact agent session that should act on them.
@@ -473,8 +482,8 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
       <div class="feat s7">
         <span class="no">PF-04</span>
         <h3>Hook-driven attention</h3>
-        <p>Claude Code hooks report <b>permission prompts, questions, and completions</b> the moment they happen — no polling, no screen-scraping guesswork. The session that needs you surfaces with exactly what it wants and <b>how long it's been waiting</b>, plus branch, worktree ⧉ badge, and agent glyph. Claude's numbered option menus mirror live into the card — drive them with plain <b>↑↓ ⏎</b> without opening the terminal.</p>
-        <p class="spec">notification · stop · prompt-submit hooks → 127.0.0.1 only</p>
+        <p>Native hooks for <b>Claude Code, Codex, and pi</b> report approvals, questions, prompts, and completions the moment they happen — no polling, no screen-scraping guesswork. The session that needs you surfaces with exactly what it wants and <b>how long it's been waiting</b>, plus branch, worktree ⧉ badge, and agent glyph.</p>
+        <p class="spec">Claude HTTP hooks · Codex command hooks · pi extension → 127.0.0.1 only</p>
       </div>
       <div class="feat s8">
         <span class="no">PF-05</span>
@@ -512,8 +521,8 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
     </div>
     <div class="diagram-wrap">
 <pre class="diagram">
-<span class="n">Claude Code</span> (in tmux)  ──hooks(HTTP)──▶  <span class="h">HookServer</span> (127.0.0.1:49817)
-                                              │  normalize (<span class="n">ClaudeAdapter</span>)
+<span class="n">Claude · Codex · pi</span> (in tmux) ──agent hooks──▶ <span class="h">HookServer</span> (127.0.0.1:49817)
+                                                   │ normalize (<span class="n">AgentAdapter</span>)
                                               ▼
    <span class="n">TmuxClient</span> ◀── reconcile ──  <span class="n">SessionStore</span>  ──▶  <span class="h">EventRouter</span> ──▶  <span class="g">Inbox + Notifications</span>
    (create/adopt/attach)        (git identity,        (state machine)          ▲
@@ -522,7 +531,7 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
 </pre>
     </div>
     <div class="arch-facts">
-      <div><b>Agent-agnostic core</b>All agent knowledge lives in adapters. Claude Code today; the <code>/hook/&lt;agent&gt;</code> routes and per-agent glyphs for Codex &amp; pi are already wired for M5.</div>
+      <div><b>Agent-agnostic core</b>Claude Code, Codex, and pi each report through their own adapter and <code>/hook/&lt;agent&gt;</code> route. The inbox and state machine stay agent-independent.</div>
       <div><b>Loopback only</b>The hook server binds 127.0.0.1 — no firewall prompt, no LAN exposure. Replies are injected with bracketed paste, and a bare shell prompt refuses injection.</div>
       <div><b>Nothing to migrate</b>Pass persists only a small project MRU list. Kill the app, reboot the Mac — your sessions are still in tmux, exactly where they were.</div>
     </div>
@@ -590,7 +599,7 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
         <a class="btn btn-amber btn-big" href="https://github.com/lightsoft-dev/pass/releases/latest" data-download>↓&nbsp;&nbsp;Download for macOS</a>
         <p class="get-note" id="release-note"><b data-version>Checking latest release…</b></p>
         <div class="req">
-          <span>macOS 14+</span><span>Apple Silicon &amp; Intel</span><span>tmux</span><span>Claude Code</span>
+          <span>macOS 14+</span><span>Apple Silicon &amp; Intel</span><span>tmux</span><span>Claude · Codex · pi</span>
         </div>
         <p class="get-note">Building from source instead needs Xcode 26+, <a href="https://github.com/yonaskolb/XcodeGen" rel="noopener">xcodegen</a>, and a free Apple&nbsp;Development signing identity — details in <a href="https://github.com/lightsoft-dev/pass/blob/main/BUILD.md" rel="noopener">BUILD.md</a>.</p>
       </div>
@@ -609,7 +618,7 @@ make open">copy</button>
 <span class="out">→ .build/Build/Products/Debug/Pass.app</span></pre>
         </div>
         <div class="steps">
-          <div><b>Settings › Install hooks</b> — merges Pass's hooks into <code>~/.claude/settings.json</code> (backed up first; your other hooks are untouched). New Claude sessions start reporting in.</div>
+          <div><b>Settings › Install hooks</b> — adds the Pass bridge for Claude Code, Codex, and pi. Existing hooks are preserved and changed files are backed up first. Codex asks you to review the new command hooks once with <code>/hooks</code>.</div>
           <div><b>Allow notifications</b> when macOS asks — the menu-bar badge works either way.</div>
           <div>Hit your selected shortcut (<b>⌘⌘</b> or <b>⌥Space</b>). <b>@</b> to jump, <b>New session…</b> from the menu bar to start one.</div>
         </div>
@@ -621,7 +630,7 @@ make open">copy</button>
 <!-- ————————————————— footer status bar -->
 <footer>
   <div class="foot-bar">
-    <span class="sess">pass</span>
+    <span class="sess"><img class="brand-icon" src="app-icon.svg" alt="">pass</span>
     <span>dev.lightsoft.pass</span>
     <span>a <a href="https://github.com/lightsoft-dev" rel="noopener">Lightsoft</a> tool</span>
     <span class="right">

@@ -1,8 +1,8 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// Directory picker for registering projects. Allows multiple selection so the user can pick
-/// several project folders, or a single parent folder to scan.
+/// Directory picker for registering project sync sources. Allows multiple selection so the user
+/// can pick several project folders or the parent directories that collect them.
 enum ProjectPicker {
     @MainActor
     static func pick() -> [String] {
@@ -11,7 +11,7 @@ enum ProjectPicker {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
         panel.prompt = "Add"
-        panel.message = "Choose project folders, or a parent folder that contains repos"
+        panel.message = "Choose directories that contain the projects Pass should sync"
         NSApp.activate(ignoringOtherApps: true)
         return panel.runModal() == .OK ? panel.urls.map(\.path) : []
     }

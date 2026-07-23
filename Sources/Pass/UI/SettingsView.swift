@@ -24,6 +24,7 @@ struct SettingsView: View {
     @AppStorage(RemoteGatewayPreferenceKey.enabled) private var remoteAccessEnabled = false
     @AppStorage(RemoteGatewayPreferenceKey.relayURL) private var remoteRelayURL = ""
     @AppStorage(RemoteGatewayPreferenceKey.authorizationToken) private var remoteAuthorizationToken = ""
+    @AppStorage(ProjectCreationService.defaultParentDirectoryKey) private var newProjectParentDirectory = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -131,24 +132,70 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
     private var projectsSection: some View {
-        Section("Projects") {
-            let projects = appModel.projects?.projects ?? []
-            if projects.isEmpty {
-                Text("No projects yet — add some to jump to them with @.")
+        Section("Project directories") {
+            let directories = appModel.projects?.projectDirectories ?? []
+            if directories.isEmpty {
+                Text("No directories are being synced. Add a folder that contains your projects.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                ForEach(projects) { p in
-                    ProjectRow(project: p)
+                ForEach(directories, id: \.self) { path in
+                    ProjectDirectoryRow(path: path)
                 }
             }
             HStack {
-                Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
+                Button("Add directories…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
+                Button {
+                    appModel.syncProjectDirectories()
+                } label: {
+                    if appModel.isProjectSyncing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Sync now", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .disabled(appModel.isProjectSyncing || directories.isEmpty)
                 if let msg = appModel.lastProjectAddMessage {
                     Text(msg).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Text("Tip: click the dot at the front of a session card to give its project an emoji.")
+            if let msg = appModel.lastProjectSyncMessage {
+                Text(msg).font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Pass discovers projects from these folders. Removing a folder stops syncing it, without deleting projects or active sessions.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+
+        Section("New projects") {
+            HStack(spacing: 10) {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.tint)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Default location")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(newProjectParentDirectory.isEmpty
+                         ? "Choose where projects created with ⌘N should be saved"
+                         : newProjectParentDirectory)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                Spacer()
+                Button("Choose…") {
+                    if let path = ProjectPicker.pickOne(
+                        prompt: "Use for new projects",
+                        message: "Choose where Pass should create new project folders"
+                    ) {
+                        newProjectParentDirectory = path
+                        appModel.setNewProjectParentDirectory(path)
+                    }
+                }
+            }
+            Text("In the ⌘N menu, type a new name and choose Create. Pass makes an empty Git project here and starts the selected agent.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -423,7 +470,7 @@ struct SettingsView: View {
     }
 
     private var claudeHooksSection: some View {
-        Section("Claude Code hooks") {
+        Section("Agent event hooks") {
             LabeledContent("Status") {
                 Text(appModel.needsHookInstall ? "Not installed" : "Installed")
                     .foregroundStyle(appModel.needsHookInstall ? .orange : .green)
@@ -431,7 +478,7 @@ struct SettingsView: View {
             Button(appModel.needsHookInstall ? "Install hooks" : "Reinstall hooks") {
                 appModel.installHooks()
             }
-            Text("Merges into ~/.claude/settings.json (backed up first, never overwrites your other hooks). New Claude sessions pick them up.")
+            Text("Adds Pass entries for Claude Code, Codex, and pi. Existing hooks are preserved and changed files are backed up first. New agent sessions pick them up.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -861,24 +908,49 @@ private struct ExtensionRow: View {
     }
 }
 
-/// One project row in Settings — name/path and a remove button. (Emoji is set inline from the
-/// session card's leading dot, not here.)
-private struct ProjectRow: View {
-    let project: Project
+/// One sync source in Settings — a stable folder identity, its full path, and the number of
+/// currently known projects beneath it.
+private struct ProjectDirectoryRow: View {
+    let path: String
     @Environment(AppModel.self) private var appModel
 
     var body: some View {
-        HStack(spacing: 8) {
-            SessionBadge(emoji: project.emoji, projectRoot: project.rootPath, size: 15).frame(width: 20)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(project.name).font(.system(size: 12, weight: .medium))
-                Text(project.rootPath).font(.system(size: 10)).foregroundStyle(.secondary)
+        HStack(spacing: 10) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.tint)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(displayName)
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(projectCountLabel)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.secondary.opacity(0.12), in: Capsule())
+                }
+                Text(path).font(.system(size: 10)).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.head)
             }
             Spacer()
-            Button { appModel.projects?.forget(rootPath: project.rootPath) } label: {
+            Button { appModel.projects?.forgetDirectory(path: path) } label: {
                 Image(systemName: "minus.circle")
-            }.buttonStyle(.borderless).foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("Stop syncing this directory")
         }
+    }
+
+    private var displayName: String {
+        let name = URL(fileURLWithPath: path, isDirectory: true).lastPathComponent
+        return name.isEmpty ? path : name
+    }
+
+    private var projectCountLabel: String {
+        let count = appModel.projects?.projectCount(inDirectory: path) ?? 0
+        return "\(count) project\(count == 1 ? "" : "s")"
     }
 }

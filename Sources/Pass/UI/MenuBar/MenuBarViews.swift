@@ -31,7 +31,7 @@ struct MenuBarContent: View {
             }
         }
         Button("Specs…") { appModel.showSpecs() }
-        Button("Add projects…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
+        Button("Add project directories…") { appModel.addProjects(dirs: ProjectPicker.pick()) }
         Button("Back up all projects…") { appModel.exportAllProjects(optimizeGit: backupOptimizeGit) }
             .disabled(appModel.isExporting)
         Button("Attach device pane…") { appModel.showDeviceMirror() }
@@ -62,8 +62,8 @@ struct MenuBarContent: View {
 
         if appModel.needsHookInstall {
             Divider()
-            Text("⚠ Claude hooks not installed")
-            Button("Install Claude hooks") { appModel.installHooks() }
+            Text("⚠ Agent hooks not installed")
+            Button("Install agent hooks") { appModel.installHooks() }
         }
         if appModel.hookServerFailed {
             Divider()

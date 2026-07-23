@@ -1,6 +1,23 @@
 import AppKit
 import SwiftUI
 
+/// Shared session-titlebar control for opening the physical-device/emulator workspace pane.
+struct DevicePaneButton: View {
+    let sessionName: String
+
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        Button { appModel.mirror.openPicker(for: sessionName) } label: {
+            Image(systemName: "iphone.and.arrow.forward")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Attach physical device or emulator pane")
+        .accessibilityLabel("Open device pane")
+    }
+}
+
 /// Device picker and live video surface rendered inside a session workspace split.
 struct MirrorView: View {
     let engine: MirrorEngine

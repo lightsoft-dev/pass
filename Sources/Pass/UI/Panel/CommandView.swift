@@ -14,6 +14,7 @@ struct CommandView: View {
     @State private var jumpSelection: Int = 0         // cursor inside the @ jump results
     @State private var status: String?
     @State private var pendingKill: Session?          // session awaiting a kill confirmation
+    @State private var confirmHookDismissal = false   // acknowledge degraded core functionality
     @State private var showQuickCommand = false       // ⌘P quick command (hidden by default)
     @State private var newSessionMode = false         // ⌘N: results are PROJECTS, ⏎ starts a session
     @State private var terminal: TerminalController?  // live client attached to the selected session
@@ -93,9 +94,19 @@ struct CommandView: View {
         let needle = jumpToken.trimmingCharacters(in: .whitespaces)
         // ⌘N mode: the list is PROJECTS to start a session in (all of them until you type).
         if newSessionMode {
-            return projects
+            var items: [PaletteItem] = projects
                 .filter { needle.isEmpty || Fuzzy.matches(needle, $0.name) }
                 .map { .project($0) }
+            let exactMatch = projects.contains {
+                $0.name.compare(needle, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }
+            if !needle.isEmpty, !exactMatch, ProjectCreationService.isValidName(needle) {
+                let parent = UserDefaults.standard.string(
+                    forKey: ProjectCreationService.defaultParentDirectoryKey
+                )
+                items.append(.newProject(name: needle, parentDirectory: parent))
+            }
+            return items
         }
         if needle.isEmpty { return orderedSessions.map { .session($0) } }
         return filteredItems(needle)
@@ -144,7 +155,10 @@ struct CommandView: View {
                 query = ""
                 showQuickCommand = false // fresh summon lands in the terminal, not the bar
                 newSessionMode = false
-                if appModel.pendingOpenSpecs {
+                if appModel.pendingOpenFeatures {
+                    appModel.pendingOpenFeatures = false
+                    route = .features
+                } else if appModel.pendingOpenSpecs {
                     appModel.pendingOpenSpecs = false // menu bar asked for the specs screen
                     route = .specs(selectedSession?.projectRoot) // land on the current project
                 } else {
@@ -192,6 +206,20 @@ struct CommandView: View {
                 },
                 message: { _ in
                     Text("Ends the tmux session and the agent running in it. This can't be undone.")
+                }
+            )
+            .confirmationDialog(
+                "Continue without agent hooks?",
+                isPresented: $confirmHookDismissal,
+                actions: {
+                    Button("Dismiss anyway", role: .destructive) {
+                        appModel.dismissHookInstallPrompt()
+                    }
+                    Button("Install hooks") { appModel.installHooks() }
+                    Button("Cancel", role: .cancel) {}
+                },
+                message: {
+                    Text("Without hooks, Pass cannot detect approvals, input requests, or completed work, and cannot send the core notifications that bring you back to an agent. Session launching and terminal access will still work.")
                 }
             )
     }
@@ -275,9 +303,14 @@ struct CommandView: View {
                 return true
             }
             if newSessionMode {
-                if case .project(let p)? = jumpSelectedItem {
+                switch jumpSelectedItem {
+                case .project(let p):
                     appModel.createSession(projectDir: p.rootPath, agent: newSessionAgent)
                     hideQuickCommand()
+                case .newProject(let name, _):
+                    createProjectFromInput(name)
+                default:
+                    break
                 }
                 return true
             }
@@ -297,6 +330,8 @@ struct CommandView: View {
                     appModel.createSession(projectDir: p.rootPath) // ⏎ start it
                     query = ""
                     hideQuickCommand() // action done — watch the new session arrive
+                case .newProject(let name, _):
+                    createProjectFromInput(name)
                 case .command(let c):
                     runExtensionCommand(c)
                 }
@@ -419,26 +454,9 @@ struct CommandView: View {
     private var listMode: some View {
         GeometryReader { geo in
             VStack(spacing: 0) {
-                if appModel.needsHookInstall { hookBanner }
-                HStack {
-                    Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(.secondary)
-                    Text("Sessions").font(.system(size: 13, weight: .semibold))
-                    Spacer()
-                    FeedbackButton()
-                    if PassConfig.enableFeatureDocuments {
-                        Button {
-                            query = ""
-                            route = .features
-                        } label: {
-                            Label("Features", systemImage: "doc.text.magnifyingglass")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .help("Executable software feature documents")
-                    }
+                if appModel.needsHookInstall && !appModel.hookInstallPromptDismissed {
+                    hookBanner
                 }
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                Divider()
                 if homeMode == .sidebar {
                     // Rows on the LEFT, the live terminal filling the right side.
                     HStack(spacing: 0) {
@@ -615,7 +633,8 @@ struct CommandView: View {
     private var hint: String {
         if newSessionMode {
             if case .project(let p)? = jumpSelectedItem { return "⏎ new \(newSessionAgent.rawValue) session in \(p.name)" }
-            return "type a project name · ⏎ start a \(newSessionAgent.rawValue) session · Esc close"
+            if case .newProject(let name, _)? = jumpSelectedItem { return "⏎ create “\(name)” + start \(newSessionAgent.rawValue)" }
+            return "type a project name · select an existing project or create a new one · Esc close"
         }
         if query.hasPrefix("+") {
             let branch = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
@@ -788,11 +807,13 @@ struct CommandView: View {
                     Text(s.displayName)
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
+                    ConfigURLAddButton(session: s)
                     Spacer()
                     MiniTerminalButton(session: s)
                     SessionPresentationPicker(readableMode: $readableMode) {
                         DispatchQueue.main.async { live.focus() }
                     }
+                    DevicePaneButton(sessionName: s.name)
                 }
                 .padding(.horizontal, 8).padding(.vertical, 5)
                 Divider()
@@ -945,6 +966,7 @@ struct CommandView: View {
         switch top {
         case .session(let s): token = jumpCompletionToken(s)
         case .project(let p): token = Slug.make(p.name)
+        case .newProject(let name, _): token = name
         case .command(let c): token = c.token
         }
         let msg = jumpMessage ?? ""
@@ -1031,6 +1053,19 @@ struct CommandView: View {
         }
     }
 
+    private func createProjectFromInput(_ name: String) {
+        hideQuickCommand()
+        Task {
+            if let error = await appModel.createProject(named: name, agent: newSessionAgent) {
+                status = "⚠ project: \(error)"
+                newSessionMode = true
+                showQuickCommand = true
+                query = name
+                refocusField()
+            }
+        }
+    }
+
     private func activate(_ item: PaletteItem) {
         switch item {
         case .session(let s):
@@ -1039,6 +1074,8 @@ struct CommandView: View {
             // In ⌘N the dropdown chooses the agent; a project tap in @-jump uses the default.
             appModel.createSession(projectDir: p.rootPath, agent: newSessionMode ? newSessionAgent : .claude)
             query = ""
+        case .newProject(let name, _):
+            createProjectFromInput(name)
         case .command(let c):
             runExtensionCommand(c)
         }
@@ -1062,11 +1099,13 @@ struct CommandView: View {
         HStack(spacing: 10) {
             Image(systemName: "bolt.badge.a").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Claude hooks not installed").font(.system(size: 12, weight: .medium))
-                Text("pass can't hear about sessions until you install them.")
+                Text("Agent hooks not installed").font(.system(size: 12, weight: .medium))
+                Text("Pass can't hear from Claude, Codex, or pi until you install them.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
+            Button("Dismiss") { confirmHookDismissal = true }
+                .buttonStyle(.bordered).controlSize(.small)
             Button("Install") { appModel.installHooks() }
                 .buttonStyle(.borderedProminent).controlSize(.small)
         }
@@ -1196,7 +1235,10 @@ struct FocusedSessionCard: View {
         HStack(alignment: .top, spacing: 6) {
             EmojiBadgeButton(session: session, size: 17)
             VStack(alignment: .leading, spacing: 3) {
-                Text(session.displayName).font(.system(size: 14, weight: .semibold))
+                HStack(spacing: 6) {
+                    Text(session.displayName).font(.system(size: 14, weight: .semibold))
+                    ConfigURLAddButton(session: session)
+                }
                 HStack(spacing: 6) {
                     AgentTag(agent: session.agent)
                     if session.customName != nil {
@@ -1212,6 +1254,7 @@ struct FocusedSessionCard: View {
             SessionPresentationPicker(readableMode: $readableMode) {
                 DispatchQueue.main.async { terminal?.focus() }
             }
+            DevicePaneButton(sessionName: session.name)
             SessionRenameButton(session: session, show: $renaming)
             if let onDelete {
                 Button(action: onDelete) { Image(systemName: "trash") }
@@ -1464,12 +1507,14 @@ private struct ConfigURLContextMenu: View {
 enum PaletteItem: Identifiable {
     case session(Session)
     case project(Project)
+    case newProject(name: String, parentDirectory: String?)
     case command(ExtensionStore.PaletteCommand)
 
     var id: String {
         switch self {
         case .session(let s): return "s:" + s.name
         case .project(let p): return "p:" + p.rootPath
+        case .newProject(let name, _): return "n:" + name
         case .command(let c): return "c:" + c.id
         }
     }
@@ -1484,6 +1529,7 @@ struct PaletteRow: View {
             switch item {
             case .session(let s): sessionRow(s)
             case .project(let p): projectRow(p)
+            case .newProject(let name, let parent): newProjectRow(name, parent: parent)
             case .command(let c): commandRow(c)
             }
         }
@@ -1554,6 +1600,35 @@ struct PaletteRow: View {
             Spacer()
             Text("new session").font(.system(size: 11)).foregroundStyle(.tertiary)
         }
+    }
+
+    private func newProjectRow(_ name: String, parent: String?) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "folder.badge.plus")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Create “\(name)”")
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Text(parentPreview(name, parent: parent))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer()
+            Text("new project")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+
+    private func parentPreview(_ name: String, parent: String?) -> String {
+        guard let parent, !parent.isEmpty else { return "Choose a location when you create it" }
+        return URL(fileURLWithPath: parent, isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true).path
     }
 
     private func commandRow(_ c: ExtensionStore.PaletteCommand) -> some View {

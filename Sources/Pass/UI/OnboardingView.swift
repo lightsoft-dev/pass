@@ -1,16 +1,26 @@
+import AppKit
 import SwiftUI
 
 struct OnboardingView: View {
     @Bindable var model: OnboardingModel
 
-    private let ink = Color(red: 0.07, green: 0.08, blue: 0.08)
-    private let paper = Color(red: 0.93, green: 0.91, blue: 0.85)
-    private let amber = Color(red: 0.93, green: 0.63, blue: 0.18)
-    private let mint = Color(red: 0.40, green: 0.86, blue: 0.64)
+    // App-icon palette: electric violet on a soft acid-yellow field.
+    private let ink = Color(red: 0.055, green: 0.050, blue: 0.075)
+    private let paper = Color(red: 0.95, green: 0.94, blue: 0.87)
+    private let violet = Color(red: 0.41, green: 0.27, blue: 0.91)
+    private let signal = Color(red: 0.96, green: 0.93, blue: 0.38)
+    private let lavender = Color(red: 0.57, green: 0.49, blue: 0.91)
 
     var body: some View {
         ZStack {
             ink.ignoresSafeArea()
+            RadialGradient(
+                colors: [violet.opacity(0.20), .clear],
+                center: .topTrailing,
+                startRadius: 20,
+                endRadius: 520
+            )
+            .ignoresSafeArea()
             scanLines
             HStack(spacing: 0) {
                 flightRail
@@ -39,13 +49,11 @@ struct OnboardingView: View {
     private var flightRail: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 9) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 7).fill(amber)
-                    Text("P")
-                        .font(.custom("Avenir Next", size: 17).weight(.heavy))
-                        .foregroundStyle(ink)
-                }
-                .frame(width: 31, height: 31)
+                Image(nsImage: NSApplication.shared.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 36, height: 36)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 Text("PASS")
                     .font(.custom("Avenir Next", size: 14).weight(.heavy))
                     .tracking(2.8)
@@ -56,7 +64,7 @@ struct OnboardingView: View {
                 railItem(index)
                 if index < 2 {
                     Rectangle()
-                        .fill(index < model.step ? mint.opacity(0.7) : Color.white.opacity(0.13))
+                        .fill(index < model.step ? lavender.opacity(0.8) : Color.white.opacity(0.13))
                         .frame(width: 1, height: 54)
                         .padding(.leading, 12)
                 }
@@ -72,13 +80,13 @@ struct OnboardingView: View {
     }
 
     private func railItem(_ index: Int) -> some View {
-        let labels = ["어서 오세요", "비행 전 점검", "에이전트 연결"]
+        let labels = ["Welcome", "Pre-flight check", "Connect agents"]
         let active = index == model.step
         let complete = index < model.step
         return HStack(spacing: 12) {
             ZStack {
                 Circle()
-                    .fill(active ? amber : (complete ? mint : Color.white.opacity(0.10)))
+                    .fill(active ? signal : (complete ? lavender : Color.white.opacity(0.10)))
                 if complete {
                     Image(systemName: "checkmark")
                         .font(.system(size: 9, weight: .black))
@@ -113,12 +121,12 @@ struct OnboardingView: View {
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 0) {
             eyebrow("MISSION BRIEF")
-            Text("여러 에이전트를,\n한 곳에서.")
+            Text("Every coding agent.\nOne mission control.")
                 .font(.custom("Avenir Next", size: 39).weight(.heavy))
                 .foregroundStyle(paper)
                 .lineSpacing(-2)
                 .padding(.top, 14)
-            Text("Pass는 tmux 위에서 코딩 에이전트를 실행합니다. 앱을 닫아도 작업은 계속되고, 답변이나 승인이 필요할 때만 앞으로 가져옵니다.")
+            Text("Pass runs coding agents on tmux. Their work continues when the app closes, and only surfaces when a response or approval needs you.")
                 .font(.custom("Avenir Next", size: 15))
                 .foregroundStyle(paper.opacity(0.72))
                 .lineSpacing(5)
@@ -126,21 +134,21 @@ struct OnboardingView: View {
                 .padding(.top, 22)
 
             HStack(spacing: 0) {
-                metric("⌥ SPACE", "어디서든 열기")
+                metric("⌥ SPACE", "Open anywhere")
                 divider
-                metric("tmux", "세션 유지")
+                metric("tmux", "Persistent sessions")
                 divider
-                metric("LOCAL", "내 Mac에서 실행")
+                metric("LOCAL", "Runs on your Mac")
             }
             .padding(.top, 42)
 
             Spacer()
             HStack {
-                Text("약 2분 · 기존 설정을 덮어쓰지 않습니다")
+                Text("About 2 minutes · Your existing settings stay intact")
                     .font(.custom("Menlo", size: 10))
                     .foregroundStyle(.tertiary)
                 Spacer()
-                primaryButton("시작하기", icon: "arrow.right") { model.step = 1 }
+                primaryButton("Get started", icon: "arrow.right") { model.step = 1 }
             }
         }
     }
@@ -150,13 +158,13 @@ struct OnboardingView: View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 8) {
                     eyebrow("PRE-FLIGHT  /  REQUIRED")
-                    Text("기본 런타임 점검")
+                    Text("Check the essentials")
                         .font(.custom("Avenir Next", size: 28).weight(.heavy))
                         .foregroundStyle(paper)
                 }
                 Spacer()
                 Button { model.scan() } label: {
-                    Label("다시 점검", systemImage: "arrow.clockwise")
+                    Label("Scan again", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.plain)
                 .font(.custom("Avenir Next", size: 12).weight(.semibold))
@@ -178,8 +186,8 @@ struct OnboardingView: View {
                     .padding(.top, 14)
             } else if model.tmux?.isInstalled == false {
                 Text(model.homebrewPath == nil
-                     ? "Homebrew가 없어 설치 안내를 엽니다. Homebrew 설치 후 ‘다시 점검’을 눌러주세요."
-                     : "Pass가 Homebrew로 tmux를 설치할 수 있습니다. 관리자 암호는 요청하지 않습니다.")
+                     ? "Homebrew is not available. Install it, then choose “Scan again.”"
+                     : "Pass can install tmux with Homebrew. No administrator password is requested.")
                     .font(.custom("Avenir Next", size: 12))
                     .foregroundStyle(.secondary)
                     .padding(.top, 14)
@@ -187,20 +195,20 @@ struct OnboardingView: View {
 
             Spacer()
             HStack {
-                Button("이전") { model.step = 0 }
+                Button("Back") { model.step = 0 }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                 Spacer()
                 if model.tmux?.isInstalled == false {
                     primaryButton(
-                        model.homebrewPath == nil ? "Homebrew 설치 안내" : "tmux 설치",
+                        model.homebrewPath == nil ? "Open Homebrew guide" : "Install tmux",
                         icon: model.installState == .installing ? nil : "arrow.down.circle"
                     ) {
                         model.installTmux()
                     }
                     .disabled(model.installState == .installing)
                 } else {
-                    primaryButton("계속", icon: "arrow.right") { model.step = 2 }
+                    primaryButton("Continue", icon: "arrow.right") { model.step = 2 }
                         .disabled(!model.canContinueFromCheck)
                 }
             }
@@ -210,11 +218,11 @@ struct OnboardingView: View {
     private var integrations: some View {
         VStack(alignment: .leading, spacing: 0) {
             eyebrow("CONNECT  /  CHOOSE YOUR CREW")
-            Text("사용할 에이전트 연결")
+            Text("Connect your agents")
                 .font(.custom("Avenir Next", size: 28).weight(.heavy))
                 .foregroundStyle(paper)
                 .padding(.top, 8)
-            Text("하나만 있어도 충분합니다. 나머지는 언제든 설정에서 추가할 수 있습니다.")
+            Text("One is enough to begin. You can add the others later in Settings.")
                 .font(.custom("Avenir Next", size: 13))
                 .foregroundStyle(.secondary)
                 .padding(.top, 7)
@@ -227,16 +235,27 @@ struct OnboardingView: View {
             .padding(.top, 24)
 
             VStack(spacing: 0) {
-                integrationRow(
+                agentHookRow(
+                    .claude,
                     title: "Claude Code hooks",
-                    detail: "승인·질문·완료 이벤트를 로컬 Pass로 전달",
-                    ready: model.hooksInstalled,
-                    action: model.installHooks
+                    detail: "Approvals, questions, and completion events"
+                )
+                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                agentHookRow(
+                    .codex,
+                    title: "Codex hooks",
+                    detail: "Lifecycle events · review once with /hooks"
+                )
+                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                agentHookRow(
+                    .pi,
+                    title: "pi extension",
+                    detail: "Prompt, completion, and session events"
                 )
                 Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
                 integrationRow(
                     title: "passcli",
-                    detail: "에이전트가 Pass의 브라우저와 세션을 제어",
+                    detail: "Lets agents control Pass browser tabs and sessions",
                     ready: model.cliLinked,
                     action: model.linkCLI
                 )
@@ -245,18 +264,26 @@ struct OnboardingView: View {
             .overlay(RoundedRectangle(cornerRadius: 11).stroke(Color.white.opacity(0.10)))
             .padding(.top, 18)
 
+            if let error = model.integrationError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.custom("Menlo", size: 9))
+                    .foregroundStyle(signal)
+                    .lineLimit(2)
+                    .padding(.top, 10)
+            }
+
             Spacer()
             HStack {
-                Button("이전") { model.step = 1 }
+                Button("Back") { model.step = 1 }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                 Spacer()
                 if model.installedAgentCount == 0 {
-                    Text("에이전트 CLI는 나중에 설치해도 됩니다")
+                    Text("You can install an agent CLI later")
                         .font(.custom("Menlo", size: 9))
                         .foregroundStyle(.tertiary)
                 }
-                primaryButton("Pass 열기", icon: "arrow.up.right") { model.finish() }
+                primaryButton("Open Pass", icon: "arrow.up.right") { model.finish() }
             }
         }
     }
@@ -268,10 +295,10 @@ struct OnboardingView: View {
         return HStack(spacing: 15) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(installed ? mint.opacity(0.13) : amber.opacity(0.13))
+                    .fill(installed ? lavender.opacity(0.13) : signal.opacity(0.13))
                 Image(systemName: installed ? "checkmark" : "exclamationmark")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(installed ? mint : amber)
+                    .foregroundStyle(installed ? lavender : signal)
             }
             .frame(width: 36, height: 36)
             VStack(alignment: .leading, spacing: 3) {
@@ -279,13 +306,13 @@ struct OnboardingView: View {
                     Text(dependency?.name ?? kind.rawValue)
                         .font(.custom("Avenir Next", size: 14).weight(.bold))
                         .foregroundStyle(paper)
-                    Text(isTmux ? "필수" : "권장")
+                    Text(isTmux ? "REQUIRED" : "RECOMMENDED")
                         .font(.custom("Menlo", size: 8))
-                        .foregroundStyle(isTmux ? amber : .secondary)
+                        .foregroundStyle(isTmux ? signal : .secondary)
                         .padding(.horizontal, 6).padding(.vertical, 3)
                         .background(Color.white.opacity(0.07), in: Capsule())
                 }
-                Text(dependency?.purpose ?? "확인 중…")
+                Text(dependency?.purpose ?? "Checking…")
                     .font(.custom("Avenir Next", size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -296,7 +323,7 @@ struct OnboardingView: View {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(installed ? "READY" : "MISSING")
                         .font(.custom("Menlo", size: 9).weight(.bold))
-                        .foregroundStyle(installed ? mint : amber)
+                        .foregroundStyle(installed ? lavender : signal)
                     if let version = dependency?.version {
                         Text(version)
                             .font(.custom("Menlo", size: 8))
@@ -319,29 +346,43 @@ struct OnboardingView: View {
             HStack {
                 Text(glyph)
                     .font(.custom("Avenir Next", size: 20).weight(.bold))
-                    .foregroundStyle(installed ? mint : paper)
+                    .foregroundStyle(installed ? lavender : paper)
                 Spacer()
-                Circle().fill(installed ? mint : amber).frame(width: 7, height: 7)
+                Circle().fill(installed ? lavender : signal).frame(width: 7, height: 7)
             }
             Text(dependency?.name ?? kind.rawValue)
                 .font(.custom("Avenir Next", size: 13).weight(.bold))
                 .foregroundStyle(paper)
             if installed {
-                Text("설치됨")
+                Text("INSTALLED")
                     .font(.custom("Menlo", size: 9))
-                    .foregroundStyle(mint)
+                    .foregroundStyle(lavender)
             } else {
-                Button("설치 안내 ↗") { model.openGuide(for: kind) }
+                Button("INSTALL GUIDE ↗") { model.openGuide(for: kind) }
                     .buttonStyle(.plain)
                     .font(.custom("Menlo", size: 9))
-                    .foregroundStyle(amber)
+                    .foregroundStyle(signal)
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
         .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 11))
         .overlay(RoundedRectangle(cornerRadius: 11)
-            .stroke(installed ? mint.opacity(0.35) : Color.white.opacity(0.10)))
+            .stroke(installed ? lavender.opacity(0.45) : Color.white.opacity(0.10)))
+    }
+
+    private func agentHookRow(
+        _ agent: AgentKind,
+        title: String,
+        detail: String
+    ) -> some View {
+        integrationRow(
+            title: title,
+            detail: detail,
+            ready: model.hooksInstalled(for: agent)
+        ) {
+            model.installHooks(for: agent)
+        }
     }
 
     private func integrationRow(
@@ -352,7 +393,7 @@ struct OnboardingView: View {
     ) -> some View {
         HStack(spacing: 12) {
             Image(systemName: ready ? "checkmark.seal.fill" : "circle.dashed")
-                .foregroundStyle(ready ? mint : amber)
+                .foregroundStyle(ready ? lavender : signal)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -363,7 +404,7 @@ struct OnboardingView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button(ready ? "완료" : "설정") { action() }
+            Button(ready ? "DONE" : "SET UP") { action() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(ready)
@@ -376,14 +417,14 @@ struct OnboardingView: View {
         Text(text)
             .font(.custom("Menlo", size: 9).weight(.bold))
             .tracking(1.6)
-            .foregroundStyle(amber)
+            .foregroundStyle(signal)
     }
 
     private func metric(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(value)
                 .font(.custom("Menlo", size: 13).weight(.bold))
-                .foregroundStyle(amber)
+                .foregroundStyle(signal)
             Text(label)
                 .font(.custom("Avenir Next", size: 10))
                 .foregroundStyle(.secondary)
@@ -402,7 +443,7 @@ struct OnboardingView: View {
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 9) {
-                if model.installState == .installing && title == "tmux 설치" {
+                if model.installState == .installing && title == "Install tmux" {
                     ProgressView().controlSize(.small)
                 }
                 Text(title)
@@ -412,7 +453,7 @@ struct OnboardingView: View {
             .foregroundStyle(ink)
             .padding(.horizontal, 18)
             .frame(height: 38)
-            .background(amber, in: RoundedRectangle(cornerRadius: 8))
+            .background(signal, in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
     }

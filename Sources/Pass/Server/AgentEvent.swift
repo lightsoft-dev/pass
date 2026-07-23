@@ -7,6 +7,7 @@ struct RawHookEvent: Sendable {
     var sessionId: String?
     var cwd: String?
     var notificationType: String?
+    var toolName: String?
     var lastAssistantMessage: String?
     var reason: String?
     /// tmux session name from the X-Pass-Session header (primary routing key).
@@ -17,6 +18,7 @@ struct RawHookEvent: Sendable {
         self.sessionId = json["session_id"] as? String
         self.cwd = json["cwd"] as? String
         self.notificationType = json["notification_type"] as? String
+        self.toolName = json["tool_name"] as? String
         self.lastAssistantMessage = json["last_assistant_message"] as? String
         self.reason = json["reason"] as? String
         self.passSessionHeader = (header?.isEmpty == false) ? header : nil
@@ -76,8 +78,56 @@ struct ClaudeAdapter: AgentAdapter {
     }
 }
 
+/// Codex command hooks use the same common event fields as Claude hooks but expose approval
+/// requests as PermissionRequest. Command hook stdin is forwarded unchanged by the installer.
+struct CodexAdapter: AgentAdapter {
+    let kind: AgentKind = .codex
+    let routePath = "/hook/codex"
+
+    func normalize(_ raw: RawHookEvent) -> AgentEvent? {
+        let kind: AgentEvent.Kind
+        var preview = raw.lastAssistantMessage
+        switch raw.eventName {
+        case "PermissionRequest":
+            kind = .needsDecision
+            if preview == nil, let toolName = raw.toolName {
+                preview = "Approval requested for \(toolName)"
+            }
+        case "UserPromptSubmit", "SessionStart":
+            kind = .started
+        case "Stop":
+            kind = .finished
+        default:
+            return nil
+        }
+        return AgentEvent(kind: kind, preview: preview,
+                          sessionNameHint: raw.passSessionHeader,
+                          cwd: raw.cwd, agentSessionId: raw.sessionId)
+    }
+}
+
+/// The installed pi extension emits the normalized lifecycle names below. pi intentionally has
+/// no built-in permission prompts, so its bridge covers start, input, completion, and shutdown.
+struct PiAdapter: AgentAdapter {
+    let kind: AgentKind = .pi
+    let routePath = "/hook/pi"
+
+    func normalize(_ raw: RawHookEvent) -> AgentEvent? {
+        let kind: AgentEvent.Kind
+        switch raw.eventName {
+        case "SessionStart", "UserPromptSubmit": kind = .started
+        case "Stop": kind = .finished
+        case "SessionEnd": kind = .ended
+        default: return nil
+        }
+        return AgentEvent(kind: kind, preview: raw.lastAssistantMessage,
+                          sessionNameHint: raw.passSessionHeader,
+                          cwd: raw.cwd, agentSessionId: raw.sessionId)
+    }
+}
+
 enum AgentRegistry {
-    static let all: [AgentAdapter] = [ClaudeAdapter()]
+    static let all: [AgentAdapter] = [ClaudeAdapter(), CodexAdapter(), PiAdapter()]
     static func adapter(forRoute path: String) -> AgentAdapter? {
         all.first { $0.routePath == path }
     }

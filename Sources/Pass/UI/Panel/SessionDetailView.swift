@@ -42,15 +42,14 @@ struct SessionDetailView: View {
                 Circle().fill(ProjectColor.color(for: session.projectRoot)).frame(width: 8, height: 8)
                 Text(session.agent.glyph).foregroundStyle(.secondary)
                 Text(session.displayName).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                ConfigURLAddButton(session: session)
                 Spacer()
                 attentionBadge
                 SessionPresentationPicker(readableMode: $readableMode) {
                     DispatchQueue.main.async { terminal?.focus() }
                 }
                 MiniTerminalButton(session: session)
-                Button { appModel.mirror.openPicker(for: session.name) } label: {
-                    Image(systemName: "iphone.and.arrow.forward").foregroundStyle(.secondary)
-                }.buttonStyle(.plain).help("Attach physical device or emulator pane")
+                DevicePaneButton(sessionName: session.name)
                 Button { appModel.attach(session) } label: {
                     Image(systemName: "macwindow.on.rectangle").foregroundStyle(.secondary)
                 }.buttonStyle(.plain).help("Open in Ghostty (⌘⏎)")
