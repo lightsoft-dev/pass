@@ -85,6 +85,9 @@ struct SettingsView: View {
         case .system:
             notificationsSection
             hookListenerSection
+            #if DEBUG
+            developmentSection
+            #endif
         }
     }
 
@@ -485,6 +488,21 @@ struct SettingsView: View {
             }
         }
     }
+
+    #if DEBUG
+    private var developmentSection: some View {
+        Section("Development") {
+            Button {
+                appModel.showOnboarding()
+            } label: {
+                Label("Run onboarding again…", systemImage: "arrow.counterclockwise.circle")
+            }
+            Text("Starts at the welcome screen and re-checks the current tmux, Git, agent, hook, and CLI installation state. It does not uninstall or overwrite anything.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+    #endif
 
     private var remoteGatewayStatus: (label: String, color: Color) {
         switch appModel.remoteGatewayState {

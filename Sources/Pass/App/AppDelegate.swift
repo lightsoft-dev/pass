@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var eventRouter: EventRouter?
     private var doubleTapHotkey: DoubleTapHotkey?
     private var shiftTapHotkey: DoubleTapHotkey?
+    private var onboardingController: OnboardingWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Always called on the main thread; assert it so we can touch main-actor state.
@@ -47,6 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Panel (non-activating, keyboard-first).
         panelController = PanelController(appModel: appModel)
         appModel.panelController = panelController
+        let onboardingController = OnboardingWindowController(appModel: appModel)
+        self.onboardingController = onboardingController
+        appModel.showOnboardingHandler = { [weak onboardingController] in
+            onboardingController?.show()
+        }
 
         // Global summon hotkey: Settings chooses exactly one of ⌘⌘ or ⌥Space.
         HotkeyService.registerSummon { [weak self] in
@@ -113,6 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         appModel.isReady = true
+        let completedOnboarding = UserDefaults.standard.bool(
+            forKey: OnboardingPreference.completedKey
+        )
+        if !completedOnboarding || Shell.resolveViaLoginShell("tmux") == nil {
+            DispatchQueue.main.async { onboardingController.show() }
+        }
         Log.app.info("pass launched (accessory, hook port \(PassConfig.hookPort))")
     }
 

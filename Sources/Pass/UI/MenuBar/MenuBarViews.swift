@@ -82,6 +82,7 @@ struct MenuBarContent: View {
         }
 
         Divider()
+        Button("Setup assistant…") { appModel.showOnboarding() }
         // SettingsLink is the reliable way to open the Settings scene (the old
         // showSettingsWindow: selector is flaky on recent macOS). SettingsView temporarily
         // lowers the floating panel so both windows remain visible with Settings in front.

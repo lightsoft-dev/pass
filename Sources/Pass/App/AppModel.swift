@@ -47,6 +47,9 @@ final class AppModel {
     /// of the focus chain after a mouse click moves real AppKit first-responder status.
     var keyHandler: ((PanelNavEvent) -> Bool)?
 
+    /// AppDelegate wires this to the reusable first-run window.
+    var showOnboardingHandler: (() -> Void)?
+
     /// Set to force the panel to open a specific session's terminal (used for testing).
     var forceOpenSession: String?
 
@@ -595,6 +598,15 @@ final class AppModel {
         let status = ClaudeHooksInstaller.install()
         needsHookInstall = !ClaudeHooksInstaller.isInstalled()
         Log.hooks.info("hook install requested -> \(String(describing: status), privacy: .public)")
+    }
+
+    func showOnboarding() {
+        showOnboardingHandler?()
+    }
+
+    func refreshRuntimeAvailability() async {
+        await sessions?.refreshTmuxAvailability()
+        setupProblem = sessions?.tmuxMissing == true ? "tmux가 필요합니다" : nil
     }
 
     /// Send a text reply into a session from the home input (without opening the terminal).
