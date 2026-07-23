@@ -93,7 +93,7 @@ section{scroll-margin-top:calc(var(--bar-h) + 24px)}
 @media(max-width:760px){.bar nav a:nth-child(n+2):not(:last-child){display:none}.bar .clock,.bar .hint{display:none}}
 
 /* ————————————————————————————————— hero */
-.hero{padding:calc(var(--bar-h) + clamp(48px,9vh,110px)) 0 0}
+.hero{padding-top:calc(var(--bar-h) + clamp(48px,9vh,110px))}
 .hero-grid{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:clamp(28px,4vw,64px);align-items:start}
 .kicker{
   color:var(--amber);font-size:12.5px;font-weight:700;letter-spacing:.22em;
@@ -143,6 +143,21 @@ h1 .cursor{
 
 /* ————————————————————————————————— panel mock */
 .mock-col{position:relative;z-index:2;margin-bottom:-64px}
+.brand-constellation{
+  position:absolute;z-index:-1;top:-78px;right:-72px;width:310px;height:250px;
+  pointer-events:none;filter:drop-shadow(0 18px 42px rgba(101,70,234,.34));
+}
+.brand-constellation span{
+  position:absolute;display:block;aspect-ratio:1;
+  clip-path:polygon(50% 0,85% 15%,100% 50%,85% 85%,50% 100%,15% 85%,0 50%,15% 15%);
+}
+.brand-constellation .orbit-1{width:90px;left:4px;bottom:0;background:var(--violet-soft);opacity:.28}
+.brand-constellation .orbit-2{width:138px;left:64px;bottom:30px;background:var(--violet-mid);opacity:.34}
+.brand-constellation .orbit-3{width:202px;right:0;top:0;background:var(--violet);opacity:.42}
+@media(prefers-reduced-motion:no-preference){
+  .brand-constellation{animation:constellation-in .9s .25s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes constellation-in{from{opacity:0;transform:translate(18px,-10px) rotate(3deg)}to{opacity:1;transform:none}}
+}
 .menubar{
   display:flex;justify-content:flex-end;align-items:center;gap:14px;
   font-size:11.5px;color:var(--ink-faint);
@@ -172,54 +187,95 @@ h1 .cursor{
   padding:1px 7px;font-size:10.5px;letter-spacing:.08em;color:var(--ink-faint);
 }
 .chip.on{color:var(--amber);border-color:rgba(243,239,99,.35)}
-.stack{display:flex;flex-direction:column;gap:8px;padding:12px}
-.card{
-  border:1px solid var(--line);border-radius:8px;background:rgba(236,231,217,.02);
-  padding:10px 12px;position:relative;transition:border-color .3s,background .3s;
+.workspace-demo{display:grid;grid-template-columns:164px minmax(0,1fr);min-height:328px}
+.demo-sidebar{
+  display:flex;flex-direction:column;background:rgba(7,6,12,.58);
+  border-right:1px solid var(--line);padding:10px 8px 8px;min-width:0;
 }
-.card.attn{border-color:rgba(243,239,99,.5);background:rgba(243,239,99,.05)}
-.card.attn::before{
-  content:"";position:absolute;left:-1px;top:10px;bottom:10px;width:2px;
-  background:var(--amber);border-radius:2px;
+.side-head,.side-group{display:flex;align-items:center;justify-content:space-between;padding:2px 7px}
+.side-head{color:var(--ink);font-size:10px;font-weight:700;letter-spacing:.14em}
+.side-head b{
+  color:var(--bg);background:var(--amber);border-radius:100px;min-width:18px;
+  padding:1px 5px;text-align:center;font-size:9px;
 }
-@media(prefers-reduced-motion:no-preference){
-  .card.attn::before{animation:pulse 1.6s ease-in-out infinite}
-  @keyframes pulse{50%{opacity:.35}}
+.side-group{margin-top:13px;color:var(--ink-faint);font-size:8.5px;letter-spacing:.15em}
+.session-list{display:flex;flex-direction:column;gap:4px;margin-top:5px}
+.session-row{
+  position:relative;display:grid;grid-template-columns:8px minmax(0,1fr);gap:7px;
+  padding:8px 7px;border:1px solid transparent;border-radius:6px;min-width:0;
+  color:var(--ink-dim);transition:background .25s,border-color .25s,transform .25s;
 }
-.card-h{display:flex;align-items:center;gap:8px;color:var(--ink-dim);font-size:11.5px}
+.session-row.active{
+  color:var(--ink);background:var(--violet-dim);border-color:rgba(143,123,234,.34);
+  transform:translateX(2px);
+}
+.session-row.attn.active{background:var(--amber-dim);border-color:rgba(243,239,99,.42)}
+.session-main{display:flex;align-items:center;gap:5px;min-width:0}
+.session-main b{font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-glyph{margin-left:auto;color:var(--violet-soft);font-size:9px}
+.session-meta{
+  display:block;margin-top:2px;color:var(--ink-faint);font-size:8.5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.session-row.active .session-meta{color:var(--ink-dim)}
+.side-add{margin-top:auto;padding:8px 7px 3px;color:var(--ink-faint);font-size:9px;border-top:1px solid var(--line)}
 .led{width:7px;height:7px;border-radius:50%;background:var(--ink-faint);flex:none}
-.card.run .led{background:var(--green);box-shadow:0 0 8px rgba(143,123,234,.65)}
-.card.attn .led{background:var(--amber);box-shadow:0 0 8px rgba(243,239,99,.7)}
-.card-h .nm{color:var(--ink);font-weight:700}
-.card-h .br{color:var(--ink-faint)}
-.card-h .wt{color:var(--ink-faint)}
-.card.attn .card-h .wt{margin-left:auto;color:var(--amber)}
-.card:not(.attn) .card-h .wt{margin-left:auto}
-.card-b{margin-top:5px;color:var(--ink-dim);white-space:pre-wrap;word-break:break-word}
-.card.attn .card-b{color:var(--ink)}
-.card-b .ok{color:var(--green)}
-.card-b .zap{color:var(--amber)}
-.menu{margin-top:6px;color:var(--ink-dim)}
-.menu .sel{color:var(--amber)}
+.session-row.run .led{background:var(--green);box-shadow:0 0 8px rgba(143,123,234,.65)}
+.session-row.attn .led{background:var(--amber);box-shadow:0 0 8px rgba(243,239,99,.7)}
+.session-row.done .led{background:var(--ink-faint)}
+.demo-detail{display:flex;flex-direction:column;min-width:0;background:linear-gradient(135deg,rgba(101,70,234,.06),transparent 48%)}
+.detail-bar{display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--line)}
+.detail-agent{
+  display:grid;place-items:center;width:24px;height:24px;border:1px solid var(--panel-edge);
+  border-radius:6px;color:var(--violet-soft);background:var(--violet-dim);
+}
+.detail-title{display:flex;flex-direction:column;min-width:0}
+.detail-title b{color:var(--ink);font-size:11px}
+.detail-title span{color:var(--ink-faint);font-size:8.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail-status{
+  margin-left:auto;color:var(--amber);font-size:8px;font-weight:700;letter-spacing:.12em;
+  border:1px solid rgba(243,239,99,.34);border-radius:100px;padding:3px 7px;
+}
+.detail-body{display:flex;flex:1;flex-direction:column;padding:18px 16px 12px;min-width:0}
+.detail-kicker{color:var(--amber);font-size:8.5px;font-weight:700;letter-spacing:.16em}
+.detail-body h4{margin-top:7px;color:var(--ink);font-size:15px;line-height:1.25}
+.detail-copy{margin-top:8px;color:var(--ink-dim);font-size:10px;line-height:1.55}
+.command{
+  margin-top:13px;padding:10px 11px;border:1px solid var(--panel-edge);border-radius:6px;
+  color:var(--ink);background:#0b0911;font-size:9.5px;white-space:pre-wrap;word-break:break-word;
+}
+.quick-actions{display:flex;gap:7px;margin-top:auto;padding-top:14px}
+.quick-action{
+  flex:1;padding:7px;border:1px solid var(--line);border-radius:5px;text-align:center;
+  color:var(--ink-dim);background:rgba(255,255,255,.02);font-size:9px;
+}
+.quick-action.primary{color:var(--bg);background:var(--amber);border-color:var(--amber);font-weight:700}
 .kbd-inline{
   display:inline-block;border:1px solid var(--panel-edge);border-bottom-width:2px;border-radius:4px;
   padding:0 5px;font-size:10.5px;color:var(--ink);background:#20172e;line-height:1.6;
 }
 .omni{
-  display:flex;align-items:center;gap:8px;margin:4px 12px 12px;
-  border:1px solid var(--panel-edge);border-radius:8px;background:#0b0a07;
-  padding:9px 12px;color:var(--ink);
+  display:flex;align-items:center;gap:8px;margin:0 12px 12px;
+  border:1px solid var(--panel-edge);border-radius:7px;background:#0b0a07;
+  padding:8px 10px;color:var(--ink);
 }
 .omni .ps1{color:var(--amber);font-weight:700}
 .omni .ph{color:var(--ink-faint);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.omni .typed{color:var(--ink);flex:none}
 .omni .cur{width:7px;height:15px;background:var(--amber);display:inline-block;flex:none}
 @media(prefers-reduced-motion:no-preference){.omni .cur{animation:blink 1s steps(1) infinite}}
+.detail-body.swap{animation:detail-swap .35s cubic-bezier(.2,.7,.2,1)}
+@keyframes detail-swap{from{opacity:.25;transform:translateY(5px)}to{opacity:1;transform:none}}
 .mock-foot{
   display:flex;gap:14px;padding:7px 12px;border-top:1px solid var(--line);
   color:var(--ink-faint);font-size:10.5px;letter-spacing:.04em;
 }
 .mock-foot .a{color:var(--amber)}
+@media(max-width:480px){
+  .workspace-demo{grid-template-columns:122px minmax(0,1fr)}
+  .demo-sidebar{padding-inline:5px}.session-row{padding-inline:5px}
+  .detail-body{padding:14px 11px 10px}.detail-bar{padding-inline:10px}
+  .detail-copy{font-size:9px}.quick-action{padding-inline:3px}
+}
 
 /* ————————————————————————————————— amber statement strip */
 .strip{
@@ -413,6 +469,9 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
 
       <!-- animated panel simulation (decorative) -->
       <div class="mock-col rise d2" aria-hidden="true">
+        <div class="brand-constellation">
+          <span class="orbit-1"></span><span class="orbit-2"></span><span class="orbit-3"></span>
+        </div>
         <div class="menubar"><span>◐</span><span>⌥⌘</span><span class="badge" id="mb-badge">✳ 1</span><span>18:04</span></div>
         <div class="mock">
           <div class="mock-title">
@@ -420,22 +479,46 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
             <span class="name">Pass</span>
             <span class="chip on">⌥space</span><span class="chip">floating</span>
           </div>
-          <div class="stack" id="stack">
-            <div class="card attn" id="card-ivma" data-wait="9">
-              <div class="card-h"><span class="led"></span><span class="nm">ivma</span><span class="br">⧉ feat/checkout</span><span>✳</span><span class="wt">waiting 0:09</span></div>
-              <div class="card-b"><span class="zap">⚡</span> Allow <b>Bash(git push origin main)</b>? · <span class="kbd-inline">y</span> allow · <span class="kbd-inline">n</span> deny</div>
-            </div>
-            <div class="card run" id="card-pass">
-              <div class="card-h"><span class="led"></span><span class="nm">pass</span><span class="br">main</span><span>✳</span><span class="wt">running</span></div>
-              <div class="card-b">▸ Rewiring EventRouter → Inbox · make test — 42 passing</div>
-            </div>
-            <div class="card" id="card-blog">
-              <div class="card-h"><span class="led"></span><span class="nm">blog</span><span class="br">master</span><span>✳</span><span class="wt">2m ago</span></div>
-              <div class="card-b"><span class="ok">✓ finished</span> · Rebuilt site — 12 pages, 0 errors</div>
-            </div>
-          </div>
-          <div class="omni">
-            <span class="ps1">❯</span><span class="typed" id="omni-typed"></span><span class="ph" id="omni-ph">reply to ivma — @ jump · y/n answer · ⏎ open</span><span class="cur"></span>
+          <div class="workspace-demo">
+            <aside class="demo-sidebar">
+              <div class="side-head"><span>SESSIONS</span><b>3</b></div>
+              <div class="side-group"><span>WORKSPACES</span><span>⌃</span></div>
+              <div class="session-list" id="session-list">
+                <div class="session-row attn active" id="row-ivma">
+                  <span class="led"></span>
+                  <span><span class="session-main"><b>ivma</b><span class="agent-glyph">✳</span></span><span class="session-meta">feat/checkout · waiting</span></span>
+                </div>
+                <div class="session-row run" id="row-pass">
+                  <span class="led"></span>
+                  <span><span class="session-main"><b>pass</b><span class="agent-glyph">⬢</span></span><span class="session-meta">main · running</span></span>
+                </div>
+                <div class="session-row done" id="row-blog">
+                  <span class="led"></span>
+                  <span><span class="session-main"><b>blog</b><span class="agent-glyph">π</span></span><span class="session-meta">master · finished</span></span>
+                </div>
+              </div>
+              <div class="side-add">＋ New session</div>
+            </aside>
+            <section class="demo-detail">
+              <div class="detail-bar">
+                <span class="detail-agent" id="detail-agent">✳</span>
+                <span class="detail-title"><b id="detail-name">ivma</b><span id="detail-branch">feat/checkout · worktree</span></span>
+                <span class="detail-status" id="detail-status">NEEDS YOU</span>
+              </div>
+              <div class="detail-body" id="detail-body">
+                <p class="detail-kicker" id="detail-kicker">APPROVAL REQUEST</p>
+                <h4 id="detail-heading">Allow Bash command?</h4>
+                <p class="detail-copy" id="detail-copy">The agent is ready to push three commits. Review the command, then answer without opening the terminal.</p>
+                <pre class="command" id="detail-command">git push origin main</pre>
+                <div class="quick-actions" id="detail-actions">
+                  <span class="quick-action primary"><span class="kbd-inline">Y</span> Allow</span>
+                  <span class="quick-action"><span class="kbd-inline">N</span> Deny</span>
+                </div>
+              </div>
+              <div class="omni">
+                <span class="ps1">❯</span><span class="ph" id="omni-ph">Reply to ivma · @ jump · ⏎ send</span><span class="cur"></span>
+              </div>
+            </section>
           </div>
           <div class="mock-foot"><span><span class="a">1</span> needs you</span><span><span class="a">·</span> 2 running</span><span><span class="a">·</span> 3 sessions</span><span style="margin-left:auto">tmux: pass-*</span></div>
         </div>
@@ -706,109 +789,55 @@ document.querySelectorAll('[data-copy]').forEach(function(btn){
 /* ————————————————— hero panel simulation */
 (function(){
   if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return;
-  var ivma=document.getElementById('card-ivma'),
-      pss=document.getElementById('card-pass'),
-      blog=document.getElementById('card-blog'),
-      stack=document.getElementById('stack'),
-      typed=document.getElementById('omni-typed'),
-      ph=document.getElementById('omni-ph'),
-      badge=document.getElementById('mb-badge');
-  if(!ivma||!pss||!blog||!stack||!typed)return;
+  var list=document.getElementById('session-list'),
+      body=document.getElementById('detail-body'),
+      name=document.getElementById('detail-name'),
+      branch=document.getElementById('detail-branch'),
+      agent=document.getElementById('detail-agent'),
+      status=document.getElementById('detail-status'),
+      kicker=document.getElementById('detail-kicker'),
+      heading=document.getElementById('detail-heading'),
+      copy=document.getElementById('detail-copy'),
+      command=document.getElementById('detail-command'),
+      actions=document.getElementById('detail-actions'),
+      prompt=document.getElementById('omni-ph');
+  if(!list||!body)return;
 
-  function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
-  function fmt(s){return 'waiting '+Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
-  function h(el,nm,br,wt){el.querySelector('.card-h').innerHTML=
-    '<span class="led"></span><span class="nm">'+nm+'</span><span class="br">'+br+'</span><span>✳</span><span class="wt">'+wt+'</span>'}
-  function body(el,html){el.querySelector('.card-b').innerHTML=html}
-  function setBadge(n){badge&&(badge.textContent='✳ '+n)}
-
-  /* waiting-timer tick for whichever card is in attn state */
-  setInterval(function(){
-    [].slice.call(stack.querySelectorAll('.card.attn')).forEach(function(c){
-      var w=(parseInt(c.dataset.wait||'0',10)+1);c.dataset.wait=w;
-      var wt=c.querySelector('.wt');wt&&(wt.textContent=fmt(w));
-    });
-  },1000);
-
-  /* FLIP: move a card to the top of the stack smoothly */
-  function surface(card){
-    var cards=[].slice.call(stack.children),first={};
-    cards.forEach(function(c){first[c.id]=c.getBoundingClientRect().top});
-    stack.insertBefore(card,stack.firstChild);
-    cards.forEach(function(c){
-      var d=first[c.id]-c.getBoundingClientRect().top;
-      if(!d)return;
-      c.style.transform='translateY('+d+'px)';c.style.transition='none';
-      requestAnimationFrame(function(){
-        c.style.transition='transform .45s cubic-bezier(.2,.7,.2,1)';c.style.transform='';
-      });
-    });
-  }
-  function type(text){
-    ph.style.display='none';
-    var i=0;return new Promise(function(res){
-      (function step(){
-        if(i<text.length){typed.textContent+=text[i++];setTimeout(step,110)}
-        else res();
-      })();
-    });
-  }
-  function clearOmni(){typed.textContent='';ph.style.display=''}
-
-  async function loop(){
-    for(;;){
-      /* T0 — ivma waits on a permission (initial DOM state) */
-      await sleep(2600);
-
-      /* answer it: y */
-      await type('y');await sleep(420);clearOmni();
-      ivma.className='card run';ivma.dataset.wait='0';
-      h(ivma,'ivma','⧉ feat/checkout','running');
-      body(ivma,'▸ git push origin main — accepted, pushing…');
-      setBadge(0);
-      await sleep(2800);
-
-      /* pass finishes its tests, blog starts a run */
-      body(pss,'▸ EventRouter rewired · 51 tests passing — writing summary…');
-      await sleep(1800);
-
-      /* pass now needs input — numbered menu mirrors into the card */
-      pss.className='card attn';pss.dataset.wait='0';
-      h(pss,'pass','main',fmt(0));
-      body(pss,'<span class="zap">✎</span> needs input — Pick a migration for orders-db:'+
-        '<div class="menu"><span class="sel">❯ 1. expand/contract (safe, slower)</span><br>&nbsp;&nbsp;2. dual-write with backfill<br>&nbsp;&nbsp;3. abort</div>');
-      surface(pss);setBadge(1);
-      await sleep(2600);
-
-      /* choose option 2 */
-      await type('2');await sleep(420);clearOmni();
-      pss.className='card run';
-      h(pss,'pass','main','running');
-      body(pss,'▸ dual-write scaffolding — generating backfill job…');
-      setBadge(0);
-      await sleep(2400);
-
-      /* ivma finishes */
-      ivma.className='card';
-      h(ivma,'ivma','⧉ feat/checkout','just now');
-      body(ivma,'<span class="ok">✓ finished</span> · Pushed 3 commits — CI green');
-      await sleep(3000);
-
-      /* reset to T0 */
-      blog.className='card';
-      h(blog,'blog','master','4m ago');
-      body(blog,'<span class="ok">✓ finished</span> · Rebuilt site — 12 pages, 0 errors');
-      ivma.className='card attn';ivma.dataset.wait='0';
-      h(ivma,'ivma','⧉ feat/checkout',fmt(0));
-      body(ivma,'<span class="zap">⚡</span> Allow <b>Bash(git push origin main)</b>? · <span class="kbd-inline">y</span> allow · <span class="kbd-inline">n</span> deny');
-      surface(ivma);
-      pss.className='card run';
-      h(pss,'pass','main','running');
-      body(pss,'▸ Rewiring EventRouter → Inbox · make test — 42 passing');
-      setBadge(1);
+  var states=[
+    {
+      row:'row-ivma',name:'ivma',branch:'feat/checkout · worktree',agent:'✳',status:'NEEDS YOU',
+      kicker:'APPROVAL REQUEST',heading:'Allow Bash command?',
+      copy:'The agent is ready to push three commits. Review the command, then answer without opening the terminal.',
+      command:'git push origin main',
+      actions:'<span class="quick-action primary"><span class="kbd-inline">Y</span> Allow</span><span class="quick-action"><span class="kbd-inline">N</span> Deny</span>'
+    },
+    {
+      row:'row-pass',name:'pass',branch:'main · local',agent:'⬢',status:'RUNNING',
+      kicker:'LIVE OUTPUT',heading:'Rewiring the event router',
+      copy:'Codex is updating the shared inbox and checking the result against the complete test suite.',
+      command:'make test\\n✓ 51 tests passing',
+      actions:'<span class="quick-action primary"><span class="kbd-inline">⏎</span> Open terminal</span><span class="quick-action">Send note</span>'
+    },
+    {
+      row:'row-blog',name:'blog',branch:'master · local',agent:'π',status:'FINISHED',
+      kicker:'MISSION COMPLETE',heading:'Site rebuilt successfully',
+      copy:'The agent rebuilt twelve pages with no errors. The session remains available for follow-up work.',
+      command:'12 pages · 0 errors · 48s',
+      actions:'<span class="quick-action primary">Review result</span><span class="quick-action">Archive</span>'
     }
+  ];
+  var index=0;
+  function show(next){
+    var state=states[next],row=document.getElementById(state.row);
+    [].slice.call(list.querySelectorAll('.session-row')).forEach(function(item){item.classList.remove('active')});
+    row&&row.classList.add('active');
+    name.textContent=state.name;branch.textContent=state.branch;agent.textContent=state.agent;
+    status.textContent=state.status;kicker.textContent=state.kicker;heading.textContent=state.heading;
+    copy.textContent=state.copy;command.textContent=state.command;actions.innerHTML=state.actions;
+    prompt.textContent='Reply to '+state.name+' · @ jump · ⏎ send';
+    body.classList.remove('swap');void body.offsetWidth;body.classList.add('swap');
   }
-  loop();
+  setInterval(function(){index=(index+1)%states.length;show(index)},4200);
 })();
 </script>
 </body>

@@ -10,7 +10,7 @@ struct CommandView: View {
     @Environment(AppModel.self) private var appModel
     @State private var route: Route = .list
     @State private var query: String = ""
-    @State private var selection: Int = 0             // home cursor (over orderedSessions)
+    @State private var selectedSessionName: String?   // stable home cursor across automatic reordering
     @State private var jumpSelection: Int = 0         // cursor inside the @ jump results
     @State private var status: String?
     @State private var pendingKill: Session?          // session awaiting a kill confirmation
@@ -77,8 +77,16 @@ struct CommandView: View {
     private var typingInBar: Bool { showsCommandBar && omniboxFocused }
 
     private var selectedSession: Session? {
-        guard orderedSessions.indices.contains(selection) else { return nil }
-        return orderedSessions[selection]
+        if let selectedSessionName,
+           let session = orderedSessions.first(where: { $0.name == selectedSessionName }) {
+            return session
+        }
+        return orderedSessions.first
+    }
+
+    private var selectedIndex: Int? {
+        guard let name = selectedSession?.name else { return nil }
+        return orderedSessions.firstIndex(where: { $0.name == name })
     }
 
     /// The jump result list and its own selection — kept separate from the home cursor so
@@ -182,14 +190,15 @@ struct CommandView: View {
                 // (onChange only fires on a value change).
                 if let s { route = .detail(s); appModel.forceOpenSession = nil }
             }
-            // Keep `selection` on the same session when the home list reorders (e.g. one becomes
-            // pending and drops to the bottom cluster) — so the terminal never silently switches
-            // to a different session mid-interaction.
+            // Selection is identity-based: reordering never transiently mounts another session's
+            // focused card. Only choose a neighbor when the selected session actually vanished.
             .onChange(of: orderedSessions.map(\.id)) { old, new in
                 pool.prune(keeping: Set(new)) // clients for vanished sessions
-                guard old.indices.contains(selection) else { return }
-                let name = old[selection]
-                selection = new.firstIndex(of: name) ?? min(selection, max(0, new.count - 1))
+                selectedSessionName = StableSessionSelection.resolvedName(
+                    selectedName: selectedSessionName,
+                    oldOrder: old,
+                    newOrder: new
+                )
             }
             .onAppear { appModel.keyHandler = handleNav }
             .confirmationDialog(
@@ -676,9 +685,9 @@ struct CommandView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(Array(orderedSessions.enumerated()), id: \.element.id) { idx, s in
-                            CompactSessionCard(session: s, selected: idx == selection,
-                                               onSelect: { selection = idx },
+                        ForEach(orderedSessions) { s in
+                            CompactSessionCard(session: s, selected: s.name == selectedSession?.name,
+                                               onSelect: { selectedSessionName = s.name },
                                                onMarkChecked: { appModel.markSessionChecked(s.name) },
                                                onNewWorktree: { beginWorktreeSession(from: s) },
                                                onDelete: { pendingKill = s },
@@ -689,9 +698,9 @@ struct CommandView: View {
                     .padding(8)
                     .animation(.spring(response: 0.34, dampingFraction: 0.82), value: orderedSessions.map(\.id))
                 }
-                .onChange(of: selection) { _, sel in
-                    guard orderedSessions.indices.contains(sel) else { return }
-                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(orderedSessions[sel].id, anchor: .center) }
+                .onChange(of: selectedSessionName) { _, name in
+                    guard let name else { return }
+                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(name, anchor: .center) }
                 }
             }
         } else {
@@ -701,9 +710,9 @@ struct CommandView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(orderedSessions.enumerated()), id: \.element.id) { idx, s in
+                        ForEach(orderedSessions) { s in
                             Group {
-                                if idx == selection {
+                                if s.name == selectedSession?.name {
                                     FocusedSessionCard(
                                         session: s,
                                         terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
@@ -712,7 +721,7 @@ struct CommandView: View {
                                         onDelete: { pendingKill = s }
                                     )
                                 } else {
-                                    CompactSessionCard(session: s, onSelect: { selection = idx },
+                                    CompactSessionCard(session: s, onSelect: { selectedSessionName = s.name },
                                                        onMarkChecked: { appModel.markSessionChecked(s.name) },
                                                        onNewWorktree: { beginWorktreeSession(from: s) },
                                                        browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
@@ -724,9 +733,9 @@ struct CommandView: View {
                     .padding(8)
                     .animation(.spring(response: 0.34, dampingFraction: 0.82), value: orderedSessions.map(\.id))
                 }
-                .onChange(of: selection) { _, sel in
-                    guard orderedSessions.indices.contains(sel) else { return }
-                    withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(orderedSessions[sel].id, anchor: .center) }
+                .onChange(of: selectedSessionName) { _, name in
+                    guard let name else { return }
+                    withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(name, anchor: .center) }
                 }
             }
         }
@@ -808,6 +817,7 @@ struct CommandView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
                     ConfigURLAddButton(session: s)
+                    ConfigURLChips(session: s)
                     Spacer()
                     MiniTerminalButton(session: s)
                     SessionPresentationPicker(readableMode: $readableMode) {
@@ -904,7 +914,8 @@ struct CommandView: View {
     private func navMove(_ delta: Int) {
         if !isJumpMode && !isCommandMode { query = "" }
         guard !orderedSessions.isEmpty else { return }
-        selection = max(0, min(orderedSessions.count - 1, selection + delta))
+        let current = selectedIndex ?? 0
+        selectedSessionName = orderedSessions[max(0, min(orderedSessions.count - 1, current + delta))].name
     }
 
     /// ⇧⇧: cycle to the next session that needs input (downward, wrapping). Returns false
@@ -912,10 +923,11 @@ struct CommandView: View {
     private func jumpToNextWaiting() -> Bool {
         let list = orderedSessions
         guard !list.isEmpty else { return false }
+        let current = selectedIndex ?? 0
         for offset in 1...list.count {
-            let idx = (selection + offset) % list.count
-            if list[idx].needsUser, idx != selection {
-                selection = idx
+            let idx = (current + offset) % list.count
+            if list[idx].needsUser, idx != current {
+                selectedSessionName = list[idx].name
                 return true
             }
         }
@@ -954,7 +966,7 @@ struct CommandView: View {
 
     /// Leave the quick command and land on the chosen session — its live terminal takes over.
     private func jumpToSession(_ s: Session) {
-        if let idx = orderedSessions.firstIndex(where: { $0.name == s.name }) { selection = idx }
+        selectedSessionName = s.name
         hideQuickCommand()
     }
 
@@ -988,7 +1000,7 @@ struct CommandView: View {
     private func sendJumpMessage(to s: Session) {
         let text = (jumpMessage ?? "").trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { jumpToSession(s); return }
-        if let idx = orderedSessions.firstIndex(where: { $0.name == s.name }) { selection = idx }
+        selectedSessionName = s.name
         hideQuickCommand()
         Task {
             let r = await appModel.reply(to: s.name, text: text)
@@ -1019,9 +1031,7 @@ struct CommandView: View {
     /// unfocused row, so move the home cursor first; submitting the prefilled branch will then
     /// inherit that session's project and agent.
     private func beginWorktreeSession(from session: Session) {
-        if let idx = orderedSessions.firstIndex(where: { $0.name == session.name }) {
-            selection = idx
-        }
+        selectedSessionName = session.name
         let root = session.git?.projectRoot ?? session.projectRoot
         let existing = sessions.filter {
             $0.projectRoot == root && $0.git?.isLinkedWorktree == true
@@ -1114,7 +1124,7 @@ struct CommandView: View {
     }
 
     private func focusSoon() {
-        selection = initialSelection()
+        selectedSessionName = initialSelectionName()
         syncTerminalTarget()
         refocusField()
     }
@@ -1122,12 +1132,12 @@ struct CommandView: View {
     /// Where the cursor lands when the panel opens: an explicitly requested session first
     /// (notification click, CLI browser open — `pendingPreselect`, consumed here), else the
     /// waiting session nearest the input (bottom of the queue), else the top.
-    private func initialSelection() -> Int {
+    private func initialSelectionName() -> String? {
         let target = appModel.pendingPreselect
         appModel.pendingPreselect = nil
-        if let target, let i = orderedSessions.firstIndex(where: { $0.name == target }) { return i }
-        if let i = orderedSessions.lastIndex(where: { $0.needsUser }) { return i }
-        return 0
+        if let target, orderedSessions.contains(where: { $0.name == target }) { return target }
+        if let waiting = orderedSessions.last(where: { $0.needsUser }) { return waiting.name }
+        return orderedSessions.first?.name
     }
 
     /// Route the keyboard to whichever input is active: the message bar when it's up,
@@ -1238,6 +1248,7 @@ struct FocusedSessionCard: View {
                 HStack(spacing: 6) {
                     Text(session.displayName).font(.system(size: 14, weight: .semibold))
                     ConfigURLAddButton(session: session)
+                    ConfigURLChips(session: session)
                 }
                 HStack(spacing: 6) {
                     AgentTag(agent: session.agent)

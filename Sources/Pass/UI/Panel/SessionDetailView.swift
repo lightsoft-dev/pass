@@ -43,6 +43,7 @@ struct SessionDetailView: View {
                 Text(session.agent.glyph).foregroundStyle(.secondary)
                 Text(session.displayName).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                 ConfigURLAddButton(session: session)
+                ConfigURLChips(session: session)
                 Spacer()
                 attentionBadge
                 SessionPresentationPicker(readableMode: $readableMode) {

@@ -22,10 +22,6 @@ struct SessionWorkspaceView<Terminal: View>: View {
     }
 
     private var tab: BrowserTab? { appModel.browser?.visibleTab(for: session.name) }
-    private var configuredURLs: [PassConfigStore.URLItem] {
-        _ = appModel.configRevision
-        return PassConfigStore.urls(projectRoot: session.projectRoot)
-    }
     var body: some View {
         if appModel.mirror?.attachedSessionName == session.name, let mirror = appModel.mirror {
             mirrorSplit(mirror)
@@ -36,14 +32,14 @@ struct SessionWorkspaceView<Terminal: View>: View {
                 split(tab)
             }
         } else {
-            terminalWithURLBar
+            terminal
         }
     }
 
     private func mirrorSplit(_ mirror: MirrorEngine) -> some View {
         GeometryReader { geo in
             HStack(spacing: 0) {
-                terminalWithURLBar
+                terminal
                     .frame(width: mirrorTerminalWidth(total: geo.size.width))
                 mirrorDivider(total: geo.size.width)
                 MirrorView(engine: mirror)
@@ -56,7 +52,7 @@ struct SessionWorkspaceView<Terminal: View>: View {
     private func split(_ tab: BrowserTab) -> some View {
         GeometryReader { geo in
             HStack(spacing: 0) {
-                terminalWithURLBar
+                terminal
                     .frame(width: terminalWidth(total: geo.size.width))
                 divider(total: geo.size.width)
                 BrowserPaneView(tab: tab)
@@ -73,21 +69,6 @@ struct SessionWorkspaceView<Terminal: View>: View {
 
     private func mirrorTerminalWidth(total: CGFloat) -> CGFloat {
         max(120, total * (1 - mirrorFraction) - dividerWidth)
-    }
-
-    @ViewBuilder
-    private var terminalWithURLBar: some View {
-        let urls = configuredURLs
-        if urls.isEmpty {
-            terminal
-        } else {
-            VStack(spacing: 0) {
-                ConfigURLBar(items: urls) { item in
-                    appModel.openConfiguredURL(item.url, for: session.name)
-                }
-                terminal
-            }
-        }
     }
 
     private let dividerWidth: CGFloat = 7
@@ -137,41 +118,44 @@ struct SessionWorkspaceView<Terminal: View>: View {
     }
 }
 
-private struct ConfigURLBar: View {
-    let items: [PassConfigStore.URLItem]
-    let open: (PassConfigStore.URLItem) -> Void
+struct ConfigURLChips: View {
+    let session: Session
+
+    @Environment(AppModel.self) private var appModel
+
+    private var items: [PassConfigStore.URLItem] {
+        _ = appModel.configRevision
+        return PassConfigStore.urls(projectRoot: session.projectRoot)
+    }
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(items) { item in
-                    Button {
-                        open(item)
-                    } label: {
-                        HStack(spacing: 4) {
-                            FaviconView(url: item.url)
-                            Text(item.label)
-                                .lineLimit(1)
+        if !items.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(items) { item in
+                        Button {
+                            appModel.openConfiguredURL(item.url, for: session.name)
+                        } label: {
+                            HStack(spacing: 4) {
+                                FaviconView(url: item.url)
+                                Text(item.label)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: 150, alignment: .leading)
+                            }
+                            .font(.system(size: 10, weight: .medium))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
                         }
-                        .font(.system(size: 10, weight: .medium))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .background(Color.primary.opacity(0.055))
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .help(item.url.absoluteString)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .background(Color.primary.opacity(0.055))
-                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                    .help(item.url.absoluteString)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-        }
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.96))
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.primary.opacity(0.10))
-                .frame(height: 1)
+            .frame(maxWidth: 260)
+            .layoutPriority(0)
         }
     }
 }
