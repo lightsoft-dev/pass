@@ -6,7 +6,9 @@
 > 동작한다. `apiVersion: 2`는 별도 `NSWindow + WKWebView`, 이벤트 브리지, 명명된 액션을
 > 추가한다. Settings의 AI Builder는 자연어 목표를 Claude 세션에 전달하고 Stop hook에서 생성 완료를
 > 감지한 뒤 파일/권한 검토, 피드백 재작업, fingerprint 승인 활성화를 제공한다. 번들 예제:
-> **agent-usage**, **event-monitor**, **ui-starter**. 남은 것: E5 상주 프로세스·에이전트 기여, E6 공유.
+> **agent-usage**, **event-monitor**, **ui-starter**. Git URL 설치/원본 조회/fast-forward 업데이트와
+> 공유 URL 복사도 Settings에서 지원한다. Cloudflare D1 기반 앱 내 마켓은 계정별 게시·검색·설치
+> 집계·신고·관리자 숨김을 제공하며, 실행 파일은 계속 Git에만 둔다. 남은 것: E5 상주 프로세스·에이전트 기여.
 
 ---
 
@@ -25,7 +27,8 @@
 - **v1은 임의의 커스텀 UI를 렌더링하지 않는다.** v2는 메인 패널에 HTML을 삽입하지 않고
   별도 Web UI 창만 제공한다. 네이티브 Swift/dylib 로딩과 세션 카드 내부 위젯은 여전히 비목표다.
 - **샌드박스/서명 기반 보안.** 익스텐션은 사용자 권한의 스크립트다 (아래 §8 신뢰 모델 참고).
-- **중앙 마켓플레이스.** 배포는 git 저장소 기반으로 시작한다 (§9).
+- **패키지 호스팅·결제형 앱스토어.** 마켓은 검색용 메타데이터만 보관하고 배포는 Git 저장소를
+  사용한다 (§9). 결제, 비공개 패키지, 바이너리 CDN은 범위 밖이다.
 
 ---
 
@@ -342,10 +345,36 @@ Rules:
 
 ## 9. 배포와 공유 (git 기반)
 
-- **설치 = git clone**: `pass-ext install <git-url>` 또는 Settings에서 URL 입력 →
-  `~/.pass/extensions/<id>`로 clone → 검토 화면 → 활성화. 업데이트 = `git pull` + 재검토
-  (diff 표시).
-- 중앙 서버 없음. 필요해지면 큐레이션된 인덱스(JSON 한 파일, GitHub 저장소)로 시작.
+- **설치 = git clone**: Settings에서 URL 입력 →
+  `~/.pass/extensions/<id>`로 clone → 검토 화면 → 활성화. 업데이트 = fetch + fast-forward + 재검토
+  (fingerprint 변경 표시).
+- clone은 단일 최신 이력만 받고 checkout 전에 Git tree를 검사해 50 MB 또는 5,000개 파일을
+  넘는 저장소를 거부한다. clone/fetch에는 120초 wall-clock 제한과 전송 중 디스크 증가량 제한도
+  적용해, tree 검사에 도달하기 전에 악성 서버가 시간이나 로컬 디스크를 무제한 소모하지 못하게 한다.
+  마켓 설치는 clone된 `extension.json`이 등록 당시 스냅샷과 정확히 일치해야 하며, 과거에 같은
+  id가 활성화되어 있었더라도 신규 설치는 항상 비활성 상태로 시작한다. clone은 최종 move 전에
+  `.git` 내부에 pending-review marker를 기록하고, Store가 비활성 상태를 영속화한 뒤에만 지운다.
+  따라서 move 직후 앱이 종료되어도 stale 승인 상태를 상속하지 않는다. 중단된 `.install-*`
+  staging 폴더는 다음 실행 때 제거되고 일반 익스텐션 스캔에서도 제외된다.
+- 설치된 Git 익스텐션의 메뉴에서 원격 저장소를 조회하거나 URL을 복사해 공유한다. 업데이트는
+  먼저 fetch해 변경 여부와 fast-forward 가능성을 확인한다. 실제 변경이 있을 때만 실행을 멈추고
+  적용하므로 네트워크 실패나 최신 상태 확인만으로 익스텐션이 꺼지지 않는다. 적용 중에는 store
+  수준에서 재활성화를 차단한다. 적용 실패 뒤 fingerprint가 원본과 같을 때만 기존 승인을 복구하고,
+  일부라도 바뀌었으면 기존 승인과 실행 창을 즉시 해제한 채 재검토 상태로 남긴다. 실행 action도
+  fingerprint 세대가 일치하는 동안 Store execution lease를 보유하므로, 큐에 남은 예전 command/rule과
+  업데이트가 교차할 수 없다. tmux에서 오래 실행되는 terminal action은 세션 이름으로 lease를
+  영속화해 앱 재시작 뒤에도 세션이 끝날 때까지 업데이트를 막는다. fingerprint에는 파일 내용뿐 아니라
+  symlink/regular-file 구분과 POSIX 실행 권한도 포함한다.
+- **앱 내 마켓**: 기존 Pass 데스크톱 계정 토큰으로 Cloudflare Worker에 접근한다. D1에는 게시자,
+  Git URL, 매니페스트 스냅샷, 카테고리·태그, 설치 수, 신고와 숨김 상태만 저장한다. 검색·게시·수정·
+  삭제·신고는 앱에서만 제공하고 별도 웹 스토어는 두지 않는다.
+- 설치 수는 계정당 한 번만 집계한다. 게시자는 자신의 목록만 수정·삭제할 수 있고, 신고는 계정당
+  하나를 갱신하는 방식이다. 인기 목록을 다른 코드로 바꾸지 못하도록 저장소 URL과 manifest id는
+  최초 게시 후 고정된다. 운영자는 환경 변수에 등록된 account id로 미해결 신고 수를 확인하고 목록을
+  숨기거나 분쟁 목록을 제거할 수 있다.
+- 게시자 계정은 확인되지만 Git 호스팅 계정의 실소유권까지 증명하지는 않는다. 공개 전환 전에는
+  provider OAuth 또는 저장소 challenge 파일 검증과 commit SHA 고정을 추가하는 것이 다음 보안
+  단계다. 현재는 매니페스트 일치와 설치 후 강제 비활성/fingerprint 검토가 방어선이다.
 - AI로 만든 익스텐션이 디렉토리 = git repo이므로, "만들고 → push하면 → 남이 설치"가 바로 성립.
 
 ---
@@ -363,7 +392,7 @@ Rules:
 | ✅ **E3.5 Web UI 창** | `apiVersion 2`, 별도 NSWindow+WKWebView, private scheme/CSP, snapshot·event·named-action bridge, event-monitor 예제 | ~700 LOC |
 | ✅ **E4 AI 빌더** | EXTENSION_API.md, `passcli extension validate`, 생성 플로우(격리 세션+계약 프롬프트+Stop 감지), 파일·권한 검토/승인 UI, 같은 세션 rework 루프 | ~900 LOC + 문서 |
 | **E5 상주 프로세스 + 에이전트** | 프로세스 감독(spawn/restart/log), 이벤트 push(HTTP), `/ext/api`, 에이전트 기여를 AgentRegistry에 연결 — codex/pi 어댑터를 번들 익스텐션으로 이관(M5 합류) | 설계 후 산정 |
-| **E6 공유** | git install/update UI, 재검토 diff | ~250 LOC |
+| ✅ **E6 공유·마켓** | git install/update, Cloudflare D1 검색·게시·신고, 앱 내 관리 UI, fingerprint 재검토 | 구현됨 |
 
 E0→E4까지가 "AI로 익스텐션을 만들어 쓰는" 최소 완결 경험이다. E4는 E2·E3 위에서만 의미가
 있으므로 순서를 바꾸지 않는다.

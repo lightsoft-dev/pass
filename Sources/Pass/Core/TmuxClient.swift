@@ -13,6 +13,13 @@ struct RawSession: Sendable {
     var paneInMode: Bool
 }
 
+/// Separates an authoritative empty tmux server from a transient command/parse failure. Callers
+/// that release durable resources must act only on `.reliable` inventories.
+enum TmuxSessionInventory: Sendable {
+    case reliable([RawSession])
+    case unavailable
+}
+
 struct TerminalPaneSnapshot: Equatable, Sendable {
     var content: String
     var columns: Int
@@ -72,16 +79,25 @@ actor TmuxClient: TerminalPaneAccess {
 
     // MARK: Reconcile
 
-    /// List all sessions with their active pane details. Empty when no tmux server is running.
-    func listSessions() async -> [RawSession] {
+    /// List all sessions with their active pane details. "No server" is an authoritative empty
+    /// inventory; missing tmux, command failures, and malformed output are not.
+    func sessionInventory() async -> TmuxSessionInventory {
         let s = fieldSep
         let sess = await run([
             "list-sessions", "-F",
             ["#{session_name}", "#{session_created}", "#{session_attached}",
              "#{session_activity}", "#{@pass_project_root}", "#{@pass_agent}"].joined(separator: s),
         ])
-        // No server / no sessions → treat as empty, not an error.
-        guard sess.ok else { return [] }
+        guard sess.ok else {
+            let diagnostic = (sess.stdout + "\n" + sess.stderr).lowercased()
+            if diagnostic.contains("no server running") || diagnostic.contains("no sessions") {
+                return .reliable([])
+            }
+            return .unavailable
+        }
+        if sess.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .reliable([])
+        }
 
         // Active-pane details, one query for all sessions.
         let panes = await run([
@@ -89,17 +105,21 @@ actor TmuxClient: TerminalPaneAccess {
             ["#{session_name}", "#{pane_active}", "#{pane_current_path}",
              "#{pane_current_command}", "#{pane_in_mode}"].joined(separator: s),
         ])
+        guard panes.ok,
+              !panes.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return .unavailable }
         var paneBySession: [String: (cwd: String, cmd: String, inMode: Bool)] = [:]
         for line in panes.stdout.split(separator: "\n") {
             let f = line.components(separatedBy: s)
-            guard f.count >= 5, f[1] == "1" else { continue } // active pane only
+            guard f.count == 5 else { return .unavailable }
+            guard f[1] == "1" else { continue } // active pane only
             paneBySession[f[0]] = (f[2], f[3], f[4] == "1")
         }
 
         var result: [RawSession] = []
         for line in sess.stdout.split(separator: "\n") {
             let f = line.components(separatedBy: s)
-            guard f.count >= 6 else { continue }
+            guard f.count == 6 else { return .unavailable }
             let pane = paneBySession[f[0]]
             result.append(RawSession(
                 name: f[0],
@@ -113,7 +133,15 @@ actor TmuxClient: TerminalPaneAccess {
                 paneInMode: pane?.inMode ?? false
             ))
         }
-        return result
+        return .reliable(result)
+    }
+
+    /// Convenience for diagnostics and smoke tests that do not own durable state.
+    func listSessions() async -> [RawSession] {
+        switch await sessionInventory() {
+        case .reliable(let sessions): return sessions
+        case .unavailable: return []
+        }
     }
 
     private func epoch(_ s: String) -> Date {
@@ -129,9 +157,10 @@ actor TmuxClient: TerminalPaneAccess {
     /// Create a detached session running a shell in `cwd`, tag it, then launch the agent.
     /// The agent is launched via send-keys (not as the session command) so a post-mortem
     /// shell survives when the agent exits.
+    @discardableResult
     func newSession(name: String, cwd: String, projectRoot: String, agent: AgentKind,
-                    launchCommand: String?) async {
-        await run([
+                    launchCommand: String?) async -> Bool {
+        let created = await run([
             // 160×42 ≈ the embedded home terminal — history written before the first attach
             // then reflows cleanly instead of arriving as 220-col lines that wrap oddly.
             "new-session", "-d", "-s", name, "-c", cwd, "-x", "160", "-y", "42",
@@ -140,12 +169,27 @@ actor TmuxClient: TerminalPaneAccess {
             // unset foreign env vars, so this survives where a PATH prepend wouldn't).
             "-e", "\(PassConfig.cliEnvVar)=\(PassConfig.cliSymlinkPath)",
         ])
-        await run(["set-option", "-t", name, PassConfig.optProjectRoot, projectRoot])
-        await run(["set-option", "-t", name, PassConfig.optAgent, agent.rawValue])
+        guard created.ok else {
+            Log.tmux.error("create session \(name, privacy: .public) failed: \(created.stderr, privacy: .public)")
+            return false
+        }
+        let taggedRoot = await run(["set-option", "-t", name, PassConfig.optProjectRoot, projectRoot])
+        let taggedAgent = await run(["set-option", "-t", name, PassConfig.optAgent, agent.rawValue])
+        guard taggedRoot.ok, taggedAgent.ok else {
+            await run(["kill-session", "-t", name])
+            Log.tmux.error("tag session \(name, privacy: .public) failed")
+            return false
+        }
         if let cmd = launchCommand, !cmd.isEmpty {
-            await run(["send-keys", "-t", name, cmd, "Enter"])
+            let sent = await run(["send-keys", "-t", name, cmd, "Enter"])
+            guard sent.ok else {
+                await run(["kill-session", "-t", name])
+                Log.tmux.error("launch session \(name, privacy: .public) failed: \(sent.stderr, privacy: .public)")
+                return false
+            }
         }
         Log.tmux.info("created session \(name, privacy: .public) agent=\(agent.rawValue) cwd=\(cwd, privacy: .public)")
+        return true
     }
 
     func killSession(_ name: String) async {

@@ -81,6 +81,7 @@ final class AppModel {
     private(set) var extensionRuntime: ExtensionRuntime!
     private(set) var extensionWindows: ExtensionWindowManager!
     private(set) var extensionBuilder: ExtensionBuilder!
+    private(set) var extensionMarketplace: ExtensionMarketplaceService!
 
     /// Outbound-only mobile control plane. The gateway is disabled unless its feature flag is
     /// enabled, so normal desktop launches never make a relay connection.
@@ -108,6 +109,7 @@ final class AppModel {
     /// Build the stores and start the reconcile loop. Called once from AppDelegate.
     func configure() {
         remoteAccountService = RemoteAccountService()
+        extensionMarketplace = ExtensionMarketplaceService(accountService: remoteAccountService)
         refreshRemoteAccountState()
         projects = ProjectStore()
         sessions = SessionStore(projects: projects)
@@ -138,6 +140,9 @@ final class AppModel {
                 created.filter { !self.extensionBuilder.ownsSession($0.name) })
             self.extensionRuntime?.sessionsEnded(
                 ended.filter { !self.extensionBuilder.ownsSession($0) })
+        }
+        sessions.onSessionInventory = { [weak self] liveNames in
+            self?.extensions?.reconcileTerminalExecutions(liveSessionNames: liveNames)
         }
         sessions.start()
         isReady = true
@@ -635,7 +640,9 @@ final class AppModel {
         if let existing = specPreviewSessions[projectRoot], sessions.session(named: existing) != nil {
             return .success(existing)
         }
-        let name = await sessions.createCommandSession(projectDir: cwd, slug: "dev", command: command)
+        guard let name = await sessions.createCommandSession(
+            projectDir: cwd, slug: "dev", command: command
+        ) else { return .failure("Could not start the development session.") }
         specPreviewSessions[projectRoot] = name
         sessions.setAlias(name, "Dev · \(doc.title.isEmpty ? URL(fileURLWithPath: projectRoot).lastPathComponent : doc.title)")
         return .success(name)
@@ -813,11 +820,11 @@ final class AppModel {
         if let existing = featurePreviewSessions[key], sessions.session(named: existing) != nil {
             return .success(existing)
         }
-        let name = await sessions.createCommandSession(
+        guard let name = await sessions.createCommandSession(
             projectDir: cwd,
             slug: "preview-\(featureID)",
             command: command
-        )
+        ) else { return .failure("Could not start the preview session.") }
         featurePreviewSessions[key] = name
         sessions.setAlias(name, "Preview · \(document.title)")
         return .success(name)

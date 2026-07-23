@@ -6,6 +6,7 @@ import {
   tokensMatch,
 } from "./auth";
 import { handleControlRequest } from "./control";
+import { handleMarketplaceRequest } from "./marketplace";
 
 import {
   MAX_FRAME_BYTES,
@@ -1026,6 +1027,8 @@ export default {
       const limited = await enforceRateLimit(request, limiter);
       if (limited !== null) return limited;
     }
+    const marketplaceResponse = await handleMarketplaceRequest(request, env);
+    if (marketplaceResponse !== null) return marketplaceResponse;
     const controlResponse = await handleControlRequest(request, env);
     if (controlResponse !== null) return controlResponse;
     if (url.pathname !== "/connect") {

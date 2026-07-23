@@ -20,6 +20,7 @@ export default defineConfig({
           OIDC_ISSUER: "https://identity.pass.test/",
           OIDC_AUDIENCE: "pass-public-api",
           OIDC_JWKS_URL: "https://identity.pass.test/.well-known/jwks.json",
+          MARKETPLACE_ADMIN_ACCOUNT_IDS: "acct_admin",
           TEST_MIGRATIONS: migrations,
         },
       },
