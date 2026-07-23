@@ -1,6 +1,7 @@
 import {
   PROTOCOL_VERSION,
   type PairingQrPayload,
+  type DeckPairingApprovalPayload,
 } from "./types.ts";
 
 export type PairingParseResult =
@@ -19,6 +20,35 @@ function nonEmpty(value: unknown, maxLength = 4096): value is string {
     value.trim().length > 0 &&
     value.length <= maxLength
   );
+}
+
+export function parseDeckPairingApproval(input: string): DeckPairingApprovalPayload {
+  let candidate: unknown;
+  try { candidate = JSON.parse(input.trim()) as unknown; }
+  catch { throw new Error("This is not a Pass Deck pairing code."); }
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    throw new Error("Deck pairing payload must be an object.");
+  }
+  const value = candidate as Record<string, unknown>;
+  const relayUrl = nonEmpty(value.relayUrl, 2048) ? normalizeRelayUrl(value.relayUrl, false) : null;
+  if (
+    value.v !== 3 || !relayUrl ||
+    !nonEmpty(value.pairingId, 200) || !IDENTIFIER_PATTERN.test(value.pairingId) ||
+    !nonEmpty(value.approvalSecret, 256) || !nonEmpty(value.deviceName, 100) ||
+    !nonEmpty(value.expiresAt, 100)
+  ) throw new Error("Deck pairing code is incomplete or invalid.");
+  const expiresAt = new Date(value.expiresAt);
+  if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
+    throw new Error("Deck pairing code has expired. Refresh it on the Deck.");
+  }
+  return {
+    v: 3,
+    relayUrl,
+    pairingId: value.pairingId,
+    approvalSecret: value.approvalSecret,
+    deviceName: value.deviceName,
+    expiresAt: expiresAt.toISOString(),
+  };
 }
 
 function normalizeRelayUrl(

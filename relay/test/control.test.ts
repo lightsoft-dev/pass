@@ -30,6 +30,13 @@ function nested(value: WireObject, key: string): WireObject {
   return asObject(value[key]);
 }
 
+function base64URLBytes(value: unknown): Uint8Array<ArrayBuffer> {
+  expect(value).toBeTypeOf("string");
+  const normalized = String(value).replaceAll("-", "+").replaceAll("_", "/");
+  const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
 async function userToken(subject: string): Promise<string> {
   return new SignJWT({ email: `${subject}@example.com`, name: subject })
     .setProtectedHeader({ alg: "RS256", kid: "pass-test-key" })
@@ -129,6 +136,73 @@ describe("public account and device control plane", () => {
 
     const malformed = await api("/v2/me", { token: "not-a-jwt" });
     expect(malformed.status).toBe(401);
+  });
+
+  it("pairs a Steam Deck through phone approval without exposing credentials in the QR", async () => {
+    const ownerToken = await userToken("deck-owner");
+    const otherToken = await userToken("deck-other");
+    const registered = await api("/v2/desktops", {
+      token: ownerToken,
+      body: { name: "Deck Host" },
+    });
+    const desktop = nested(asObject(await registered.json()), "desktop");
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+      true,
+      ["encrypt", "decrypt"],
+    );
+    const publicKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+    const created = await api("/v2/deck-pairings", {
+      body: { deviceName: "Steam Deck OLED", publicKey },
+    });
+    expect(created.status).toBe(201);
+    const pairing = nested(asObject(await created.json()), "pairing");
+    expect(pairing.v).toBe(3);
+    expect(pairing).not.toHaveProperty("credentials");
+
+    const pending = await api(`/v2/deck-pairings/${String(pairing.pairingId)}/poll`, {
+      body: { pollSecret: pairing.pollSecret },
+    });
+    expect(pending.status).toBe(202);
+
+    const wrongAccount = await api(`/v2/deck-pairings/${String(pairing.pairingId)}/approve`, {
+      token: otherToken,
+      body: { approvalSecret: pairing.approvalSecret, desktopId: desktop.id },
+    });
+    expect(wrongAccount.status).toBe(404);
+
+    const approved = await api(`/v2/deck-pairings/${String(pairing.pairingId)}/approve`, {
+      token: ownerToken,
+      body: { approvalSecret: pairing.approvalSecret, desktopId: desktop.id },
+    });
+    expect(approved.status).toBe(200);
+
+    const delivered = await api(`/v2/deck-pairings/${String(pairing.pairingId)}/poll`, {
+      body: { pollSecret: pairing.pollSecret },
+    });
+    expect(delivered.status).toBe(200);
+    const envelope = nested(asObject(await delivered.json()), "envelope");
+    expect(envelope.wrappedKey).toBeTypeOf("string");
+    expect(envelope.ciphertext).toBeTypeOf("string");
+    const rawAESKey = await crypto.subtle.decrypt(
+      { name: "RSA-OAEP" },
+      keyPair.privateKey,
+      base64URLBytes(envelope.wrappedKey),
+    );
+    const aesKey = await crypto.subtle.importKey("raw", rawAESKey, "AES-GCM", false, ["decrypt"]);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: base64URLBytes(envelope.iv) },
+      aesKey,
+      base64URLBytes(envelope.ciphertext),
+    );
+    const handoff = asObject(JSON.parse(new TextDecoder().decode(plaintext)));
+    expect(handoff.desktopId).toBe(desktop.id);
+    expect(nested(handoff, "credentials").refreshToken).toMatch(/^pass_rt_cred_/);
+
+    const replay = await api(`/v2/deck-pairings/${String(pairing.pairingId)}/poll`, {
+      body: { pollSecret: pairing.pollSecret },
+    });
+    expect(replay.status).toBe(200);
   });
 
   it("registers, pairs, routes, rotates, and revokes device credentials", async () => {

@@ -73,6 +73,16 @@ export async function handleControlRequest(
   if (pairingClaim?.[1] && request.method === "POST") {
     return handleClaimPairing(request, env, pairingClaim[1]);
   }
+  if (url.pathname === "/v2/deck-pairings" && request.method === "POST") {
+    return handleCreateDeckPairing(request, env);
+  }
+  const deckPairing = /^\/v2\/deck-pairings\/([A-Za-z0-9._:-]+)\/(approve|poll)$/.exec(url.pathname);
+  if (deckPairing?.[1] && deckPairing[2] === "approve" && request.method === "POST") {
+    return handleApproveDeckPairing(request, env, deckPairing[1]);
+  }
+  if (deckPairing?.[1] && deckPairing[2] === "poll" && request.method === "POST") {
+    return handlePollDeckPairing(request, env, deckPairing[1]);
+  }
   if (url.pathname === "/v2/token/refresh" && request.method === "POST") {
     return handleRefreshToken(request, env);
   }
@@ -84,6 +94,122 @@ export async function handleControlRequest(
     return handleRevokeDevice(request, env, device[1]);
   }
   return apiError(404, "not_found", "API route not found.");
+}
+
+async function handleCreateDeckPairing(request: Request, env: ControlEnv): Promise<Response> {
+  const body = await parseJSONBody(request);
+  if (body instanceof Response) return body;
+  const deviceName = boundedString(body.deviceName, 100);
+  const publicKey = parseDeckPublicKey(body.publicKey);
+  if (!deviceName || publicKey === null) {
+    return apiError(400, "invalid_request", "Device name and an RSA-OAEP public key are required.");
+  }
+  const pepper = requiredPepper(env);
+  if (pepper instanceof Response) return pepper;
+  const now = Date.now();
+  const pairingId = `deckpair_${compactUUID()}`;
+  const approvalSecret = randomBase64URL(24);
+  const pollSecret = randomBase64URL(32);
+  const expiresAt = now + PAIRING_LIFETIME_MS;
+  const [approveHash, pollHash] = await Promise.all([
+    hashSecret(approvalSecret, pepper),
+    hashSecret(pollSecret, pepper),
+  ]);
+  await env.CONTROL_DB.prepare(
+    `INSERT INTO deck_pairing_challenges
+      (id, approve_secret_hash, poll_secret_hash, public_key_jwk, device_name, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(pairingId, approveHash, pollHash, JSON.stringify(publicKey), deviceName, now, expiresAt).run();
+  return apiResponse({
+    pairing: {
+      v: 3,
+      relayUrl: publicRelayURL(request),
+      pairingId,
+      approvalSecret,
+      pollSecret,
+      deviceName,
+      expiresAt: isoDate(expiresAt),
+    },
+  }, 201);
+}
+
+async function handleApproveDeckPairing(
+  request: Request,
+  env: ControlEnv,
+  pairingId: string,
+): Promise<Response> {
+  const context = await accountContext(request, env);
+  if (context instanceof Response) return context;
+  const body = await parseJSONBody(request);
+  if (body instanceof Response) return body;
+  const approvalSecret = boundedString(body.approvalSecret, 256);
+  const desktopId = boundedString(body.desktopId, 200);
+  if (!approvalSecret || !desktopId) return apiError(400, "invalid_request", "Approval secret and desktop id are required.");
+  const pepper = requiredPepper(env);
+  if (pepper instanceof Response) return pepper;
+  const now = Date.now();
+  const approvalHash = await hashSecret(approvalSecret, pepper);
+  const challenge = await env.CONTROL_DB.prepare(
+    `SELECT public_key_jwk, device_name FROM deck_pairing_challenges
+      WHERE id = ? AND approve_secret_hash = ? AND approved_at IS NULL AND expires_at > ?`,
+  ).bind(pairingId, approvalHash, now).first<{ public_key_jwk: string; device_name: string }>();
+  if (challenge === null) return apiError(409, "pairing_unavailable", "Deck pairing code is invalid, expired, or already used.");
+  const desktop = await env.CONTROL_DB.prepare(
+    "SELECT id, name FROM desktops WHERE id = ? AND account_id = ? AND revoked_at IS NULL",
+  ).bind(desktopId, context.account.id).first<{ id: string; name: string }>();
+  if (desktop === null) return apiError(404, "not_found", "Desktop not found for this account.");
+
+  const deviceId = `device_${compactUUID()}`;
+  const credentials = await createCredentialPair(pepper, now);
+  const scopesJSON = JSON.stringify(MOBILE_SCOPES);
+  const encrypted = await encryptDeckCredentials(challenge.public_key_jwk, {
+    relayUrl: publicRelayURL(request),
+    desktopId,
+    desktopName: desktop.name,
+    deviceId,
+    credentials: credentialResponse(credentials),
+    scopes: MOBILE_SCOPES,
+  });
+  if (encrypted instanceof Response) return encrypted;
+  const results = await env.CONTROL_DB.batch([
+    env.CONTROL_DB.prepare(
+      "INSERT INTO devices (id, account_id, name, platform, created_at) VALUES (?, ?, ?, 'unknown', ?)",
+    ).bind(deviceId, context.account.id, challenge.device_name, now),
+    env.CONTROL_DB.prepare(
+      "INSERT INTO desktop_devices (desktop_id, device_id, scopes_json, paired_at) VALUES (?, ?, ?, ?)",
+    ).bind(desktopId, deviceId, scopesJSON, now),
+    credentialInsert(env.CONTROL_DB, credentials.access, { accountId: context.account.id, subjectType: "device", subjectId: deviceId, desktopId, role: "mobile", scopesJSON }),
+    credentialInsert(env.CONTROL_DB, credentials.refresh, { accountId: context.account.id, subjectType: "device", subjectId: deviceId, desktopId, role: "mobile", scopesJSON }),
+    env.CONTROL_DB.prepare(
+      `UPDATE deck_pairing_challenges SET account_id = ?, desktop_id = ?, device_id = ?,
+         credential_envelope = ?, approved_at = ?
+       WHERE id = ? AND approve_secret_hash = ? AND approved_at IS NULL AND expires_at > ?`,
+    ).bind(context.account.id, desktopId, deviceId, JSON.stringify(encrypted), now, pairingId, approvalHash, now),
+  ]);
+  if (changes(results[4]) === 0) return apiError(409, "pairing_unavailable", "Deck pairing code was already used.");
+  await auditInsert(env.CONTROL_DB, context.account.id, "user", context.identity.subject, "deck_pairing.approve", "device", deviceId, now).run();
+  return apiResponse({ approved: true, device: { id: deviceId, name: challenge.device_name }, desktop });
+}
+
+async function handlePollDeckPairing(request: Request, env: ControlEnv, pairingId: string): Promise<Response> {
+  const body = await parseJSONBody(request);
+  if (body instanceof Response) return body;
+  const pollSecret = boundedString(body.pollSecret, 256);
+  if (!pollSecret) return apiError(400, "invalid_request", "Poll secret is required.");
+  const pepper = requiredPepper(env);
+  if (pepper instanceof Response) return pepper;
+  const pollHash = await hashSecret(pollSecret, pepper);
+  const now = Date.now();
+  const challenge = await env.CONTROL_DB.prepare(
+    `SELECT credential_envelope FROM deck_pairing_challenges
+      WHERE id = ? AND poll_secret_hash = ? AND expires_at > ?`,
+  ).bind(pairingId, pollHash, now).first<{ credential_envelope: string | null }>();
+  if (challenge === null) return apiError(410, "pairing_expired", "Deck pairing code expired or is invalid.");
+  if (challenge.credential_envelope === null) return apiResponse({ status: "pending" }, 202);
+  await env.CONTROL_DB.prepare(
+    "UPDATE deck_pairing_challenges SET delivered_at = COALESCE(delivered_at, ?) WHERE id = ?",
+  ).bind(now, pairingId).run();
+  return apiResponse({ status: "approved", envelope: JSON.parse(challenge.credential_envelope) as unknown });
 }
 
 async function handleMe(request: Request, env: ControlEnv): Promise<Response> {
@@ -673,6 +799,52 @@ function parsePlatform(value: unknown): "ios" | "android" | "macos" | "unknown" 
   return value === "ios" || value === "android" || value === "macos" || value === "unknown"
     ? value
     : null;
+}
+
+function parseDeckPublicKey(value: unknown): JsonWebKey | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const key = value as Record<string, unknown>;
+  if (
+    key.kty !== "RSA" ||
+    typeof key.n !== "string" || key.n.length < 128 || key.n.length > 2_048 ||
+    typeof key.e !== "string" || key.e.length > 16
+  ) return null;
+  return { kty: "RSA", n: key.n, e: key.e, alg: "RSA-OAEP-256", ext: true, key_ops: ["encrypt"] };
+}
+
+async function encryptDeckCredentials(
+  publicKeyJSON: string,
+  payload: Record<string, unknown>,
+): Promise<{ wrappedKey: string; iv: string; ciphertext: string } | Response> {
+  try {
+    const publicKey = await crypto.subtle.importKey(
+      "jwk",
+      JSON.parse(publicKeyJSON) as JsonWebKey,
+      { name: "RSA-OAEP", hash: "SHA-256" },
+      false,
+      ["encrypt"],
+    );
+    const aesKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"]);
+    const rawKey = await crypto.subtle.exportKey("raw", aesKey);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const [wrappedKey, ciphertext] = await Promise.all([
+      crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, rawKey),
+      crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, new TextEncoder().encode(JSON.stringify(payload))),
+    ]);
+    return {
+      wrappedKey: base64URL(new Uint8Array(wrappedKey)),
+      iv: base64URL(iv),
+      ciphertext: base64URL(new Uint8Array(ciphertext)),
+    };
+  } catch {
+    return apiError(400, "invalid_public_key", "Deck public key could not encrypt the credential handoff.");
+  }
+}
+
+function base64URL(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
 function isoDate(milliseconds: number): string {

@@ -21,6 +21,9 @@ public-account implementation:
   message and decision actions, and a capability-gated voice placeholder.
 - The macOS app implements the same PKCE account login, Keychain credential storage and rotation,
   desktop registration, and server-generated five-minute one-time pairing QR codes.
+- The Steam Deck client uses a TV-style inverse pairing flow: it displays a five-minute QR, an
+  already paired phone approves the target desktop, and the relay hands credentials back through
+  an RSA-OAEP + AES-GCM envelope decryptable only by that Deck.
 - Snapshot strings and complete frames are bounded. If the 900 KB desktop budget requires
   reducing a snapshot, the payload reports `truncated`, `totalSessionCount`, and
   `totalProjectCount` instead of silently pretending it is complete.

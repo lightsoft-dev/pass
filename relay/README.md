@@ -68,11 +68,16 @@ npx wrangler deploy
 - `DELETE /v2/desktops/:id` revokes a desktop and its credentials.
 - `POST /v2/pairings` creates a five-minute, one-time code using a desktop access credential.
 - `POST /v2/pairings/:id/claim` claims that code for a signed-in mobile on the same account.
+- `POST /v2/deck-pairings` creates a public five-minute Deck challenge with an ephemeral RSA key.
+- `POST /v2/deck-pairings/:id/approve` lets a signed-in phone authorize the Deck for one desktop.
+- `POST /v2/deck-pairings/:id/poll` returns the credential envelope encrypted to that Deck only.
 - `POST /v2/token/refresh` rotates a desktop or mobile refresh credential.
 - `GET /v2/devices` lists paired devices; `DELETE /v2/devices/:id` revokes one immediately.
 
 Account API calls use the OIDC bearer. Pairing creation, refresh, and `/connect` use issued opaque
 credentials. Only credential hashes are stored in D1; raw credentials are returned once.
+Deck handoffs store only a hybrid-encrypted credential envelope until challenge expiry; the QR
+contains the approval secret but never the private polling secret or a usable relay credential.
 The Worker Rate Limiting API limits pairing routes to 20 requests per minute and other authenticated
 API/WebSocket handshakes to 120 per minute for each hashed credential key in a Cloudflare location.
 

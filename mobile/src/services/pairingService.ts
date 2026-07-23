@@ -5,8 +5,25 @@ import {
   type Capability,
   type DevelopmentPairingQrPayload,
   type DevicePairingQrPayload,
+  type DeckPairingApprovalPayload,
   type PairedDesktop,
 } from "../protocol/types";
+
+export async function approveDeckPairing(
+  pairing: DeckPairingApprovalPayload,
+  options: { userAccessToken: string; desktopId: string; fetchImpl?: typeof fetch },
+): Promise<void> {
+  const response = await (options.fetchImpl ?? fetch)(
+    `${pairing.relayUrl}/v2/deck-pairings/${encodeURIComponent(pairing.pairingId)}/approve`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${options.userAccessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ approvalSecret: pairing.approvalSecret, desktopId: options.desktopId }),
+    },
+  );
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(apiErrorMessage(payload) ?? `Deck approval failed with HTTP ${response.status}.`);
+}
 
 type PairingOptions = {
   deviceId?: string;
