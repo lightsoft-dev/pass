@@ -9,6 +9,7 @@ struct SessionDetailView: View {
 
     @Environment(AppModel.self) private var appModel
     @State private var terminal: TerminalController?
+    @AppStorage("sessionDetailReadableMode") private var readableMode = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,7 +25,9 @@ struct SessionDetailView: View {
             appModel.focusedSessionName = session.name // this workspace is on screen
             await controller.start()
             appModel.reconcileOnOpen(session)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { controller.focus() }
+            if !readableMode {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { controller.focus() }
+            }
             defer { controller.detach(); terminal = nil }
             while !Task.isCancelled { try? await Task.sleep(for: .seconds(2)) }
         }
@@ -41,6 +44,13 @@ struct SessionDetailView: View {
                 Text(session.displayName).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                 Spacer()
                 attentionBadge
+                SessionPresentationPicker(readableMode: $readableMode) {
+                    DispatchQueue.main.async { terminal?.focus() }
+                }
+                MiniTerminalButton(session: session)
+                Button { appModel.mirror.openPicker(for: session.name) } label: {
+                    Image(systemName: "iphone.and.arrow.forward").foregroundStyle(.secondary)
+                }.buttonStyle(.plain).help("Attach physical device or emulator pane")
                 Button { appModel.attach(session) } label: {
                     Image(systemName: "macwindow.on.rectangle").foregroundStyle(.secondary)
                 }.buttonStyle(.plain).help("Open in Ghostty (⌘⏎)")
@@ -65,9 +75,11 @@ struct SessionDetailView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            Text("drag select · ⌘C copy · ⌥drag tmux").foregroundStyle(.tertiary)
+            Text(readableMode ? "select text · tools expand on click" : "drag select · ⌘C copy · ⌥drag tmux")
+                .foregroundStyle(.tertiary)
             Spacer()
             Text("⌘B  browser").foregroundStyle(.tertiary)
+            Text("device pane in header").foregroundStyle(.tertiary)
             Text("⌘[ or ⌘W  back to list").foregroundStyle(.secondary)
             Text("⌘⏎  open in Ghostty").foregroundStyle(.tertiary)
         }
@@ -79,8 +91,14 @@ struct SessionDetailView: View {
     private var terminalBody: some View {
         if let terminal {
             SessionWorkspaceView(session: session) {
-                TerminalPaneView(controller: terminal)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Group {
+                    if readableMode {
+                        ConversationPaneView(session: session)
+                    } else {
+                        TerminalPaneView(controller: terminal)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {

@@ -49,11 +49,13 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
   natural-language goal into a disabled Claude work session, then shows every generated file and
   permission for feedback or explicit fingerprint approval. Enabled extensions also appear in the
   Pass panel's top launcher and the macOS menu-bar menu. Design & schema: `docs/EXTENSIONS.md`.
-- **Device mirror** — a Vysor-style visor window that keeps a device screen visible while you
-  work: pick the iOS Simulator or Android emulator window (or real hardware shown through
-  QuickTime/scrcpy) and it live-mirrors into a compact always-on-top panel locked to the
-  device's aspect ratio. Menu bar → **Device mirror…**; uses ScreenCaptureKit, so macOS will
-  ask for the Screen Recording permission on first use.
+- **Attached device pane** — Vysor-style Android video and basic pointer control for physical
+  devices (USB/Wi-Fi) and Android emulators. The stream is decoded inside the running session's
+  terminal workspace instead of opening a separate window; the divider is draggable and an open
+  browser tab remains available when the device pane closes. Pass never captures a Mac window, so
+  Screen Recording permission is not required. Install the runtime once with
+  `brew install scrcpy ffmpeg`, then use the device button in a session header or menu bar →
+  **Attach device pane…**. iPhone direct streaming still requires a ReplayKit broadcaster.
 - **Mobile remote developer preview** — an outbound-only macOS gateway, Cloudflare
   Worker/Durable Object relay, and Expo client can list/create sessions, send messages, and answer
   decisions. The current shared-token pairing is explicitly development-only; device-key pairing

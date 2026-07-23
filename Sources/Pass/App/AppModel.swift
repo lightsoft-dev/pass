@@ -75,6 +75,8 @@ final class AppModel {
     private(set) var specs: SpecStore!
     private(set) var features: FeatureStore!
     private(set) var browser: BrowserStore!
+    private(set) var mirror: MirrorEngine!
+    private(set) var miniTerminals: MiniTerminalManager!
     private(set) var webViews: WebViewPool!
     private(set) var extensions: ExtensionStore!
     private(set) var extensionRuntime: ExtensionRuntime!
@@ -99,8 +101,6 @@ final class AppModel {
     @ObservationIgnored private var remoteAccountService: RemoteAccountService!
 
     weak var panelController: PanelController?
-    weak var mirrorController: MirrorWindowController?
-
     /// Set by AppDelegate — clears a session's delivered notifications.
     var clearSessionNotifications: ((String) -> Void)?
 
@@ -115,13 +115,18 @@ final class AppModel {
         specs = SpecStore()
         features = FeatureStore()
         browser = BrowserStore()
+        mirror = MirrorEngine()
+        miniTerminals = MiniTerminalManager()
         webViews = WebViewPool()
         webViews.store = browser
         // Tabs are data (BrowserStore); webviews are the pool — keep them in lockstep.
         browser.onTabOpened = { [weak self] tab in self?.webViews?.load(tab) }
         browser.onTabClosed = { [weak self] id in self?.webViews?.drop(id) }
         // Session died → its tab/webview go with it (same lifecycle as the terminal pool).
-        sessions.onReconciled = { [weak self] live in self?.browser?.pruneSessions(alive: live) }
+        sessions.onReconciled = { [weak self] live in
+            self?.browser?.pruneSessions(alive: live)
+            self?.mirror?.pruneSessions(alive: live)
+        }
         extensions = ExtensionStore()
         extensionWindows = ExtensionWindowManager(store: extensions)
         extensionRuntime = ExtensionRuntime(store: extensions, windows: extensionWindows, appModel: self)
@@ -355,9 +360,14 @@ final class AppModel {
         panelController?.toggle()
     }
 
-    /// Menu bar → the Vysor-style device mirror window (emulator / real-device screen).
+    /// Menu bar → attach the Android picker to the terminal workspace already on screen.
     func showDeviceMirror() {
-        mirrorController?.show()
+        guard let focusedSessionName else {
+            panelController?.show(preselecting: nil)
+            return
+        }
+        mirror.openPicker(for: focusedSessionName)
+        panelController?.show(preselecting: focusedSessionName)
     }
 
     func hidePanel() {
