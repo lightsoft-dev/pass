@@ -13,6 +13,10 @@ struct SettingsView: View {
     @State private var cliLinked = false
     @State private var advertiseOn = false
     @State private var showExtensionBuilder = false
+    @State private var showExtensionMarketplace = false
+    @State private var extensionRepository = ""
+    @State private var extensionSharingBusy = false
+    @State private var extensionSharingMessage: String?
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
     @AppStorage(SessionStore.restoreDefaultsKey) private var restoreSessions = true
     @AppStorage("backupOptimizeGit") private var backupOptimizeGit = true
@@ -48,6 +52,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showExtensionBuilder) {
             ExtensionBuilderView().environment(appModel)
+        }
+        .sheet(isPresented: $showExtensionMarketplace) {
+            ExtensionMarketplaceView().environment(appModel)
         }
     }
 
@@ -156,6 +163,38 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var extensionsSection: some View {
+        Section("Discover extensions") {
+            Button {
+                showExtensionMarketplace = true
+            } label: {
+                Label("Browse Extension Market…", systemImage: "shippingbox")
+            }
+            .buttonStyle(.borderedProminent)
+            TextField("Git repository URL", text: $extensionRepository)
+                .textFieldStyle(.roundedBorder)
+                .disabled(extensionSharingBusy)
+                .onSubmit { installSharedExtension() }
+            HStack {
+                Button {
+                    installSharedExtension()
+                } label: {
+                    if extensionSharingBusy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Install from Git", systemImage: "square.and.arrow.down")
+                    }
+                }
+                .disabled(extensionSharingBusy
+                          || extensionRepository.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if let extensionSharingMessage {
+                    Text(extensionSharingMessage)
+                        .font(.caption)
+                        .foregroundStyle(extensionSharingMessage.hasPrefix("Installed") ? .green : .orange)
+                }
+            }
+            Text("Browse community listings, or paste a Git repository directly. Installed code stays disabled until you review and enable it.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
         Section("Extensions") {
             let store = appModel.extensions
             let loaded = store?.loaded ?? []
@@ -209,6 +248,28 @@ struct SettingsView: View {
                     }
                 }
                 .font(.caption)
+            }
+        }
+    }
+
+    private func installSharedExtension() {
+        let repository = extensionRepository
+        extensionSharingBusy = true
+        extensionSharingMessage = nil
+        let root = appModel.extensions?.revealDirectory() ?? ExtensionStore.defaultDirectory
+        Task {
+            let result = await Task.detached {
+                ExtensionSharingService.install(repository: repository, into: root)
+            }.value
+            extensionSharingBusy = false
+            switch result {
+            case .success(let installed):
+                appModel.extensions?.prepareNewInstallation(installed.id)
+                appModel.extensions?.reload()
+                extensionRepository = ""
+                extensionSharingMessage = "Installed \(installed.name) — review it below."
+            case .failure(let error):
+                extensionSharingMessage = error.message
             }
         }
     }
@@ -550,7 +611,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .projects: return "Registered project folders"
         case .backup: return "Export project and settings bundle"
         case .agents: return "Default launch commands"
-        case .extensions: return "Installed extension scripts"
+        case .extensions: return "Browse, publish, and manage extensions"
         case .mobile: return "Remote access and device pairing"
         case .integrations: return "Hooks, CLI, and browser"
         case .system: return "Notifications and local listener"
@@ -560,6 +621,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 
 private struct SettingsSidebar: View {
     @Binding var selection: SettingsSection
+    @State private var hovered: SettingsSection?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -577,10 +639,22 @@ private struct SettingsSidebar: View {
                             if selection == section {
                                 RoundedRectangle(cornerRadius: 7)
                                     .fill(Color.accentColor.opacity(0.16))
+                            } else if hovered == section {
+                                RoundedRectangle(cornerRadius: 7)
+                                    .fill(Color.primary.opacity(0.07))
                             }
                         }
+                        .contentShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(.plain)
+                .onHover { isHovering in
+                    if isHovering {
+                        hovered = section
+                    } else if hovered == section {
+                        hovered = nil
+                    }
+                }
+                .accessibilityHint("Show \(section.title) settings")
             }
             Spacer()
         }
@@ -632,6 +706,12 @@ private struct AgentCommandRow: View {
 private struct ExtensionRow: View {
     let ext: ExtensionStore.Loaded
     @Environment(AppModel.self) private var appModel
+    @State private var remoteURL: String?
+    @State private var sharingMessage: String?
+
+    private var isUpdating: Bool {
+        appModel.extensions?.isUpdating(ext.id) ?? false
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -658,8 +738,37 @@ private struct ExtensionRow: View {
                 ForEach(ext.problems, id: \.self) { p in
                     Text("⚠ \(p)").font(.system(size: 10)).foregroundStyle(.orange)
                 }
+                if let sharingMessage {
+                    Text(sharingMessage).font(.system(size: 10))
+                        .foregroundStyle(sharingMessage.hasPrefix("Updated") ? Color.secondary : Color.orange)
+                }
             }
             Spacer()
+            Menu {
+                Button("Reveal files", systemImage: "folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([ext.directory])
+                }
+                if let remoteURL {
+                    Button("Copy share URL", systemImage: "doc.on.doc") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(remoteURL, forType: .string)
+                    }
+                    if let webURL = ExtensionSharingService.webURL(for: remoteURL) {
+                        Button("View repository", systemImage: "safari") {
+                            NSWorkspace.shared.open(webURL)
+                        }
+                    }
+                    Divider()
+                    Button("Check for updates", systemImage: "arrow.clockwise") { update() }
+                        .disabled(isUpdating)
+                } else {
+                    Text("Add a Git origin to share this extension")
+                }
+            } label: {
+                Image(systemName: isUpdating ? "arrow.clockwise" : "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
             // Binding straight into the store — a @State mirror goes stale when SwiftUI
             // reuses this row for a different extension after a Reload reorders the list.
             Toggle("", isOn: Binding(
@@ -667,7 +776,54 @@ private struct ExtensionRow: View {
                 set: { appModel.extensions?.setEnabled(ext.id, $0) }
             ))
             .toggleStyle(.switch).controlSize(.mini).labelsHidden()
-            .disabled(!ext.isValid)
+            .disabled(!ext.isValid || isUpdating)
+        }
+        .task(id: ext.fingerprint) {
+            remoteURL = await Task.detached {
+                ExtensionSharingService.remoteURL(directory: ext.directory)
+            }.value
+        }
+    }
+
+    private func update() {
+        guard let store = appModel.extensions,
+              let updateSession = store.beginUpdate(ext.id) else {
+            sharingMessage = "An update is already in progress"
+            return
+        }
+        sharingMessage = nil
+        Task {
+            let check = await Task.detached {
+                ExtensionSharingService.checkForUpdate(directory: ext.directory)
+            }.value
+            switch check {
+            case .success(.current):
+                store.finishUpdate(updateSession, didApply: false)
+                sharingMessage = "Already up to date"
+            case .success(.available(let revision)):
+                // Fetching only changed .git. Stop executable content immediately before the
+                // fast-forward changes reviewed files in the working tree.
+                guard store.prepareUpdate(updateSession) else {
+                    sharingMessage = "Files changed while checking — review before enabling"
+                    return
+                }
+                let result = await Task.detached {
+                    ExtensionSharingService.applyUpdate(directory: ext.directory, revision: revision)
+                }.value
+                switch result {
+                case .success:
+                    store.finishUpdate(updateSession, didApply: true)
+                    sharingMessage = "Updated — review before enabling"
+                case .failure(let error):
+                    let completion = store.finishUpdate(updateSession, didApply: false)
+                    sharingMessage = completion == .changed
+                        ? "\(error.message) Files may have changed; review before enabling."
+                        : error.message
+                }
+            case .failure(let error):
+                store.finishUpdate(updateSession, didApply: false)
+                sharingMessage = error.message
+            }
         }
     }
 }

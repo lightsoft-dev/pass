@@ -216,6 +216,8 @@ enum RemoteAccountError: Error, LocalizedError {
 @MainActor
 final class RemoteAccountService: NSObject, ASWebAuthenticationPresentationContextProviding {
     private var authenticationSession: ASWebAuthenticationSession?
+    private var desktopRefreshTask: Task<RemoteDesktopRegistration, Error>?
+    private var desktopRefreshRevision = 0
 
     func signInAndRegisterDesktop(
         configuration: RemotePublicConfiguration,
@@ -286,6 +288,7 @@ final class RemoteAccountService: NSObject, ASWebAuthenticationPresentationConte
             relayURL: response.relayURL,
             credentials: response.credentials
         )
+        invalidateDesktopRefresh()
         try RemoteCredentialStore.saveDesktopRegistration(registration)
         return registration
     }
@@ -305,6 +308,11 @@ final class RemoteAccountService: NSObject, ASWebAuthenticationPresentationConte
     func refreshDesktopRegistrationIfNeeded(
         margin: TimeInterval = 60
     ) async throws -> RemoteDesktopRegistration {
+        if let desktopRefreshTask {
+            let registration = try await desktopRefreshTask.value
+            try Task.checkCancellation()
+            return registration
+        }
         guard let registration = try RemoteCredentialStore.loadDesktopRegistration() else {
             throw RemoteAccountError.configurationUnavailable
         }
@@ -312,21 +320,39 @@ final class RemoteAccountService: NSObject, ASWebAuthenticationPresentationConte
            expiration > Date().addingTimeInterval(margin) {
             return registration
         }
-        var request = URLRequest(url: registration.relayURL.appending(path: "v2/token/refresh"))
-        request.httpMethod = "POST"
-        request.setValue(
-            "Bearer \(registration.credentials.refreshToken)",
-            forHTTPHeaderField: "Authorization"
-        )
-        let response: CredentialResponse = try await perform(request)
-        let refreshed = RemoteDesktopRegistration(
-            id: registration.id,
-            name: registration.name,
-            relayURL: registration.relayURL,
-            credentials: response.credentials
-        )
-        try RemoteCredentialStore.saveDesktopRegistration(refreshed)
-        return refreshed
+        desktopRefreshRevision &+= 1
+        let revision = desktopRefreshRevision
+        let task = Task { @MainActor in
+            var request = URLRequest(url: registration.relayURL.appending(path: "v2/token/refresh"))
+            request.httpMethod = "POST"
+            request.setValue(
+                "Bearer \(registration.credentials.refreshToken)",
+                forHTTPHeaderField: "Authorization"
+            )
+            let response: CredentialResponse = try await self.perform(request)
+            // Refresh credentials rotate once. Signing out or replacing the desktop registration
+            // while this request was in flight must win over its late response.
+            try Task.checkCancellation()
+            guard self.desktopRefreshRevision == revision else { throw CancellationError() }
+            let refreshed = RemoteDesktopRegistration(
+                id: registration.id,
+                name: registration.name,
+                relayURL: registration.relayURL,
+                credentials: response.credentials
+            )
+            try RemoteCredentialStore.saveDesktopRegistration(refreshed)
+            return refreshed
+        }
+        desktopRefreshTask = task
+        do {
+            let refreshed = try await task.value
+            if desktopRefreshRevision == revision { desktopRefreshTask = nil }
+            try Task.checkCancellation()
+            return refreshed
+        } catch {
+            if desktopRefreshRevision == revision { desktopRefreshTask = nil }
+            throw error
+        }
     }
 
     func revokeDesktop(configuration: RemotePublicConfiguration) async throws {
@@ -352,8 +378,15 @@ final class RemoteAccountService: NSObject, ASWebAuthenticationPresentationConte
     }
 
     func clearLocalCredentials() throws {
+        invalidateDesktopRefresh()
         try RemoteCredentialStore.deleteDesktopRegistration()
         try RemoteCredentialStore.deleteUserSession()
+    }
+
+    private func invalidateDesktopRefresh() {
+        desktopRefreshRevision &+= 1
+        desktopRefreshTask?.cancel()
+        desktopRefreshTask = nil
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {

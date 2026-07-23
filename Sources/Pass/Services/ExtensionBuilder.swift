@@ -103,6 +103,9 @@ final class ExtensionBuilder {
             return .failure("An extension folder named '\(id)' already exists.")
         }
 
+        // Persist the disabled reservation before the folder becomes visible. A crash or a fast
+        // Reload while the agent is writing must never let this id inherit an old approval.
+        store.prepareNewInstallation(id)
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: false)
         } catch {

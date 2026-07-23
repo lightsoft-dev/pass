@@ -41,6 +41,9 @@ struct SessionDetailView: View {
                 Text(session.displayName).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                 Spacer()
                 attentionBadge
+                Button { appModel.mirror.openPicker(for: session.name) } label: {
+                    Image(systemName: "iphone.and.arrow.forward").foregroundStyle(.secondary)
+                }.buttonStyle(.plain).help("Attach physical device or emulator pane")
                 Button { appModel.attach(session) } label: {
                     Image(systemName: "macwindow.on.rectangle").foregroundStyle(.secondary)
                 }.buttonStyle(.plain).help("Open in Ghostty (⌘⏎)")
@@ -68,6 +71,7 @@ struct SessionDetailView: View {
             Text("drag select · ⌘C copy · ⌥drag tmux").foregroundStyle(.tertiary)
             Spacer()
             Text("⌘B  browser").foregroundStyle(.tertiary)
+            Text("device pane in header").foregroundStyle(.tertiary)
             Text("⌘[ or ⌘W  back to list").foregroundStyle(.secondary)
             Text("⌘⏎  open in Ghostty").foregroundStyle(.tertiary)
         }

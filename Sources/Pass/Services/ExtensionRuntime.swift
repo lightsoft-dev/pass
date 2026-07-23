@@ -90,7 +90,8 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
             Task { [weak self] in
                 let err = await self?.execute(rule.run, extensionId: ext.id,
                                               permissions: Set(ext.manifest.permissions ?? []),
-                                              directory: ext.directory, slug: "rule",
+                                              directory: ext.directory, fingerprint: ext.fingerprint,
+                                              slug: "rule",
                                               label: "\(ext.manifest.name): \(event)",
                                               context: ctx, session: session)
                 self?.log(ext.id, "\(event) → \(rule.run.summary)", ok: err == nil, detail: err)
@@ -112,6 +113,7 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
         let ctx = context(event: nil, kind: nil, session: ctxSession, extra: extra)
         let err = await execute(item.command.run, extensionId: item.extensionId,
                                 permissions: item.permissions, directory: item.directory,
+                                fingerprint: item.fingerprint,
                                 slug: item.command.id, label: item.command.title,
                                 context: ctx, session: ctxSession)
         log(item.extensionId, "\(item.token) → \(item.command.run.summary)", ok: err == nil, detail: err)
@@ -134,7 +136,8 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
         let ctx = context(event: nil, kind: nil, session: session, extra: extra)
         let error = await execute(action, extensionId: extensionId,
                                   permissions: Set(ext.manifest.permissions ?? []),
-                                  directory: ext.directory, slug: actionId,
+                                  directory: ext.directory, fingerprint: ext.fingerprint,
+                                  slug: actionId,
                                   label: "\(ext.manifest.name): \(actionId)",
                                   context: ctx, session: session)
         log(extensionId, "action \(actionId) → \(action.summary)",
@@ -225,8 +228,14 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
     /// Run one action. Returns nil on success, else a short error message.
     private func execute(_ action: ExtensionManifest.Action, extensionId: String,
                          permissions: Set<String>, directory: URL,
+                         fingerprint: String,
                          slug: String, label: String,
                          context ctx: [String: String], session: Session?) async -> String? {
+        guard let lease = store.beginExecution(
+            extensionId: extensionId, fingerprint: fingerprint, directory: directory)
+        else { return "extension is disabled or changed" }
+        defer { store.endExecution(lease) }
+
         // Enforcement, not just validation: undeclared capability → refuse, whatever the manifest
         // said elsewhere. This is the promise the install/enable review makes to the user.
         if let missing = action.requiredPermissions.sorted().first(where: { !permissions.contains($0) }) {
@@ -241,7 +250,8 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
             }
             let args = (action.args ?? []).map { ExtensionTemplate.expand($0, context: ctx) }
             if action.terminal == true {
-                return await runInTerminal(url: url, args: args, slug: slug, label: label, session: session)
+                return await runInTerminal(url: url, args: args, slug: slug, label: label,
+                                           session: session, lease: lease)
             }
             let payload = try? JSONSerialization.data(withJSONObject: ctx, options: [.sortedKeys])
             let timeout = TimeInterval(min(max(action.timeoutSeconds ?? 30, 1), 600))
@@ -294,8 +304,9 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
     /// `; exit` closes the shell (and the session) when the script finishes, so spent report
     /// sessions never pile up in the home feed.
     private func runInTerminal(url: URL, args: [String], slug: String, label: String,
-                               session: Session?) async -> String? {
+                               session: Session?, lease: ExtensionStore.ExecutionLease) async -> String? {
         guard let appModel, let sessions = appModel.sessions else { return "not ready" }
+        guard !sessions.tmuxMissing else { return "tmux is unavailable" }
         let invocation = FileManager.default.isExecutableFile(atPath: url.path)
             ? Shell.singleQuoted(url.path)
             : "/bin/bash " + Shell.singleQuoted(url.path)
@@ -303,8 +314,15 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
         // Session-context commands run in the project; global ones in the extension folder.
         // Never remember either as a project — a report session is not a workspace.
         let cwd = session?.projectRoot ?? url.deletingLastPathComponent().path
-        let name = await sessions.createCommandSession(projectDir: cwd, slug: slug,
-                                                       command: command, rememberProject: false)
+        guard let name = await sessions.createCommandSession(
+            projectDir: cwd, slug: slug, command: command, rememberProject: false,
+            beforeLaunch: { [store] name in
+                store.promoteExecution(lease, toTerminalSession: name)
+            },
+            launchFinished: { [store] name in
+                store.finishTerminalLaunch(name)
+            })
+        else { return "could not reserve terminal execution" }
         sessions.setAlias(name, "⚙ \(label)")
         // Only steal the route while the panel is up (palette commands) — a background rule
         // must not yank the UI around.
