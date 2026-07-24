@@ -1,6 +1,10 @@
 import AppKit
 import WebKit
 
+enum BrowserZoomAction {
+    case zoomIn, zoomOut, reset
+}
+
 /// WKWebView that behaves inside the non-activating, movable-by-background summon panel:
 /// first-mouse clicks must reach the page (the app is usually "inactive" while the panel is
 /// used — same rule as IMETerminalView), and drags on the page must not move the window.
@@ -69,6 +73,20 @@ final class WebViewPool {
     func peek(_ id: UUID?) -> WKWebView? {
         guard let id else { return nil }
         return views[id]
+    }
+
+    /// Chrome-compatible page zoom, kept on the live tab's WKWebView. Page zoom changes layout
+    /// without scaling the browser toolbar and survives while the pooled webview is alive.
+    func zoom(_ id: UUID, action: BrowserZoomAction) {
+        guard let webView = views[id] else { return }
+        switch action {
+        case .zoomIn:
+            webView.pageZoom = min(3.0, roundedZoom(webView.pageZoom + 0.1))
+        case .zoomOut:
+            webView.pageZoom = max(0.5, roundedZoom(webView.pageZoom - 0.1))
+        case .reset:
+            webView.pageZoom = 1.0
+        }
     }
 
     func drop(_ id: UUID) {
@@ -142,6 +160,26 @@ final class WebViewPool {
         }
     }
 
+    /// Copies the selected local Chrome profile's cookies into Pass's own WebKit data store.
+    /// This is a one-time snapshot; Pass never points WebKit at or mutates Chrome's profile.
+    static func importChromeProfile(_ profile: ChromeProfile) async throws -> ChromeCookieImportResult {
+        let extraction = try await Task.detached {
+            try ChromeProfileImportService.extractCookies(from: profile)
+        }.value
+        let cookieStore = WKWebsiteDataStore.default().httpCookieStore
+        var imported = 0
+        for record in extraction.cookies {
+            guard let cookie = record.httpCookie else { continue }
+            await withCheckedContinuation { continuation in
+                cookieStore.setCookie(cookie) {
+                    continuation.resume()
+                }
+            }
+            imported += 1
+        }
+        return ChromeCookieImportResult(imported: imported, skipped: extraction.skipped)
+    }
+
     // MARK: internals
 
     fileprivate func mirrorFromWebView(_ id: UUID) {
@@ -162,6 +200,10 @@ final class WebViewPool {
     private func touch(_ id: UUID) {
         order.removeAll { $0 == id }
         order.append(id)
+    }
+
+    private func roundedZoom(_ value: CGFloat) -> CGFloat {
+        (value * 10).rounded() / 10
     }
 }
 

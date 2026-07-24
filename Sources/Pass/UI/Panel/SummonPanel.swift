@@ -25,6 +25,8 @@ enum PanelNavKey {
     case focusAddress
     /// ⌘⇧B — expand the browser over the whole workspace / back to the split.
     case expandBrowser
+    /// ⌘+/⌘-/⌘0 — zoom the visible embedded browser page.
+    case browserZoomIn, browserZoomOut, browserZoomReset
 }
 
 struct PanelNavEvent {
@@ -99,6 +101,21 @@ final class SummonPanel: NSPanel {
             let ch = event.charactersIgnoringModifiers?.lowercased()
             let code = event.keyCode
             func key(_ letter: String, _ kc: UInt16) -> Bool { ch == letter || code == kc }
+
+            // Browser zoom follows the standard macOS/Chrome chords. Match physical key
+            // codes as well so these still work with a non-Latin input source.
+            if key("-", 27),
+               onNavigate?(PanelNavEvent(key: .browserZoomOut, command: true, option: false)) == true {
+                return true
+            }
+            if key("=", 24) || key("+", 24),
+               onNavigate?(PanelNavEvent(key: .browserZoomIn, command: true, option: false)) == true {
+                return true
+            }
+            if key("0", 29),
+               onNavigate?(PanelNavEvent(key: .browserZoomReset, command: true, option: false)) == true {
+                return true
+            }
 
             // ⌘[ or ⌘W step back to the list (the embedded terminal owns Esc, so we can't
             // use it here). ⌘W is intercepted so it never closes the whole panel window.

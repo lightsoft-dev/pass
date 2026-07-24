@@ -67,6 +67,27 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
         )
     }
 
+    func testMiniTerminalRecognizesPasteByPhysicalKeyWithKoreanInput() throws {
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "ㅍ",
+            charactersIgnoringModifiers: "ㅍ",
+            isARepeat: false,
+            keyCode: 9
+        ))
+
+        let selector = try XCTUnwrap(MiniTerminalEditingShortcut.selector(for: event))
+        XCTAssertEqual(
+            NSStringFromSelector(selector),
+            NSStringFromSelector(#selector(NSText.paste(_:)))
+        )
+    }
+
     private func mouseEvent(type: NSEvent.EventType, x: CGFloat, y: CGFloat) throws -> NSEvent {
         try XCTUnwrap(NSEvent.mouseEvent(
             with: type,

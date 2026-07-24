@@ -60,6 +60,11 @@ struct MirrorView: View {
                         .background(.quaternary, in: Capsule())
                 }
             }
+            if let inputError = engine.inputError {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(inputError)
+            }
             Spacer()
             if case .pickingDevice = engine.state {
                 if engine.isRefreshing { ProgressView().controlSize(.mini) }
@@ -209,22 +214,23 @@ struct MirrorView: View {
         let shown = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
         let origin = CGPoint(x: (container.width - shown.width) / 2,
                              y: (container.height - shown.height) / 2)
-        return Color.clear
+        return MirrorPointerOverlay { start, end in
+            let normalizedStart = CGPoint(
+                x: start.x / max(1, shown.width),
+                y: start.y / max(1, shown.height)
+            )
+            let normalizedEnd = CGPoint(
+                x: end.x / max(1, shown.width),
+                y: end.y / max(1, shown.height)
+            )
+            if hypot(end.x - start.x, end.y - start.y) < 8 {
+                engine.tap(normalized: normalizedEnd)
+            } else {
+                engine.swipe(normalizedFrom: normalizedStart, to: normalizedEnd)
+            }
+        }
             .frame(width: shown.width, height: shown.height)
             .position(x: origin.x + shown.width / 2, y: origin.y + shown.height / 2)
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0)
-                .onEnded { value in
-                    let start = CGPoint(x: value.startLocation.x / scale,
-                                        y: value.startLocation.y / scale)
-                    let end = CGPoint(x: value.location.x / scale,
-                                      y: value.location.y / scale)
-                    if hypot(end.x - start.x, end.y - start.y) < 8 {
-                        engine.tap(x: Int(end.x), y: Int(end.y))
-                    } else {
-                        engine.swipe(from: start, to: end)
-                    }
-                })
     }
 
     private func failed(_ message: String) -> some View {
@@ -261,5 +267,39 @@ struct MirrorView: View {
         case .network: return "wifi"
         case .emulator: return "apps.iphone"
         }
+    }
+}
+
+private struct MirrorPointerOverlay: NSViewRepresentable {
+    let onGesture: (CGPoint, CGPoint) -> Void
+
+    func makeNSView(context: Context) -> MirrorPointerNSView {
+        let view = MirrorPointerNSView()
+        view.onGesture = onGesture
+        return view
+    }
+
+    func updateNSView(_ view: MirrorPointerNSView, context: Context) {
+        view.onGesture = onGesture
+    }
+}
+
+private final class MirrorPointerNSView: NSView {
+    var onGesture: ((CGPoint, CGPoint) -> Void)?
+    private var startPoint: CGPoint?
+
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        startPoint = convert(event.locationInWindow, from: nil)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let startPoint else { return }
+        self.startPoint = nil
+        onGesture?(startPoint, convert(event.locationInWindow, from: nil))
     }
 }

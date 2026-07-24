@@ -75,6 +75,29 @@ final class MirrorDeviceTests: XCTestCase {
         XCTAssertNil(MirrorNetworkAddress.normalized("hello world"))
     }
 
+    func testADBDisplaySizePrefersOverrideAndMapsNormalizedInput() {
+        let output = """
+        Physical size: 1080x2340
+        Override size: 720x1560
+        """
+        let size = MirrorADBDisplaySizeParser.parse(output)
+        XCTAssertEqual(size, CGSize(width: 720, height: 1560))
+
+        let portrait = MirrorInputCoordinates.point(
+            normalized: CGPoint(x: 0.5, y: 0.25),
+            displaySize: size!,
+            videoIsLandscape: false
+        )
+        XCTAssertEqual(portrait, CGPoint(x: 360, y: 390))
+
+        let landscape = MirrorInputCoordinates.point(
+            normalized: CGPoint(x: 0.5, y: 0.25),
+            displaySize: size!,
+            videoIsLandscape: true
+        )
+        XCTAssertEqual(landscape, CGPoint(x: 780, y: 180))
+    }
+
     func testJPEGStreamParserReturnsNewestCompleteFrameAcrossChunks() {
         let parser = JPEGFrameParser()
         XCTAssertNil(parser.append(Data([0xff])))

@@ -110,6 +110,10 @@ final class OnboardingModel {
         }.count
     }
 
+    var projectDirectories: [String] {
+        appModel.projects?.projectDirectories ?? []
+    }
+
     func scan() {
         guard !isScanning else { return }
         isScanning = true
@@ -171,6 +175,16 @@ final class OnboardingModel {
     func linkCLI() {
         CLIInstaller.refreshSymlink()
         cliLinked = CLIInstaller.isLinked
+    }
+
+    func chooseProjectDirectories() {
+        let directories = ProjectPicker.pick()
+        guard !directories.isEmpty else { return }
+        appModel.addProjects(dirs: directories)
+    }
+
+    func removeProjectDirectory(_ path: String) {
+        appModel.projects?.forgetDirectory(path: path)
     }
 
     func openGuide(for kind: OnboardingDependency.Kind) {
