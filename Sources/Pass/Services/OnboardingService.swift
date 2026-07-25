@@ -206,7 +206,13 @@ final class OnboardingModel {
     func finish() {
         UserDefaults.standard.set(true, forKey: OnboardingPreference.completedKey)
         close()
-        appModel.summon()
+        // Summon on the next runloop turn, after the walkthrough window has actually left the
+        // screen: activating the app while it is still closing re-orders it front, so both
+        // windows stay up. `openPanel` (not `summon`) so a panel the user already opened with
+        // the shortcut during onboarding is raised rather than toggled away.
+        DispatchQueue.main.async { [appModel] in
+            appModel.openPanel()
+        }
     }
 
     private func open(_ url: URL) {
