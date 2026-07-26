@@ -22,8 +22,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         window.center()
         window.delegate = self
 
-        let model = OnboardingModel(appModel: appModel) { [weak window] in
-            window?.close()
+        let model = OnboardingModel(appModel: appModel) { [weak self] in
+            self?.dismissWindow()
         }
         onboardingModel = model
         window.contentView = NSHostingView(rootView: OnboardingView(model: model))
@@ -36,10 +36,28 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 
     func show() {
         guard let window else { return }
+        // Already up (launch check + menu bar + Settings can all ask): just raise it. Restarting
+        // here would yank a walkthrough in progress back to the welcome step.
+        guard !window.isVisible else {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
         onboardingModel.restart()
         window.center()
         showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Take the window off screen for good. `orderOut` first: `close()` alone can be deferred
+    /// when it runs from the window's own event handling (the "Open Pass" button lives in this
+    /// window's SwiftUI content), which leaves the walkthrough sitting next to the panel that
+    /// Open Pass just summoned. The window is reused (`isReleasedWhenClosed = false`), so
+    /// closing it only tears down the on-screen state, not the controller.
+    func dismissWindow() {
+        guard let window, window.isVisible else { return }
+        window.orderOut(nil)
+        window.close()
     }
 }
