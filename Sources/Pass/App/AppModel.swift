@@ -562,8 +562,9 @@ final class AppModel {
     var isProjectSyncing = false
 
     /// Register projects from picked folders. For each folder: if it's a git repo, register
-    /// it; otherwise scan its immediate children and register every repo found. Handles
-    /// single-project, parent-folder, and multi-select in one flow.
+    /// it; otherwise scan its immediate children and register every repo found. A regular
+    /// folder with no child repositories is itself a project, so Git is never required.
+    /// Handles single-project, parent-folder, and multi-select in one flow.
     func addProjects(dirs: [String]) {
         guard !dirs.isEmpty else { return }
         Task { @MainActor in
@@ -581,7 +582,7 @@ final class AppModel {
             if added == 0 {
                 lastProjectAddMessage = addedDirectories == 0
                     ? "Already tracking those directories."
-                    : "Directory added; no git repositories found yet."
+                    : "Directory added, but no available project folders were found."
             } else {
                 lastProjectAddMessage = "Tracking \(addedDirectories) new director\(addedDirectories == 1 ? "y" : "ies"); found \(added) project\(added == 1 ? "" : "s")."
             }
@@ -691,10 +692,16 @@ final class AppModel {
         }
     }
 
-    private static func resolveProjectRoots(under dir: String) async -> [String] {
+    static func resolveProjectRoots(under dir: String) async -> [String] {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let fm = FileManager.default
+                var isDirectory: ObjCBool = false
+                guard fm.fileExists(atPath: dir, isDirectory: &isDirectory),
+                      isDirectory.boolValue else {
+                    cont.resume(returning: [])
+                    return
+                }
                 // The picked folder is itself a repo → register just it.
                 if let id = GitIdentityService.identity(for: dir) {
                     cont.resume(returning: [id.projectRoot]); return
@@ -707,6 +714,13 @@ final class AppModel {
                     var isDir: ObjCBool = false
                     guard fm.fileExists(atPath: child, isDirectory: &isDir), isDir.boolValue else { continue }
                     if let id = GitIdentityService.identity(for: child) { roots.insert(id.projectRoot) }
+                }
+                // With no repositories to discover, the selected folder is the project.
+                // This also keeps directory registration useful on systems without Git.
+                if roots.isEmpty {
+                    roots.insert(
+                        URL(fileURLWithPath: dir, isDirectory: true).standardizedFileURL.path
+                    )
                 }
                 cont.resume(returning: Array(roots).sorted())
             }

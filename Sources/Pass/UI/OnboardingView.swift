@@ -223,7 +223,7 @@ struct OnboardingView: View {
                 .font(.custom("Avenir Next", size: 28).weight(.heavy))
                 .foregroundStyle(paper)
                 .padding(.top, 8)
-            Text("Choose project folders or a parent folder. Pass finds Git repositories one level inside and keeps the list in sync.")
+            Text("Choose any project folder—Git is optional—or a parent folder. Pass finds Git repositories one level inside and keeps the list in sync.")
                 .font(.custom("Avenir Next", size: 13))
                 .foregroundStyle(.secondary)
                 .lineSpacing(3)
