@@ -152,7 +152,13 @@ final class AppModel {
         }
         extensions = ExtensionStore()
         extensionWindows = ExtensionWindowManager(store: extensions)
-        extensionRuntime = ExtensionRuntime(store: extensions, windows: extensionWindows, appModel: self)
+        let extensionPassAPI = ExtensionPassAPIService(accountService: remoteAccountService)
+        extensionRuntime = ExtensionRuntime(
+            store: extensions,
+            windows: extensionWindows,
+            passAPI: extensionPassAPI,
+            appModel: self
+        )
         extensionBuilder = ExtensionBuilder(store: extensions, sessions: sessions)
         extensionWindows.runtime = extensionRuntime
         extensions.onReload = { [weak self] in self?.extensionWindows?.closeAll() }

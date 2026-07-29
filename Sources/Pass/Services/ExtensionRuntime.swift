@@ -26,6 +26,7 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
 
     private let store: ExtensionStore
     private let windows: ExtensionWindowManager
+    private let passAPI: ExtensionPassAPIService
     private weak var appModel: AppModel?
     private var eventSequence: UInt64 = 0
 
@@ -34,9 +35,11 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
     /// notification clearing) — extensions only get real pending→resolved transitions.
     private var pendingSessions: Set<String> = []
 
-    init(store: ExtensionStore, windows: ExtensionWindowManager, appModel: AppModel) {
+    init(store: ExtensionStore, windows: ExtensionWindowManager,
+         passAPI: ExtensionPassAPIService, appModel: AppModel) {
         self.store = store
         self.windows = windows
+        self.passAPI = passAPI
         self.appModel = appModel
     }
 
@@ -93,7 +96,7 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
                                               directory: ext.directory, fingerprint: ext.fingerprint,
                                               slug: "rule",
                                               label: "\(ext.manifest.name): \(event)",
-                                              context: ctx, session: session)
+                                              context: ctx, session: session).error
                 self?.log(ext.id, "\(event) → \(rule.run.summary)", ok: err == nil, detail: err)
             }
         }
@@ -115,7 +118,7 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
                                 permissions: item.permissions, directory: item.directory,
                                 fingerprint: item.fingerprint,
                                 slug: item.command.id, label: item.command.title,
-                                context: ctx, session: ctxSession)
+                                context: ctx, session: ctxSession).error
         log(item.extensionId, "\(item.token) → \(item.command.run.summary)", ok: err == nil, detail: err)
         return err
     }
@@ -124,25 +127,29 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
     /// UI input becomes `${input.key}` template values; `sessionName` optionally supplies the
     /// session context required by sendText/session templates.
     func runNamedAction(extensionId: String, actionId: String,
-                        input: [String: String]) async -> String? {
-        guard let ext = store.activeExtension(id: extensionId) else { return "extension is disabled" }
+                        input: [String: String]) async -> ExtensionActionResult {
+        guard let ext = store.activeExtension(id: extensionId) else {
+            return .failure("extension is disabled")
+        }
         guard let action = ext.manifest.contributes?.actions?[actionId] else {
-            return "unknown action \"\(actionId)\""
+            return .failure("unknown action \"\(actionId)\"")
         }
         let session = input["sessionName"].flatMap { appModel?.sessions?.session(named: $0) }
-        if action.sendText != nil, session == nil { return "action needs input.sessionName" }
+        if action.sendText != nil, session == nil {
+            return .failure("action needs input.sessionName")
+        }
         var extra = ["action.id": actionId]
         for (key, value) in input { extra["input." + key] = value }
         let ctx = context(event: nil, kind: nil, session: session, extra: extra)
-        let error = await execute(action, extensionId: extensionId,
-                                  permissions: Set(ext.manifest.permissions ?? []),
-                                  directory: ext.directory, fingerprint: ext.fingerprint,
-                                  slug: actionId,
-                                  label: "\(ext.manifest.name): \(actionId)",
-                                  context: ctx, session: session)
+        let result = await execute(action, extensionId: extensionId,
+                                   permissions: Set(ext.manifest.permissions ?? []),
+                                   directory: ext.directory, fingerprint: ext.fingerprint,
+                                   slug: actionId,
+                                   label: "\(ext.manifest.name): \(actionId)",
+                                   context: ctx, session: session)
         log(extensionId, "action \(actionId) → \(action.summary)",
-            ok: error == nil, detail: error)
-        return error
+            ok: result.error == nil, detail: result.error)
+        return result
     }
 
     /// Read-only state exposed only when a window declared `session:read`.
@@ -225,50 +232,66 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
 
     // MARK: Execution
 
-    /// Run one action. Returns nil on success, else a short error message.
+    /// Run one action and return either a JSON-safe payload or a short error message.
     private func execute(_ action: ExtensionManifest.Action, extensionId: String,
                          permissions: Set<String>, directory: URL,
                          fingerprint: String,
                          slug: String, label: String,
-                         context ctx: [String: String], session: Session?) async -> String? {
+                         context ctx: [String: String],
+                         session: Session?) async -> ExtensionActionResult {
         guard let lease = store.beginExecution(
             extensionId: extensionId, fingerprint: fingerprint, directory: directory)
-        else { return "extension is disabled or changed" }
+        else { return .failure("extension is disabled or changed") }
         defer { store.endExecution(lease) }
 
         // Enforcement, not just validation: undeclared capability → refuse, whatever the manifest
         // said elsewhere. This is the promise the install/enable review makes to the user.
         if let missing = action.requiredPermissions.sorted().first(where: { !permissions.contains($0) }) {
-            return "blocked — permission \"\(missing)\" not declared"
+            return .failure("blocked — permission \"\(missing)\" not declared")
         }
 
         if action.script != nil {
             let url: URL
             switch action.resolveScript(in: directory) { // same resolver validation uses
-            case .failure(let error): return error.description
+            case .failure(let error): return .failure(error.description)
             case .success(let resolved): url = resolved
             }
             let args = (action.args ?? []).map { ExtensionTemplate.expand($0, context: ctx) }
             if action.terminal == true {
-                return await runInTerminal(url: url, args: args, slug: slug, label: label,
-                                           session: session, lease: lease)
+                if let error = await runInTerminal(
+                    url: url, args: args, slug: slug, label: label,
+                    session: session, lease: lease
+                ) {
+                    return .failure(error)
+                }
+                return .ok
             }
             let payload = try? JSONSerialization.data(withJSONObject: ctx, options: [.sortedKeys])
             let timeout = TimeInterval(min(max(action.timeoutSeconds ?? 30, 1), 600))
             let r = await Self.runScript(url: url, args: args, cwd: directory.path,
                                          stdin: payload, timeout: timeout)
-            if r.ok { return nil }
+            if r.ok {
+                guard action.returns == "json" else { return .ok }
+                let data = Data(r.stdout.utf8)
+                guard data.count <= 1_048_576,
+                      let payload = try? JSONSerialization.jsonObject(
+                        with: data, options: [.fragmentsAllowed]
+                      ) else {
+                    return .failure("script did not return valid JSON")
+                }
+                return .success(payload)
+            }
             let tail = r.stderr.trimmingCharacters(in: .whitespacesAndNewlines).suffix(200)
-            return "exit \(r.code)" + (tail.isEmpty ? "" : ": \(tail)")
+            return .failure("exit \(r.code)" + (tail.isEmpty ? "" : ": \(tail)"))
         }
 
         if let text = action.sendText {
-            guard let session else { return "needs a session" }
-            guard let appModel else { return "not ready" }
+            guard let session else { return .failure("needs a session") }
+            guard let appModel else { return .failure("not ready") }
             switch await appModel.reply(to: session.name, text: ExtensionTemplate.expand(text, context: ctx)) {
-            case .delivered: return nil
-            case .refusedShell: return "\(session.displayName): agent not running"
-            case .error(let message): return message
+            case .delivered: return .ok
+            case .refusedShell: return .failure("\(session.displayName): agent not running")
+            case .error(let message): return .failure(message)
             }
         }
 
@@ -279,25 +302,40 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
                 session: "ext:" + extensionId, kind: "extension-" + UUID().uuidString,
                 title: ExtensionTemplate.expand(n.title, context: ctx),
                 body: ExtensionTemplate.expand(n.body ?? "", context: ctx), sound: false)
-            return nil
+            return .ok
         }
 
         if let raw = action.openURL {
             let expanded = ExtensionTemplate.expand(raw, context: ctx)
-            guard let u = URL(string: expanded) else { return "bad URL: \(expanded)" }
+            guard let u = URL(string: expanded) else {
+                return .failure("bad URL: \(expanded)")
+            }
             NSWorkspace.shared.open(u)
-            return nil
+            return .ok
         }
 
         if let windowId = action.openWindow {
-            guard let ext = store.activeExtension(id: extensionId) else { return "extension is disabled" }
-            guard let window = ext.manifest.contributes?.windows?.first(where: { $0.id == windowId }) else {
-                return "unknown window \"\(windowId)\""
+            guard let ext = store.activeExtension(id: extensionId) else {
+                return .failure("extension is disabled")
             }
-            return windows.open(extension: ext, window: window)
+            guard let window = ext.manifest.contributes?.windows?.first(where: { $0.id == windowId }) else {
+                return .failure("unknown window \"\(windowId)\"")
+            }
+            if let error = windows.open(extension: ext, window: window) {
+                return .failure(error)
+            }
+            return .ok
         }
 
-        return "action has nothing to run"
+        if let api = action.passAPI {
+            do {
+                return .success(try await passAPI.request(api, context: ctx))
+            } catch {
+                return .failure(error.localizedDescription)
+            }
+        }
+
+        return .failure("action has nothing to run")
     }
 
     /// Terminal-mode script: run it in a visible tmux command session and open it in the panel.

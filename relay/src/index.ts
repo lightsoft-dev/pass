@@ -8,6 +8,7 @@ import {
 import { handleControlRequest } from "./control";
 import { handleFeedbackRequest } from "./feedback";
 import { handleMarketplaceRequest } from "./marketplace";
+import { handleUsageRequest } from "./usage";
 
 import {
   MAX_FRAME_BYTES,
@@ -1034,6 +1035,8 @@ export default {
     if (feedbackResponse !== null) return feedbackResponse;
     const marketplaceResponse = await handleMarketplaceRequest(request, env);
     if (marketplaceResponse !== null) return marketplaceResponse;
+    const usageResponse = await handleUsageRequest(request, env);
+    if (usageResponse !== null) return usageResponse;
     const controlResponse = await handleControlRequest(request, env);
     if (controlResponse !== null) return controlResponse;
     if (url.pathname !== "/connect") {

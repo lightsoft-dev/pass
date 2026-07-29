@@ -39,6 +39,7 @@ let package = Package(
                 "Services/AttachService.swift",
                 "Services/ChromeProfileImportService.swift",
                 "Services/ExtensionRuntime.swift",
+                "Services/ExtensionPassAPIService.swift",
                 "Services/HotkeyService.swift",
                 "Services/LoginItemService.swift",
                 "Services/NotificationService.swift",
@@ -69,6 +70,8 @@ let package = Package(
                 "CLIAPITests.swift",
                 // Tests AppKit UI mirror types, excluded from the portable Pass target.
                 "MirrorDeviceTests.swift",
+                // Tests the macOS Keychain-backed extension API bridge, excluded above.
+                "ExtensionPassAPIServiceTests.swift",
                 // Tests SwiftUI/AppKit terminal views, excluded from the portable Pass target.
                 "TerminalMouseInteractionPolicyTests.swift",
             ]

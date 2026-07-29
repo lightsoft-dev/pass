@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pass Usage League</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="track" aria-hidden="true"></div>
+    <main>
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">PASS / USAGE LEAGUE · SEASON 01</p>
+          <h1>Token<br><i>Standings</i></h1>
+        </div>
+        <div class="period-switch" role="group" aria-label="랭킹 기간">
+          <button class="period is-active" data-days="7" type="button">7 DAYS</button>
+          <button class="period" data-days="30" type="button">30 DAYS</button>
+        </div>
+      </header>
+
+      <section class="scoreboard" aria-label="내 사용량 요약">
+        <article class="rank-card">
+          <p class="label">YOUR POSITION</p>
+          <div class="rank-lockup">
+            <span id="rank-value" class="rank-value">—</span>
+            <span id="rank-suffix" class="rank-suffix">NOT<br>ENTERED</span>
+          </div>
+          <p id="rank-caption" class="rank-caption">공유하기 전에는 로컬에만 보관됩니다.</p>
+        </article>
+
+        <article class="local-card">
+          <div class="card-head">
+            <p class="label">LOCAL METER</p>
+            <span id="local-period">LAST 7 DAYS</span>
+          </div>
+          <strong id="local-total" class="local-total">—</strong>
+          <p class="unit">TOTAL TOKENS PROCESSED</p>
+          <div id="provider-bars" class="provider-bars" aria-label="에이전트별 사용량"></div>
+        </article>
+
+        <article class="split-card">
+          <p class="label">TOKEN MIX</p>
+          <dl>
+            <div><dt>INPUT</dt><dd id="mix-input">—</dd></div>
+            <div><dt>OUTPUT</dt><dd id="mix-output">—</dd></div>
+            <div><dt>CACHE READ</dt><dd id="mix-cache">—</dd></div>
+          </dl>
+        </article>
+      </section>
+
+      <section class="league">
+        <div class="league-head">
+          <div>
+            <p class="eyebrow">LIVE TABLE</p>
+            <h2 id="table-title">7-day standings</h2>
+          </div>
+          <div class="actions">
+            <button id="stop-sharing" class="text-button" type="button" hidden>공유 중지</button>
+            <button id="share" class="share-button" type="button" disabled>
+              <span>내 사용량 공유</span><b>↗</b>
+            </button>
+          </div>
+        </div>
+
+        <div class="table-shell">
+          <div class="table-labels" aria-hidden="true">
+            <span>RANK / RUNNER</span><span>TOKENS</span>
+          </div>
+          <ol id="rankings" class="rankings" aria-live="polite">
+            <li class="loading-row"><span>집계 중</span><span class="dots">•••</span></li>
+          </ol>
+        </div>
+      </section>
+
+      <footer>
+        <p><span class="privacy-mark">LOCAL →</span> 날짜·에이전트별 합계만 공유됩니다. 대화, 프로젝트, 세션 정보는 전송하지 않습니다.</p>
+        <p id="updated-at">아직 동기화하지 않음</p>
+      </footer>
+    </main>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

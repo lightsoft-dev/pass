@@ -10,6 +10,7 @@ pass 익스텐션 예제들. 이 폴더는 앱 번들 리소스로 복사되어,
 | id | 무엇 | 팔레트 (⌘P) |
 |---|---|---|
 | `agent-usage` | Claude Code 토큰 사용량 리포트 (일자·모델·프로젝트별, 중복 턴 제거) | `usage`, `usage-month` 또는 `>usage` |
+| `usage-leaderboard` | Claude Code·Codex·Pi 토큰 합계의 옵트인 7일·30일 사용자 랭킹 | `usage-leaderboard` 또는 `>usage-leaderboard` |
 | `event-monitor` | 독립 HTML/CSS/JS 창, 세션 snapshot 및 실시간 이벤트 bridge 예제 | `events` 또는 `>events` |
 | `ui-starter` | 가장 작은 독립 Web UI 창 예제 (snapshot 읽기 + host action 호출) | `ui`, `starter` 또는 `>ui-starter` |
 

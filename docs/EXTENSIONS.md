@@ -6,7 +6,8 @@
 > 동작한다. `apiVersion: 2`는 별도 `NSWindow + WKWebView`, 이벤트 브리지, 명명된 액션을
 > 추가한다. Settings의 AI Builder는 자연어 목표를 Claude 세션에 전달하고 Stop hook에서 생성 완료를
 > 감지한 뒤 파일/권한 검토, 피드백 재작업, fingerprint 승인 활성화를 제공한다. 번들 예제:
-> **agent-usage**, **event-monitor**, **ui-starter**. Git URL 설치/원본 조회/fast-forward 업데이트와
+> **agent-usage**, **usage-leaderboard**, **event-monitor**, **ui-starter**. Git URL
+> 설치/원본 조회/fast-forward 업데이트와
 > 공유 URL 복사도 Settings에서 지원한다. Cloudflare D1 기반 앱 내 마켓은 계정별 게시·검색·설치
 > 집계·신고·관리자 숨김을 제공하며, 실행 파일은 계속 Git에만 둔다. 남은 것: E5 상주 프로세스·에이전트 기여.
 
@@ -189,6 +190,8 @@ VS Code의 커맨드 팔레트 관례(`>`)를 따른다.
 | `notify` | `notify` | NotificationService | 제목/본문 템플릿 |
 | `openURL` | `open:url` | NSWorkspace | |
 | `openWindow` (v2) | `ui:window` | ExtensionWindowManager | 선언한 독립 Web UI 창 열기 |
+| `script` + `returns: "json"` (v2) | `run:script` | 자식 프로세스 → Web bridge | stdout JSON(최대 1 MiB)을 명명 액션 결과로 반환 |
+| `passAPI` (v2) | `network:pass-api` | ExtensionPassAPIService | 인증 토큰을 노출하지 않고 usage API allowlist만 호출 |
 
 ### 템플릿 변수
 
@@ -243,11 +246,16 @@ pass.closeWindow();
 - `pass.getSnapshot`: `session:read` 권한이 있을 때 현재 세션 배열을 반환한다.
 - `pass.runAction`: `contributes.actions`에 미리 선언된 액션만 실행한다. 문자열 입력은
   `${input.key}`로 템플릿 확장되며, `sendText`는 `input.sessionName`으로 대상을 지정한다.
+  일반 액션에서는 `{ok: true}`를, `returns: "json"` 스크립트와 `passAPI` 액션에서는 파싱된
+  JSON을 반환한다.
+- `passAPI`: Web UI에 Keychain credential을 전달하지 않고
+  `GET v2/usage/leaderboard`, `PUT|DELETE v2/usage/snapshots`만 허용한다.
 - 창이 닫혀 있는 동안 이벤트를 저장하지 않는다. 다시 열 때 snapshot이 현재 상태를 복원한다.
 - Reload 또는 익스텐션 비활성화는 열린 창을 즉시 닫는다.
 
-전체 예제는 `Extensions/event-monitor/`와 `Extensions/ui-starter/`에서 확인할 수 있다. 설치·활성화
-후 Command-P에서 `events`, `ui`, `starter` 또는 `>` 명령 모드로 실행한다.
+전체 예제는 `Extensions/event-monitor/`, `Extensions/ui-starter/`,
+`Extensions/usage-leaderboard/`에서 확인할 수 있다. 설치·활성화 후 Command-P에서
+`events`, `ui`, `starter`, `usage-leaderboard` 또는 `>` 명령 모드로 실행한다.
 
 ---
 
