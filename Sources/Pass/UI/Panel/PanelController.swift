@@ -115,6 +115,8 @@ final class PanelController {
         return panel.isVisible && !panel.isMiniaturized
     }
 
+    var window: NSWindow? { panel }
+
     /// The panel currently owns the keyboard (it's the key window). Gate for panel-scoped
     /// modifier gestures like ⇧⇧ so they don't fire while typing in other apps.
     var isKey: Bool { panel?.isKeyWindow ?? false }
@@ -123,7 +125,10 @@ final class PanelController {
         if !isVisible { show(preselecting: nil); return }
         // Visible but not focused (buried behind other windows in normal mode, or the user is
         // in another app) → the hotkey means "get me to pass": raise it instead of hiding.
-        if panel?.isKeyWindow == true { hide() } else { raise() }
+        // A key child window (the session mini terminal) still counts as Pass being focused.
+        let passOwnsKeyWindow = panel?.isKeyWindow == true
+            || panel?.childWindows?.contains(where: \.isKeyWindow) == true
+        if passOwnsKeyWindow { hide() } else { raise() }
     }
 
     /// Bring the already-visible panel to the front and give it the keyboard — WITHOUT

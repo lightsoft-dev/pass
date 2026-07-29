@@ -42,6 +42,7 @@ struct CommandView: View {
     private var newSessionAgent: AgentKind { AgentKind(rawValue: newSessionAgentRaw) ?? .claude }
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
+    private var projectDirectories: [String] { appModel.projects?.projectDirectories ?? [] }
     /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
     /// and is simply stripped). `+branch` starts a worktree; `>command` narrows to extensions.
     private var isJumpMode: Bool { !query.isEmpty && !query.hasPrefix("+") && !query.hasPrefix(">") }
@@ -116,7 +117,18 @@ struct CommandView: View {
             }
             return items
         }
-        if needle.isEmpty { return orderedSessions.map { .session($0) } }
+        if needle.isEmpty {
+            var items = orderedSessions.map { PaletteItem.session($0) }
+            if InitialProjectPalettePolicy.shouldOfferCreateNew(
+                sessionCount: sessions.count,
+                projectCount: projects.count,
+                projectDirectoryCount: projectDirectories.count,
+                isSyncing: appModel.isProjectSyncing
+            ) {
+                items.insert(.createProject(parentDirectory: preferredNewProjectParentDirectory), at: 0)
+            }
+            return items
+        }
         return filteredItems(needle)
     }
     private var jumpSelectedItem: PaletteItem? {
@@ -338,6 +350,10 @@ struct CommandView: View {
                 }
                 return true
             }
+            if case .createProject(let parentDirectory)? = jumpSelectedItem {
+                beginProjectCreation(parentDirectory: parentDirectory)
+                return true
+            }
             if isJumpMode {
                 // First word matched nothing → it wasn't a session name; send the whole text
                 // to the selected session instead.
@@ -354,6 +370,8 @@ struct CommandView: View {
                     appModel.createSession(projectDir: p.rootPath) // ⏎ start it
                     query = ""
                     hideQuickCommand() // action done — watch the new session arrive
+                case .createProject(let parentDirectory):
+                    beginProjectCreation(parentDirectory: parentDirectory)
                 case .newProject(let name, _):
                     createProjectFromInput(name)
                 case .command(let c):
@@ -622,10 +640,12 @@ struct CommandView: View {
     @ViewBuilder
     private var jumpResults: some View {
         if jumpItems.isEmpty {
-            Text(isCommandMode
-                 ? "No extension commands — install & enable extensions in Settings."
-                 : selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
-                 ?? "No matches — try a different name.")
+            Text(newSessionMode
+                 ? "Type a name to create your first project."
+                 : isCommandMode
+                    ? "No extension commands — install & enable extensions in Settings."
+                    : selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
+                    ?? "No matches — try a different name.")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16).padding(.vertical, 10)
@@ -682,6 +702,12 @@ struct CommandView: View {
                 return "⏎ send to \(s.displayName)"
             }
             return "Tab complete · ⏎ go to session · keep typing to message it"
+        }
+        if case .createProject(let parentDirectory)? = jumpSelectedItem {
+            let destination = parentDirectory.map {
+                URL(fileURLWithPath: $0, isDirectory: true).lastPathComponent
+            } ?? "a folder you choose"
+            return "⏎ create your first project in \(destination)"
         }
         return "type to search sessions, projects, commands · +branch · >command"
     }
@@ -994,6 +1020,7 @@ struct CommandView: View {
         switch top {
         case .session(let s): token = jumpCompletionToken(s)
         case .project(let p): token = Slug.make(p.name)
+        case .createProject: return
         case .newProject(let name, _): token = name
         case .command(let c): token = c.token
         }
@@ -1092,6 +1119,30 @@ struct CommandView: View {
         }
     }
 
+    private var preferredNewProjectParentDirectory: String? {
+        InitialProjectPalettePolicy.preferredParentDirectory(
+            configured: UserDefaults.standard.string(
+                forKey: ProjectCreationService.defaultParentDirectoryKey
+            ),
+            projectDirectories: projectDirectories
+        )
+    }
+
+    private func beginProjectCreation(parentDirectory: String?) {
+        let configuredParent = UserDefaults.standard.string(
+            forKey: ProjectCreationService.defaultParentDirectoryKey
+        )?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if configuredParent?.isEmpty != false, let parentDirectory {
+            appModel.setNewProjectParentDirectory(parentDirectory)
+        }
+        status = nil
+        query = ""
+        newSessionMode = true
+        showQuickCommand = true
+        jumpSelection = 0
+        refocusField()
+    }
+
     private func activate(_ item: PaletteItem) {
         switch item {
         case .session(let s):
@@ -1100,6 +1151,8 @@ struct CommandView: View {
             // In ⌘N the dropdown chooses the agent; a project tap in @-jump uses the default.
             appModel.createSession(projectDir: p.rootPath, agent: newSessionMode ? newSessionAgent : .claude)
             query = ""
+        case .createProject(let parentDirectory):
+            beginProjectCreation(parentDirectory: parentDirectory)
         case .newProject(let name, _):
             createProjectFromInput(name)
         case .command(let c):
@@ -1318,7 +1371,7 @@ struct FocusedSessionCard: View {
         if let onNewWorktree {
             Button("New Session in Worktree...") { onNewWorktree() }
         }
-        Button("Open Mini Terminal") { appModel.miniTerminals.open(for: session) }
+        Button("Open Mini Terminal") { appModel.openMiniTerminal(for: session) }
         ConfigURLContextMenu(session: session)
         if onDelete != nil { Divider() }
         if let onDelete {
@@ -1484,7 +1537,7 @@ struct CompactSessionCard: View {
         if let onNewWorktree {
             Button("New Session in Worktree...") { onNewWorktree() }
         }
-        Button("Open Mini Terminal") { appModel.miniTerminals.open(for: session) }
+        Button("Open Mini Terminal") { appModel.openMiniTerminal(for: session) }
         ConfigURLContextMenu(session: session)
         if onDelete != nil { Divider() }
         if let onDelete {
@@ -1534,6 +1587,7 @@ private struct ConfigURLContextMenu: View {
 enum PaletteItem: Identifiable {
     case session(Session)
     case project(Project)
+    case createProject(parentDirectory: String?)
     case newProject(name: String, parentDirectory: String?)
     case command(ExtensionStore.PaletteCommand)
 
@@ -1541,6 +1595,7 @@ enum PaletteItem: Identifiable {
         switch self {
         case .session(let s): return "s:" + s.name
         case .project(let p): return "p:" + p.rootPath
+        case .createProject: return "n:create"
         case .newProject(let name, _): return "n:" + name
         case .command(let c): return "c:" + c.id
         }
@@ -1556,6 +1611,7 @@ struct PaletteRow: View {
             switch item {
             case .session(let s): sessionRow(s)
             case .project(let p): projectRow(p)
+            case .createProject(let parent): createProjectRow(parent: parent)
             case .newProject(let name, let parent): newProjectRow(name, parent: parent)
             case .command(let c): commandRow(c)
             }
@@ -1629,6 +1685,28 @@ struct PaletteRow: View {
         }
     }
 
+    private func createProjectRow(parent: String?) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "folder.badge.plus")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Create new project")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(parent ?? "Choose a location after entering a project name")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer()
+            Text("create new")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+
     private func newProjectRow(_ name: String, parent: String?) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "folder.badge.plus")
@@ -1669,6 +1747,31 @@ struct PaletteRow: View {
             Spacer()
             Text(c.extensionName).font(.system(size: 11)).foregroundStyle(.tertiary)
         }
+    }
+}
+
+enum InitialProjectPalettePolicy {
+    static func shouldOfferCreateNew(
+        sessionCount: Int,
+        projectCount: Int,
+        projectDirectoryCount: Int,
+        isSyncing: Bool
+    ) -> Bool {
+        sessionCount == 0
+            && projectCount == 0
+            && projectDirectoryCount > 0
+            && !isSyncing
+    }
+
+    static func preferredParentDirectory(
+        configured: String?,
+        projectDirectories: [String]
+    ) -> String? {
+        if let configured = configured?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty {
+            return configured
+        }
+        return projectDirectories.count == 1 ? projectDirectories[0] : nil
     }
 }
 

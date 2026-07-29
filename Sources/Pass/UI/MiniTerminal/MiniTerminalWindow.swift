@@ -1,24 +1,119 @@
 import AppKit
+import Observation
 import SwiftTerm
 import SwiftUI
 
-/// Owns one persistent mini shell per working directory. Reopening the same project raises its
-/// existing shell, preserving command history, environment changes, and running processes.
+enum RecentClipboardPolicy {
+    static let maximumAge: TimeInterval = 5 * 60
+
+    static func isRecent(text: String?, changedAt: Date?, now: Date) -> Bool {
+        guard let text, !text.isEmpty, let changedAt else { return false }
+        let age = now.timeIntervalSince(changedAt)
+        return age >= 0 && age <= maximumAge
+    }
+}
+
+/// NSPasteboard exposes a change counter but no copy timestamp. Observe changes while Pass is
+/// running and treat a text value as recent for five minutes after Pass first sees that change.
+@MainActor
+@Observable
+final class ClipboardRecencyMonitor {
+    private(set) var currentText: String?
+    private(set) var changedAt: Date?
+    private(set) var now = Date()
+
+    @ObservationIgnored private let pasteboard: NSPasteboard
+    @ObservationIgnored private var observedChangeCount: Int
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
+
+    init(pasteboard: NSPasteboard = .general) {
+        self.pasteboard = pasteboard
+        observedChangeCount = pasteboard.changeCount
+        currentText = pasteboard.string(forType: .string)
+        changedAt = currentText == nil ? nil : now
+        pollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, !Task.isCancelled else { return }
+                self.refresh()
+            }
+        }
+    }
+
+    deinit {
+        pollTask?.cancel()
+    }
+
+    var hasRecentText: Bool {
+        RecentClipboardPolicy.isRecent(text: currentText, changedAt: changedAt, now: now)
+    }
+
+    func refresh(now: Date = Date()) {
+        self.now = now
+        let changeCount = pasteboard.changeCount
+        guard changeCount != observedChangeCount else { return }
+        observedChangeCount = changeCount
+        currentText = pasteboard.string(forType: .string)
+        changedAt = currentText == nil ? nil : now
+    }
+}
+
+enum MiniTerminalVisibilityPolicy {
+    static func shouldShow(
+        panelVisible: Bool,
+        focusedSessionName: String?,
+        terminalSessionName: String
+    ) -> Bool {
+        panelVisible && focusedSessionName == terminalSessionName
+    }
+}
+
+/// Owns one persistent mini shell per session. A shell stays alive while hidden, but its window
+/// follows the Pass panel and is visible only while that session is the focused session.
 @MainActor
 final class MiniTerminalManager {
     private var controllers: [String: MiniTerminalWindowController] = [:]
+    private let clipboard: ClipboardRecencyMonitor
 
-    func open(for session: Session) {
-        let key = session.cwd
+    init(clipboard: ClipboardRecencyMonitor) {
+        self.clipboard = clipboard
+    }
+
+    func open(for session: Session, attachedTo parentWindow: NSWindow?) {
+        let key = session.name
+        controllers.values
+            .filter { $0.sessionName != session.name }
+            .forEach { $0.hide() }
         if let existing = controllers[key] {
-            existing.show()
+            existing.show(attachedTo: parentWindow, activate: true)
             return
         }
-        let controller = MiniTerminalWindowController(session: session) { [weak self] in
+        let controller = MiniTerminalWindowController(
+            session: session,
+            clipboard: clipboard
+        ) { [weak self] in
             self?.controllers.removeValue(forKey: key)
         }
         controllers[key] = controller
-        controller.show()
+        controller.show(attachedTo: parentWindow, activate: true)
+    }
+
+    func synchronize(
+        panelVisible: Bool,
+        focusedSessionName: String?,
+        parentWindow: NSWindow?
+    ) {
+        for controller in controllers.values {
+            if MiniTerminalVisibilityPolicy.shouldShow(
+                panelVisible: panelVisible,
+                focusedSessionName: focusedSessionName,
+                terminalSessionName: controller.sessionName
+            ) {
+                controller.show(attachedTo: parentWindow, activate: false)
+            } else {
+                controller.hide()
+            }
+        }
     }
 
     func closeAll() {
@@ -33,14 +128,20 @@ final class MiniTerminalManager {
 private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
                                                    LocalProcessTerminalViewDelegate {
     private let session: Session
+    let sessionName: String
     private let terminalView: IMETerminalView
     private let window: MiniTerminalPanel
     private let onClose: () -> Void
     private var themeObserver: (any NSObjectProtocol)?
     private var closed = false
 
-    init(session: Session, onClose: @escaping () -> Void) {
+    init(
+        session: Session,
+        clipboard: ClipboardRecencyMonitor,
+        onClose: @escaping () -> Void
+    ) {
         self.session = session
+        sessionName = session.name
         self.onClose = onClose
         IMETerminalView.installEventBridges()
         terminalView = IMETerminalView(frame: .zero)
@@ -58,7 +159,7 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false
-        window.level = .floating
+        window.level = .normal
         window.minSize = NSSize(width: 460, height: 280)
         window.collectionBehavior = [.fullScreenAuxiliary]
 
@@ -68,7 +169,13 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
         window.delegate = self
         window.contentView = NSHostingView(rootView: MiniTerminalContent(
             session: session,
-            terminalView: terminalView
+            terminalView: terminalView,
+            clipboard: clipboard,
+            pasteClipboard: { [weak terminalView, weak window] in
+                guard let terminalView, let window else { return }
+                window.makeFirstResponder(terminalView)
+                _ = NSApp.sendAction(#selector(NSText.paste(_:)), to: terminalView, from: window)
+            }
         ))
         themeObserver = NotificationCenter.default.addObserver(
             forName: .passTerminalThemeChanged,
@@ -87,11 +194,28 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
     }
 
-    func show() {
-        if !window.isVisible { window.center() }
+    func show(attachedTo parentWindow: NSWindow?, activate: Bool) {
+        guard !closed, let parentWindow, parentWindow.isVisible else {
+            hide()
+            return
+        }
+        if window.parent !== parentWindow {
+            window.parent?.removeChildWindow(window)
+            parentWindow.addChildWindow(window, ordered: .above)
+        }
+        if !window.isVisible {
+            position(relativeTo: parentWindow)
+            window.orderFront(nil)
+        }
+        guard activate else { return }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         focus()
+    }
+
+    func hide() {
+        guard !closed else { return }
+        window.orderOut(nil)
     }
 
     func close() {
@@ -102,8 +226,24 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
     func windowWillClose(_ notification: Notification) {
         guard !closed else { return }
         closed = true
+        window.parent?.removeChildWindow(window)
         terminalView.terminate()
         onClose()
+    }
+
+    private func position(relativeTo parentWindow: NSWindow) {
+        let parent = parentWindow.frame
+        let size = window.frame.size
+        let screen = parentWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? parent
+        var origin = NSPoint(
+            x: parent.maxX + 12,
+            y: parent.maxY - size.height
+        )
+        if origin.x + size.width > screen.maxX {
+            origin.x = max(screen.minX, parent.minX - size.width - 12)
+        }
+        origin.y = min(max(origin.y, screen.minY), screen.maxY - size.height)
+        window.setFrameOrigin(origin)
     }
 
     private func startShell() {
@@ -189,6 +329,8 @@ private final class MiniTerminalPanel: NSPanel {
 private struct MiniTerminalContent: View {
     let session: Session
     let terminalView: LocalProcessTerminalView
+    let clipboard: ClipboardRecencyMonitor
+    let pasteClipboard: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -207,6 +349,14 @@ private struct MiniTerminalContent: View {
                         .truncationMode(.middle)
                 }
                 Spacer()
+                if clipboard.hasRecentText {
+                    Button(action: pasteClipboard) {
+                        Label("값 붙여넣기", systemImage: "doc.on.clipboard")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("최근 5분 내 복사한 값을 터미널에 붙여넣기")
+                }
                 Label("PROJECT SHELL", systemImage: "terminal.fill")
                     .font(.custom("SF Mono", size: 8).weight(.semibold))
                     .foregroundStyle(.tertiary)
@@ -242,7 +392,7 @@ struct MiniTerminalButton: View {
     @Environment(AppModel.self) private var appModel
 
     var body: some View {
-        Button { appModel.miniTerminals.open(for: session) } label: {
+        Button { appModel.openMiniTerminal(for: session) } label: {
             if showLabel {
                 Label("Mini Terminal", systemImage: "terminal.fill")
             } else {

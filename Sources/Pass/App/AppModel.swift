@@ -45,7 +45,9 @@ final class AppModel {
 
     /// Whether the panel is on screen. The home view attaches a live terminal to the selected
     /// session only while visible — hiding the panel detaches it (the session keeps running).
-    var panelVisible: Bool = false
+    var panelVisible: Bool = false {
+        didSet { synchronizeMiniTerminals() }
+    }
 
     /// Bumped by ⌘[ to step back from the session terminal to the inbox.
     var backToken: Int = 0
@@ -81,7 +83,9 @@ final class AppModel {
     /// The session whose workspace (terminal │ browser) is on screen right now — the home
     /// selection or the open detail view. A CLI browser open targeting it may show
     /// immediately; any other target only gets the 🌐 badge (never steal the selection).
-    var focusedSessionName: String?
+    var focusedSessionName: String? {
+        didSet { synchronizeMiniTerminals() }
+    }
 
     /// Local runtime sessions are intentionally not persisted into the portable feature file.
     /// The implementation agent session is a collaboration hint; a dev-server PID/session is not.
@@ -94,6 +98,7 @@ final class AppModel {
     private(set) var features: FeatureStore!
     private(set) var browser: BrowserStore!
     private(set) var mirror: MirrorEngine!
+    private(set) var clipboard: ClipboardRecencyMonitor!
     private(set) var miniTerminals: MiniTerminalManager!
     private(set) var webViews: WebViewPool!
     private(set) var extensions: ExtensionStore!
@@ -139,7 +144,8 @@ final class AppModel {
         features = FeatureStore()
         browser = BrowserStore()
         mirror = MirrorEngine()
-        miniTerminals = MiniTerminalManager()
+        clipboard = ClipboardRecencyMonitor()
+        miniTerminals = MiniTerminalManager(clipboard: clipboard)
         webViews = WebViewPool()
         webViews.store = browser
         // Tabs are data (BrowserStore); webviews are the pool — keep them in lockstep.
@@ -411,6 +417,18 @@ final class AppModel {
 
     func hidePanel() {
         panelController?.hide()
+    }
+
+    func openMiniTerminal(for session: Session) {
+        miniTerminals.open(for: session, attachedTo: panelController?.window)
+    }
+
+    private func synchronizeMiniTerminals() {
+        miniTerminals?.synchronize(
+            panelVisible: panelVisible,
+            focusedSessionName: focusedSessionName,
+            parentWindow: panelController?.window
+        )
     }
 
     var panelFloating: Bool { panelController?.isFloating ?? true }
