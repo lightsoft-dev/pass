@@ -11,7 +11,7 @@ BUNDLE_ID := dev.lightsoft.pass
 # Pipe through xcbeautify if available, else raw.
 BEAUTIFY := $(shell command -v xcbeautify >/dev/null 2>&1 && echo "| xcbeautify" || echo "")
 
-.PHONY: gen build run stop test logs clean regen open install
+.PHONY: gen build run stop test logs clean regen open install dmg
 
 gen:
 	xcodegen generate
@@ -34,6 +34,13 @@ run: stop build
 # a stale /Applications bundle shadows the dev build (old UI, sessions "missing").
 install: build
 	rsync -a --delete "$(APP_PATH)/" "/Applications/$(APP_NAME).app/"
+
+# Package an existing release-signed app with the branded Finder install window.
+# Usage: make dmg APP_PATH=/path/to/Pass.app OUTPUT_DMG=/path/to/Pass-version.dmg
+dmg:
+	@test -n "$(APP_PATH)" || (echo "APP_PATH is required" >&2; exit 64)
+	@test -n "$(OUTPUT_DMG)" || (echo "OUTPUT_DMG is required" >&2; exit 64)
+	./scripts/create-dmg.sh "$(APP_PATH)" "$(OUTPUT_DMG)"
 
 # Launch detached via the bundle (like Finder would). Installs to /Applications first so the
 # running app and the one Spotlight launches are always the SAME build.

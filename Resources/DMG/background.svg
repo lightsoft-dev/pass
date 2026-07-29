@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="520" viewBox="0 0 520 520">
+  <defs>
+    <radialGradient id="violetGlow" cx="84%" cy="8%" r="72%">
+      <stop offset="0" stop-color="#6546ea" stop-opacity=".34"/>
+      <stop offset=".48" stop-color="#6546ea" stop-opacity=".09"/>
+      <stop offset="1" stop-color="#6546ea" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="scanlines" width="5" height="5" patternUnits="userSpaceOnUse">
+      <path d="M0 0H520" stroke="#ffffff" stroke-opacity=".018" stroke-width=".5"/>
+    </pattern>
+  </defs>
+
+  <rect width="520" height="520" fill="#0e0c14"/>
+  <rect width="520" height="520" fill="url(#violetGlow)"/>
+  <rect width="520" height="520" fill="url(#scanlines)"/>
+
+  <text x="260" y="52" text-anchor="middle" fill="#f2f0e7"
+        font-family="Avenir Next, Helvetica Neue, sans-serif"
+        font-size="13" font-weight="700" letter-spacing="2.4">DRAG TO APPLICATIONS</text>
+
+  <polygon points="226,286 232,288 235,294 232,300 226,303 220,300 218,294 220,288"
+           fill="#c1b9e9" opacity=".46"/>
+  <polygon points="250,258 258,262 262,270 258,278 250,282 242,278 238,270 242,262"
+           fill="#8f7bea" opacity=".50"/>
+  <polygon points="274,230 285,235 290,246 285,257 274,262 263,257 258,246 263,235"
+           fill="#6546ea" opacity=".58"/>
+</svg>

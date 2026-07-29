@@ -15,6 +15,21 @@
 
 The built app lands at `.build/Build/Products/Debug/Pass.app`.
 
+## Branded DMG
+
+Package an existing release-signed `Pass.app` with the branded Finder install window:
+
+```sh
+make dmg \
+  APP_PATH=/path/to/Pass.app \
+  OUTPUT_DMG=/path/to/Pass-v0.1.4.dmg
+```
+
+The layout uses `Resources/DMG/background.png`, places Pass and the Applications
+shortcut at fixed coordinates, and produces a compressed disk image. The input app
+should already be Developer ID signed, notarized, and stapled. Sign and notarize the
+resulting DMG before publishing it.
+
 ## Signing (M0 finding — load-bearing)
 Sign with a real **Apple Development** identity, not ad-hoc (`-`). `project.yml` sets
 `CODE_SIGN_IDENTITY: "Apple Development"`, `DEVELOPMENT_TEAM`, manual style. Reason: ad-hoc
