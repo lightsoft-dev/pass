@@ -45,6 +45,19 @@ enum AgentKind: String, Codable, Hashable, CaseIterable {
         if ["zsh", "bash", "fish", "sh", "-zsh", "-bash"].contains(c) { return .shell }
         return .generic
     }
+
+    /// Resolve the agent currently owning a terminal session.
+    ///
+    /// `@pass_agent` records the most recently known agent and deliberately survives the short
+    /// shell window between an agent exiting and another one starting. A launchable foreground
+    /// command is stronger evidence, though: users can exit Claude and start Codex (or Pi) in
+    /// the same tmux session, so the creation-time tag must not remain authoritative forever.
+    static func resolve(tagged rawTag: String?, paneCommand: String) -> AgentKind {
+        let foreground = infer(fromPaneCommand: paneCommand)
+        if launchable.contains(foreground) { return foreground }
+        if let rawTag, let tagged = AgentKind(rawValue: rawTag) { return tagged }
+        return foreground
+    }
 }
 
 /// How the home feed lays out sessions. Persisted in UserDefaults under "homeMode".

@@ -213,6 +213,18 @@ actor TmuxClient: TerminalPaneAccess {
         await run(["set-environment", "-t", name, PassConfig.cliEnvVar, PassConfig.cliSymlinkPath])
     }
 
+    /// Keep the durable session tag aligned when the user starts a different agent in an
+    /// existing terminal session. This makes the new agent survive subsequent shell periods
+    /// and ensures session restore relaunches the latest agent rather than the original one.
+    func setAgentTag(name: String, agent: AgentKind) async {
+        let result = await run(["set-option", "-t", name, PassConfig.optAgent, agent.rawValue])
+        if result.ok {
+            Log.tmux.info("updated session \(name, privacy: .public) agent=\(agent.rawValue)")
+        } else {
+            Log.tmux.error("update session \(name, privacy: .public) agent failed: \(result.stderr, privacy: .public)")
+        }
+    }
+
     // MARK: Preview & injection primitives (used by ReplyInjector in M2)
 
     /// Visible pane contents. `colors: true` includes SGR escapes (`-e`).
