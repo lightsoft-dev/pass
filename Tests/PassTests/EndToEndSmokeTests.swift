@@ -60,6 +60,11 @@ final class EndToEndSmokeTests: XCTestCase {
             XCTAssertEqual(mine?.projectRootOption, "/tmp/portspike")
             XCTAssertEqual(mine?.agentOption, AgentKind.claude.rawValue)
 
+            // A different agent started later in the same terminal must replace the durable tag.
+            await client.setAgentTag(name: name, agent: .codex)
+            let retagged = await client.listSessions().first { $0.name == name }
+            XCTAssertEqual(retagged?.agentOption, AgentKind.codex.rawValue)
+
             // The FINDINGS §2 injection primitive: set-buffer → bracketed paste → capture.
             let marker = "portspike-marker-\(name.suffix(4))"
             await client.setBuffer("echo \(marker)")

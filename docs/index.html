@@ -7,7 +7,7 @@
 <meta name="description" content="Pass is a keyboard-driven macOS mission control for Claude Code, Codex, and pi sessions across your projects. Agents run on their own; only the sessions that need you surface.">
 <meta name="theme-color" content="#0e0c14">
 <meta property="og:title" content="Pass — Mission control for coding agents">
-<meta property="og:description" content="Run ten agents. Answer the one that needs you. A tmux-backed macOS mission control for Claude Code, Codex, and pi.">
+<meta property="og:description" content="Run ten agents. Keep every session in reach. A tmux-backed macOS mission control for Claude Code, Codex, and pi.">
 <meta property="og:type" content="website">
 <meta property="og:image" content="app-icon.svg">
 <link rel="icon" href="app-icon.svg" type="image/svg+xml">
@@ -322,8 +322,153 @@ h1 .cursor{
 .feat p{color:var(--ink-dim);font-size:13.5px}
 .feat p b{color:var(--ink);font-weight:500}
 .feat .spec{margin-top:auto;padding-top:14px;color:var(--ink-faint);font-size:11.5px;letter-spacing:.05em;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.s7{grid-column:span 7}.s5{grid-column:span 5}.s4{grid-column:span 4}.s8{grid-column:span 8}
-@media(max-width:900px){.s7,.s5,.s4,.s8{grid-column:span 12}.feat{min-height:0}}
+.s12{grid-column:span 12}.s7{grid-column:span 7}.s5{grid-column:span 5}.s4{grid-column:span 4}.s8{grid-column:span 8}
+@media(max-width:900px){.s12,.s7,.s5,.s4,.s8{grid-column:span 12}.feat{min-height:0}}
+
+/* ————————————————————————————————— feature demo reel */
+.demo-reel{
+  display:grid;grid-template-columns:repeat(12,1fr);gap:18px;
+}
+.demo-card{
+  grid-column:span 6;display:flex;flex-direction:column;overflow:hidden;
+  border:1px solid var(--line);border-radius:12px;background:var(--bg-raised);
+  transition:transform .2s,border-color .2s,box-shadow .2s;
+}
+.demo-card.wide{grid-column:span 12}
+.demo-card:hover,.demo-card:focus-within{
+  transform:translateY(-3px);border-color:var(--panel-edge);
+  box-shadow:0 24px 60px -34px rgba(101,70,234,.8);
+}
+.demo-card-copy{display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;padding:22px 24px 24px}
+.demo-card .take{color:var(--amber);font-size:11px;font-weight:700;letter-spacing:.14em;white-space:nowrap}
+.demo-card h3{
+  font-family:var(--display);font-size:21px;font-weight:400;line-height:1.1;
+  letter-spacing:.005em;text-transform:uppercase;
+}
+.demo-card p{margin-top:9px;color:var(--ink-dim);font-size:13px;max-width:62ch}
+.demo-card p b{color:var(--ink);font-weight:500}
+.demo-card-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.demo-card-meta span{
+  border:1px solid var(--line);border-radius:100px;padding:3px 9px;
+  color:var(--ink-faint);font-size:10.5px;letter-spacing:.05em;
+}
+.demo-stage{
+  position:relative;min-height:286px;overflow:hidden;border-bottom:1px solid var(--line);
+  background:
+    radial-gradient(circle at 76% 8%,rgba(101,70,234,.28),transparent 38%),
+    linear-gradient(145deg,#0a0810,#171020);
+}
+.wide .demo-stage{min-height:360px}
+.demo-stage::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(0deg,rgba(255,255,255,.022) 0 1px,transparent 1px 4px);
+}
+.demo-hud{
+  position:absolute;z-index:3;top:14px;left:14px;right:14px;
+  display:flex;align-items:center;gap:8px;color:var(--ink-faint);font-size:10px;letter-spacing:.08em;
+}
+.demo-hud .live{color:var(--amber);font-weight:700}
+.demo-hud .live::before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:var(--amber);box-shadow:0 0 10px var(--amber)}
+.demo-hud .time{margin-left:auto}
+.demo-window{
+  position:absolute;inset:48px 18px 18px;border:1px solid var(--panel-edge);border-radius:9px;
+  background:rgba(14,12,20,.94);box-shadow:0 24px 60px -24px #000;overflow:hidden;
+}
+.demo-window-bar{
+  display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;
+  border-bottom:1px solid var(--line);color:var(--ink-faint);font-size:9.5px;
+}
+.demo-window-bar .dot{width:7px;height:7px}
+.demo-window-bar b{margin-left:5px;color:var(--ink-dim);font-weight:500}
+.demo-play{
+  appearance:none;position:absolute;z-index:4;right:14px;bottom:14px;
+  display:grid;place-items:center;width:34px;height:34px;border:1px solid var(--panel-edge);
+  border-radius:50%;background:rgba(14,12,20,.82);color:var(--ink);cursor:pointer;
+  font:700 11px var(--mono);backdrop-filter:blur(8px);
+}
+.demo-play:hover{border-color:var(--amber);color:var(--amber)}
+.demo-card.is-paused .demo-play::before{content:"▶";margin-left:2px}
+.demo-card:not(.is-paused) .demo-play::before{content:"Ⅱ"}
+.demo-card.is-paused .demo-anim,.demo-card.is-paused .demo-anim *{animation-play-state:paused!important}
+
+/* demo 01: attention feed */
+.mini-feed{display:grid;grid-template-columns:112px 1fr;height:calc(100% - 30px)}
+.mini-feed aside{padding:10px 8px;border-right:1px solid var(--line);background:#0a0810}
+.mini-feed .label{color:var(--ink-faint);font-size:7.5px;letter-spacing:.14em}
+.mini-session{display:flex;gap:6px;margin-top:7px;padding:8px 7px;border:1px solid transparent;border-radius:5px;color:var(--ink-faint);font-size:8px}
+.mini-session b{display:block;color:var(--ink-dim);font-size:9px}
+.mini-session.hot{border-color:rgba(243,239,99,.34);background:var(--amber-dim);animation:feed-focus 6s ease-in-out infinite}
+.mini-session.hot .led{background:var(--amber)}
+.mini-convo{padding:18px 16px;color:var(--ink-dim);font-size:9px}
+.mini-convo .eyebrow{color:var(--amber);font-size:7.5px;letter-spacing:.14em}
+.mini-convo h4{margin-top:7px;color:var(--ink);font-size:13px}
+.mini-convo .bubble{margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:6px;background:#0b0911}
+.mini-convo .reply{margin-top:10px;color:var(--ink-faint);animation:type-reply 6s steps(18,end) infinite;white-space:nowrap;overflow:hidden}
+@keyframes feed-focus{0%,18%{transform:translateY(31px);opacity:.55}34%,82%{transform:none;opacity:1}100%{transform:none}}
+@keyframes type-reply{0%,42%{width:0}72%,100%{width:18ch}}
+
+/* demo 02: summon */
+.summon-scene{position:relative;height:calc(100% - 30px);overflow:hidden;padding:15px;background:#0a0810}
+.editor-code{display:grid;grid-template-columns:20px 1fr;gap:9px;color:var(--ink-faint);font-size:7.5px;line-height:2}
+.editor-code .nums{color:#393245;text-align:right}
+.editor-code .syntax{color:var(--violet-soft)}.editor-code .fn{color:var(--amber)}
+.summon-panel{
+  position:absolute;top:18px;right:18px;bottom:18px;width:min(290px,68%);
+  border:1px solid var(--panel-edge);border-radius:8px;background:rgba(14,12,20,.97);
+  box-shadow:0 20px 60px -18px #000,0 0 60px -30px var(--violet);
+  transform-origin:bottom right;animation:summon-panel 6s cubic-bezier(.2,.7,.2,1) infinite;
+}
+.summon-panel-head{display:flex;align-items:center;gap:7px;padding:9px 10px;border-bottom:1px solid var(--line);color:var(--ink-dim);font-size:8px}
+.summon-panel-head b{color:var(--amber);font-weight:700;margin-left:auto}
+.summon-row{display:grid;grid-template-columns:7px 1fr auto;gap:7px;align-items:center;margin:9px;padding:9px;border:1px solid var(--line);border-radius:5px;color:var(--ink-faint);font-size:7.5px}
+.summon-row strong{display:block;color:var(--ink);font-size:8.5px}.summon-row em{color:var(--violet-soft);font-style:normal}
+.summon-row.current{background:var(--violet-dim);border-color:rgba(143,123,234,.4)}
+.summon-input{position:absolute;left:9px;right:9px;bottom:9px;padding:8px;border:1px solid var(--panel-edge);border-radius:5px;color:var(--ink-faint);font-size:7.5px}
+.summon-input b{color:var(--amber)}
+.summon-hotkey{
+  position:absolute;z-index:2;left:18px;bottom:18px;padding:8px 11px;
+  border:1px solid var(--panel-edge);border-bottom-width:3px;border-radius:6px;
+  color:var(--ink);background:#20172e;font-size:9px;font-weight:700;
+  animation:summon-key 6s ease-in-out infinite;
+}
+@keyframes summon-panel{0%,12%{opacity:0;transform:translate(18px,18px) scale(.9)}25%,78%{opacity:1;transform:none}92%,100%{opacity:0;transform:translate(10px,10px) scale(.96)}}
+@keyframes summon-key{0%,8%,28%,100%{transform:none;border-bottom-width:3px}13%{transform:translateY(2px);border-bottom-width:1px;color:var(--amber)}}
+
+/* demo 03: marketplace */
+.market-scene{height:calc(100% - 30px);display:grid;grid-template-columns:150px 1fr}
+.market-side{padding:14px 10px;border-right:1px solid var(--line);background:#0a0810}
+.market-side b{display:block;color:var(--ink);font-size:9px;letter-spacing:.08em}
+.market-side span{display:block;margin-top:12px;padding:7px;color:var(--ink-faint);font-size:8px;border-radius:4px}
+.market-side .selected{color:var(--amber);background:var(--amber-dim)}
+.market-main{padding:14px;min-width:0}
+.market-search{padding:8px 10px;border:1px solid var(--panel-edge);border-radius:5px;color:var(--ink-faint);font-size:8px}
+.market-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.market-item{min-width:0;padding:10px;border:1px solid var(--line);border-radius:6px;background:rgba(255,255,255,.02)}
+.market-item .ext-icon{display:grid;place-items:center;width:28px;height:28px;border-radius:6px;background:var(--violet-dim);color:var(--violet-soft);font-size:13px}
+.market-item b{display:block;margin-top:8px;color:var(--ink);font-size:8.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.market-item p{margin-top:3px;color:var(--ink-faint);font-size:6.8px;line-height:1.35}
+.market-item.featured{animation:market-pick 7s ease-in-out infinite}
+.market-install{margin-top:8px;padding:5px;border:1px solid rgba(243,239,99,.5);border-radius:4px;color:var(--amber);text-align:center;font-size:7px;animation:market-install 7s ease-in-out infinite}
+@keyframes market-pick{0%,20%{border-color:var(--line);transform:none}35%,72%{border-color:var(--amber);transform:translateY(-2px)}90%,100%{border-color:var(--violet-mid)}}
+@keyframes market-install{0%,38%{background:transparent;color:var(--amber)}50%,65%{background:var(--amber);color:var(--bg)}78%,100%{background:var(--violet-dim);border-color:var(--violet-mid);color:var(--violet-soft)}}
+
+/* demo 04: terminal handoff */
+.terminal-scene{height:calc(100% - 30px);padding:15px;font-size:8px;color:var(--ink-dim)}
+.terminal-line{margin-top:6px;white-space:nowrap;overflow:hidden}
+.terminal-line .ps1{color:var(--amber)}
+.terminal-line.run{animation:terminal-type 6s steps(32,end) infinite}
+.terminal-result{margin-top:8px;color:var(--violet-soft);opacity:0;animation:terminal-result 6s ease infinite}
+.handoff-pill{position:absolute;right:14px;bottom:13px;padding:6px 9px;border:1px solid var(--panel-edge);border-radius:5px;color:var(--ink);background:var(--violet-dim);font-size:7.5px;animation:handoff 6s ease infinite}
+@keyframes terminal-type{0%,15%{width:0}54%,100%{width:32ch}}
+@keyframes terminal-result{0%,55%{opacity:0;transform:translateY(4px)}66%,100%{opacity:1;transform:none}}
+@keyframes handoff{0%,70%{transform:none}78%{transform:scale(.95)}88%,100%{transform:none}}
+@media(max-width:900px){.demo-card,.demo-card.wide{grid-column:span 12}}
+@media(max-width:560px){
+  .demo-stage,.wide .demo-stage{min-height:260px}
+  .market-scene{grid-template-columns:90px 1fr}.market-grid{grid-template-columns:repeat(2,1fr)}
+  .market-item:last-child{display:none}.demo-card-copy{grid-template-columns:1fr;gap:8px}
+}
+@media(prefers-reduced-motion:reduce){.demo-anim,.demo-anim *{animation:none!important}}
 
 /* ————————————————————————————————— architecture */
 .diagram-wrap{
@@ -380,7 +525,7 @@ kbd{
 
 /* ————————————————————————————————— download */
 .get-grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:clamp(28px,4vw,56px);align-items:start}
-@media(max-width:900px){.get-grid,.hero-grid{grid-template-columns:minmax(0,1fr)}.mock-col{margin-bottom:0}.strip{margin-top:clamp(40px,7vh,80px)}}
+@media(max-width:900px){.get-grid,.hero-grid{grid-template-columns:minmax(0,1fr)}.mock-col{margin-bottom:0}.brand-constellation{right:0}.strip{margin-top:clamp(40px,7vh,80px)}}
 .btn-big{width:100%;justify-content:center;padding:24px 30px;font-size:16px}
 .get-note{margin-top:14px;color:var(--ink-faint);font-size:12.5px;line-height:1.7}
 .get-note a{color:var(--ink-dim)}
@@ -431,11 +576,12 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
   <a class="sess" href="#top"><img class="brand-icon" src="app-icon.svg" alt="">pass</a>
   <nav aria-label="Sections">
     <a href="#top" class="cur" data-spy="top">0:overview</a>
-    <a href="#features" data-spy="features">1:features</a>
-    <a href="#system" data-spy="system">2:system</a>
-    <a href="#keys" data-spy="keys">3:keys</a>
-    <a href="#roadmap" data-spy="roadmap">4:roadmap</a>
-    <a href="#get" data-spy="get">5:get</a>
+    <a href="#demos" data-spy="demos">1:demos</a>
+    <a href="#features" data-spy="features">2:features</a>
+    <a href="#system" data-spy="system">3:system</a>
+    <a href="#keys" data-spy="keys">4:keys</a>
+    <a href="#roadmap" data-spy="roadmap">5:roadmap</a>
+    <a href="#get" data-spy="get">6:get</a>
   </nav>
   <div class="right">
     <span class="hint">⌥␣ to summon</span>
@@ -450,11 +596,11 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
     <div class="hero-grid">
       <div>
         <p class="kicker rise">Local mission control · Claude Code · Codex · pi</p>
-        <h1 class="rise d1">Run ten agents. Answer the one that <span class="hl">needs&nbsp;you</span><span class="cursor" aria-hidden="true"></span></h1>
+        <h1 class="rise d1">Run ten agents. Keep every session <span class="hl">in&nbsp;reach</span><span class="cursor" aria-hidden="true"></span></h1>
         <p class="lede rise d2">
           Pass is a keyboard-driven macOS panel over <strong>every coding-agent session in every project</strong>.
-          Agents run on their own; the moment one is blocked on a permission, a question, or a review,
-          it surfaces — <strong>one hotkey away, one keystroke to clear</strong>. Share links,
+          Move between live responses, decisions, and full terminals without losing your place —
+          <strong>one hotkey away, every session in context</strong>. Share links,
           notes, files, and screenshots into the exact agent session that should act on them.
         </p>
         <div class="cta-row rise d3">
@@ -527,16 +673,156 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
   <div class="strip" role="presentation">
     <div class="hazard"></div>
     <div class="strip-inner wrap">
-      <h2>Agents run on their own. Only the sessions that need you surface.</h2>
-      <p class="src">— the whole idea. Everything else is ergonomics.</p>
+      <h2>Every agent session. One command center.</h2>
+      <p class="src">— from quick check-ins to deep terminal work.</p>
     </div>
     <div class="hazard"></div>
   </div>
 
+  <!-- ————————————————— feature demos -->
+  <section class="sect wrap" id="demos" aria-label="Feature demos">
+    <div class="sect-head">
+      <span class="idx">[1] WATCH THE WORKFLOW</span>
+      <h2>See every move</h2>
+      <p class="sub">Pass is easier to understand in motion. Each card follows one real workflow from first prompt to done — pause any demo, then move to the next.</p>
+    </div>
+    <div class="demo-reel">
+      <article class="demo-card">
+        <div class="demo-stage">
+          <div class="demo-hud"><span class="live">DEMO</span><span>SESSION TRIAGE</span><span class="time">00:12</span></div>
+          <div class="demo-window demo-anim">
+            <div class="demo-window-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><b>Pass · Home</b></div>
+            <div class="mini-feed">
+              <aside>
+                <span class="label">SESSIONS · 3</span>
+                <div class="mini-session"><span class="led"></span><span><b>pass</b>running</span></div>
+                <div class="mini-session hot"><span class="led"></span><span><b>ivma</b>updated</span></div>
+                <div class="mini-session"><span class="led"></span><span><b>blog</b>finished</span></div>
+              </aside>
+              <div class="mini-convo">
+                <span class="eyebrow">LATEST UPDATE</span>
+                <h4>The checkout flow is ready.</h4>
+                <div class="bubble">Should I keep the guest checkout path?</div>
+                <div class="reply">Yes — keep it behind a flag.</div>
+              </div>
+            </div>
+          </div>
+          <button class="demo-play" type="button" aria-label="Pause session triage demo"></button>
+        </div>
+        <div class="demo-card-copy">
+          <span class="take">TAKE 01</span>
+          <div>
+            <h3>Triage every agent from one feed</h3>
+            <p>See the last response from every session, with the <b>latest context automatically organized</b>. Reply without hunting through terminal tabs.</p>
+            <div class="demo-card-meta"><span>chat home</span><span>attention feed</span><span>@ jump</span></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="demo-card">
+        <div class="demo-stage">
+          <div class="demo-hud"><span class="live">DEMO</span><span>GLOBAL SUMMON</span><span class="time">00:08</span></div>
+          <div class="demo-window demo-anim">
+            <div class="demo-window-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><b>Your editor · Pass stays one shortcut away</b></div>
+            <div class="summon-scene">
+              <div class="editor-code">
+                <span class="nums">18<br>19<br>20<br>21<br>22<br>23</span>
+                <code><span class="syntax">struct</span> CheckoutView {<br>&nbsp;&nbsp;<span class="syntax">let</span> model: CheckoutModel<br><br>&nbsp;&nbsp;<span class="syntax">func</span> <span class="fn">submit</span>() async {<br>&nbsp;&nbsp;&nbsp;&nbsp;await model.purchase()<br>&nbsp;&nbsp;}<br>}</code>
+              </div>
+              <div class="summon-panel">
+                <div class="summon-panel-head"><span>PASS</span><span>3 sessions</span><b>⌥ SPACE</b></div>
+                <div class="summon-row current"><span class="led"></span><span><strong>ivma</strong>feat/checkout</span><em>active</em></div>
+                <div class="summon-row"><span class="led"></span><span><strong>pass</strong>extension-market</span><em>running</em></div>
+                <div class="summon-input"><b>❯</b> Reply, jump, or start a session…</div>
+              </div>
+              <div class="summon-hotkey">⌥ SPACE</div>
+            </div>
+          </div>
+          <button class="demo-play" type="button" aria-label="Pause global summon demo"></button>
+        </div>
+        <div class="demo-card-copy">
+          <span class="take">TAKE 02</span>
+          <div>
+            <h3>Summon your workspace anywhere</h3>
+            <p>Raise Pass over any app or Space with one global shortcut. <b>Your editor stays in context</b> while every agent session remains immediately available.</p>
+            <div class="demo-card-meta"><span>global hotkey</span><span>floating panel</span><span>focus-safe</span></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="demo-card wide" id="extension-market">
+        <div class="demo-stage">
+          <div class="demo-hud"><span class="live">DEMO</span><span>EXTENSION MARKET</span><span class="time">00:18</span></div>
+          <div class="demo-window demo-anim">
+            <div class="demo-window-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><b>Pass · Extension Market</b></div>
+            <div class="market-scene">
+              <div class="market-side">
+                <b>EXTENSIONS</b>
+                <span class="selected">Discover</span>
+                <span>Installed · 3</span>
+                <span>Build your own</span>
+              </div>
+              <div class="market-main">
+                <div class="market-search">⌕ Search commands, dashboards, and agent automations…</div>
+                <div class="market-grid">
+                  <div class="market-item featured">
+                    <span class="ext-icon">◫</span><b>Agent Usage</b><p>Token usage by day, model, and project.</p>
+                    <div class="market-install">Install → Installed ✓</div>
+                  </div>
+                  <div class="market-item">
+                    <span class="ext-icon">⌁</span><b>Event Monitor</b><p>Watch attention and session events live.</p>
+                    <div class="market-install">View details</div>
+                  </div>
+                  <div class="market-item">
+                    <span class="ext-icon">＋</span><b>Build with AI</b><p>Turn a plain-language idea into an extension.</p>
+                    <div class="market-install">Start building</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <button class="demo-play" type="button" aria-label="Pause Extension Market demo"></button>
+        </div>
+        <div class="demo-card-copy">
+          <span class="take">TAKE 03</span>
+          <div>
+            <h3>Make Pass yours with Extension Market</h3>
+            <p>Extension Market is the place to <b>discover, review, and install new Pass capabilities</b>: quick commands, event automations, and full web-UI dashboards. Every extension declares its permissions before install, stays disabled until you approve it, and can be launched from the panel or menu bar. Start with community extensions, or describe what you need and let the AI Extension Builder create one for review.</p>
+            <div class="demo-card-meta"><span>permission review</span><span>one-click install</span><span>web UI</span><span>AI builder</span></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="demo-card wide">
+        <div class="demo-stage">
+          <div class="demo-hud"><span class="live">DEMO</span><span>TERMINAL HANDOFF</span><span class="time">00:10</span></div>
+          <div class="demo-window demo-anim">
+            <div class="demo-window-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><b>pass · feat/marketplace</b></div>
+            <div class="terminal-scene">
+              <div><span class="ps1">❯</span> agent is waiting in the existing tmux session</div>
+              <div class="terminal-line run"><span class="ps1">❯</span> make test --filter ExtensionMarketplace</div>
+              <div class="terminal-result">✓ 14 marketplace tests passed · session remains attached</div>
+              <div class="handoff-pill">⌘⏎ Open in Ghostty ↗</div>
+            </div>
+          </div>
+          <button class="demo-play" type="button" aria-label="Pause terminal handoff demo"></button>
+        </div>
+        <div class="demo-card-copy">
+          <span class="take">TAKE 04</span>
+          <div>
+            <h3>Dive into the real terminal</h3>
+            <p>Open any session as a <b>fully interactive embedded terminal</b>, then hand the exact same tmux session to Ghostty when the work needs more room.</p>
+            <div class="demo-card-meta"><span>embedded terminal</span><span>survives restart</span><span>Ghostty handoff</span></div>
+          </div>
+        </div>
+      </article>
+    </div>
+  </section>
+
   <!-- ————————————————— features -->
   <section class="sect wrap" id="features" aria-label="Features">
     <div class="sect-head">
-      <span class="idx">[1] PRE-FLIGHT</span>
+      <span class="idx">[2] PRE-FLIGHT</span>
       <h2>What it does</h2>
       <p class="sub">Six terminals and four worktrees is not orchestration — it's tab-hunting. Pass turns supervision into a feed: every session reports in, and your keyboard does the rest.</p>
     </div>
@@ -586,8 +872,14 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
       <div class="feat s7">
         <span class="no">PF-08</span>
         <h3>Mobile companion, planned</h3>
-        <p>The planned mobile version turns your phone into a lightweight command deck: <b>push notifications for blocked agents</b>, approve or deny prompts, send quick replies, and share links or screenshots from mobile into the right desktop session.</p>
+        <p>The planned mobile version turns your phone into a lightweight command deck: <b>session updates on the go</b>, approve or deny prompts, send quick replies, and share links or screenshots from mobile into the right desktop session.</p>
         <p class="spec">iOS first · Android under evaluation · remote session handoff</p>
+      </div>
+      <div class="feat s12">
+        <span class="no">PF-09</span>
+        <h3>Extension Market</h3>
+        <p>Browse installable <b>commands, automations, and web-UI tools</b> from inside Pass. Review requested capabilities before anything runs, approve its exact fingerprint, and launch installed extensions from the panel or menu bar.</p>
+        <p class="spec">discover · inspect permissions · install · enable · launch</p>
       </div>
     </div>
   </section>
@@ -595,7 +887,7 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
   <!-- ————————————————— architecture -->
   <section class="sect wrap" id="system" aria-label="How it fits together">
     <div class="sect-head">
-      <span class="idx">[2] SYSTEM</span>
+      <span class="idx">[3] SYSTEM</span>
       <h2>How it fits together</h2>
       <p class="sub">Straight from the README. Hooks in, decisions out — and the terminal is always one keystroke away.</p>
     </div>
@@ -620,7 +912,7 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
   <!-- ————————————————— keys -->
   <section class="sect wrap" id="keys" aria-label="Keyboard reference">
     <div class="sect-head">
-      <span class="idx">[3] KEYS</span>
+      <span class="idx">[4] KEYS</span>
       <h2>Hands stay home</h2>
       <p class="sub">The panel is built to be driven blind. Every path — summon, triage, decide, dive, dismiss — fits under your fingers.</p>
     </div>
@@ -641,7 +933,7 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
   <!-- ————————————————— roadmap -->
   <section class="sect wrap" id="roadmap" aria-label="Roadmap">
     <div class="sect-head">
-      <span class="idx">[4] ROADMAP</span>
+      <span class="idx">[5] ROADMAP</span>
       <h2>Platform plans</h2>
       <p class="sub">Pass starts on macOS because Claude Code, tmux, notifications, hotkeys, and the share extension can be made tight there first. The next platforms are planned as companions, not half-finished ports.</p>
     </div>
@@ -649,7 +941,7 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
       <div class="road">
         <span class="tag">planned</span>
         <h3>Mobile version</h3>
-        <p>Approve blocked agents from your phone, send short replies, receive completion alerts, and share mobile links, text, screenshots, or files back to a desktop Pass session.</p>
+        <p>Follow session updates from your phone, send short replies, receive completion alerts, and share mobile links, text, screenshots, or files back to a desktop Pass session.</p>
         <p class="spec">notification actions · share sheet · session picker</p>
       </div>
       <div class="road">
@@ -670,7 +962,7 @@ footer{margin-top:clamp(80px,12vh,150px);border-top:1px solid var(--line)}
   <!-- ————————————————— download -->
   <section class="sect wrap" id="get" aria-label="Download">
     <div class="sect-head">
-      <span class="idx">[5] GET</span>
+      <span class="idx">[6] GET</span>
       <h2>Get Pass</h2>
       <p class="sub">Free, source on GitHub. macOS is available first; mobile, Windows, and Steam distribution are planned next-platform work.</p>
     </div>
@@ -732,7 +1024,7 @@ make open">copy</button>
 /* ————————————————— nav scroll-spy (tmux current-window *) */
 (function(){
   var links=[].slice.call(document.querySelectorAll('[data-spy]'));
-  var ids=['top','features','system','keys','roadmap','get'];
+  var ids=['top','demos','features','system','keys','roadmap','get'];
   var secs=ids.map(function(i){return document.getElementById(i)}).filter(Boolean);
   function onScroll(){
     var y=window.scrollY+120,cur='top';
@@ -749,6 +1041,17 @@ document.querySelectorAll('[data-copy]').forEach(function(btn){
       var t=btn.textContent;btn.textContent='copied';
       setTimeout(function(){btn.textContent=t},1400);
     });
+  });
+});
+
+/* ————————————————— demo reel controls */
+document.querySelectorAll('.demo-card').forEach(function(card){
+  var button=card.querySelector('.demo-play');
+  if(!button)return;
+  button.addEventListener('click',function(){
+    var paused=card.classList.toggle('is-paused');
+    var demoName=(card.querySelector('h3')||{}).textContent||'feature';
+    button.setAttribute('aria-label',(paused?'Play ':'Pause ')+demoName+' demo');
   });
 });
 

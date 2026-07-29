@@ -405,6 +405,13 @@ final class AppModel {
         panelController?.toggle()
     }
 
+    /// Unconditionally bring the panel up. Unlike `summon()` this never toggles it away, so
+    /// callers that mean "open pass now" (onboarding's Open Pass) can't hide a panel the user
+    /// already summoned with the shortcut.
+    func openPanel() {
+        panelController?.show(preselecting: nil)
+    }
+
     /// Menu bar → attach the mobile-device picker to the terminal workspace already on screen.
     func showDeviceMirror() {
         guard let focusedSessionName else {
