@@ -68,6 +68,69 @@ struct CLIReadResponse: Codable {
     var error: String? = nil
 }
 
+struct CLIBrowserViewport: Codable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+    var documentWidth: Double
+    var documentHeight: Double
+}
+
+struct CLIBrowserElement: Codable {
+    var ref: String
+    var role: String
+    var name: String
+    var tag: String
+    var type: String? = nil
+    var value: String? = nil
+    var disabled: Bool? = nil
+    var checked: Bool? = nil
+    var selected: Bool? = nil
+    var expanded: Bool? = nil
+    var sensitive: Bool? = nil
+}
+
+struct CLIBrowserSnapshotRequest: Codable {
+    var session: String? = nil
+    var all: Bool? = nil
+}
+
+struct CLIBrowserSnapshotResponse: Codable {
+    var ok: Bool
+    var url: String? = nil
+    var title: String? = nil
+    var revision: Int? = nil
+    var viewport: CLIBrowserViewport? = nil
+    var elements: [CLIBrowserElement] = []
+    var truncated: Bool? = nil
+    var error: String? = nil
+}
+
+struct CLIBrowserActionRequest: Codable {
+    var session: String? = nil
+    var action: String
+    var ref: String? = nil
+    var text: String? = nil
+    var key: String? = nil
+    var direction: String? = nil
+    var amount: Double? = nil
+    var revision: Int? = nil
+}
+
+struct CLIBrowserActionResponse: Codable {
+    var ok: Bool
+    var action: String? = nil
+    var ref: String? = nil
+    var url: String? = nil
+    var title: String? = nil
+    var revision: Int? = nil
+    var viewport: CLIBrowserViewport? = nil
+    var target: CLIBrowserElement? = nil
+    var snapshotRecommended: Bool? = nil
+    var error: String? = nil
+}
+
 struct CLIExtensionValidateRequest: Codable {
     var path: String
 }
@@ -95,8 +158,9 @@ struct CLIConfigURLAddResponse: Codable {
     var error: String? = nil
 }
 
-/// Exit codes (BROWSER.md §5.3): 0 ok · 1 pass refused (reason on stderr) · 2 usage /
-/// no target session · 3 pass not running.
+/// Exit codes (BROWSER.md §5.3): 0 ok · 1 pass refused (reason on stderr) ·
+/// 2 no target session · 3 pass not running. ArgumentParser uses EX_USAGE (64)
+/// for malformed commands and validation failures.
 enum PassExit {
     static let refused: Int32 = 1
     static let usage: Int32 = 2

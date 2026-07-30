@@ -194,6 +194,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 tabs: { await MainActor.run { CLIAPI.tabs(appModel) } },
                 screenshot: { body in await CLIAPI.screenshot(appModel, body: body) },
                 read: { body in await CLIAPI.read(appModel, body: body) },
+                snapshot: { body in await CLIAPI.snapshot(appModel, body: body) },
+                action: { body in await CLIAPI.action(appModel, body: body) },
                 validateExtension: { body in await MainActor.run {
                     CLIAPI.validateExtension(body: body)
                 } },

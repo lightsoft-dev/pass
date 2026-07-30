@@ -61,6 +61,46 @@ struct CLIReadResponse: Codable {
     var error: String? = nil
 }
 
+struct CLIBrowserSnapshotRequest: Codable {
+    var session: String? = nil
+    var all: Bool? = nil
+}
+
+struct CLIBrowserSnapshotResponse: Codable {
+    var ok: Bool
+    var url: String? = nil
+    var title: String? = nil
+    var revision: Int? = nil
+    var viewport: BrowserAutomationViewport? = nil
+    var elements: [BrowserAutomationElement] = []
+    var truncated: Bool? = nil
+    var error: String? = nil
+}
+
+struct CLIBrowserActionRequest: Codable {
+    var session: String? = nil
+    var action: String
+    var ref: String? = nil
+    var text: String? = nil
+    var key: String? = nil
+    var direction: String? = nil
+    var amount: Double? = nil
+    var revision: Int? = nil
+}
+
+struct CLIBrowserActionResponse: Codable {
+    var ok: Bool
+    var action: String? = nil
+    var ref: String? = nil
+    var url: String? = nil
+    var title: String? = nil
+    var revision: Int? = nil
+    var viewport: BrowserAutomationViewport? = nil
+    var target: BrowserAutomationElement? = nil
+    var snapshotRecommended: Bool? = nil
+    var error: String? = nil
+}
+
 struct CLIExtensionValidateRequest: Codable {
     var path: String
 }
@@ -88,8 +128,8 @@ struct CLIConfigURLAddResponse: Codable {
     var error: String? = nil
 }
 
-/// Serves passcli: opens/closes/lists embedded-browser pages and the observation verbs
-/// (screenshot/read). Always answers 200 + `{ok,…}` JSON — errors ride in the body so the
+/// Serves passcli: opens/closes/lists embedded-browser pages plus observation and interaction
+/// verbs. Always answers 200 + `{ok,…}` JSON — errors ride in the body so the
 /// CLI can print them verbatim. Loopback-only, same trust posture as /hook/* and /share/*:
 /// agents in pass sessions already hold user-level shell power; this adds structure, not
 /// privilege (BROWSER.md §6).
@@ -226,6 +266,109 @@ enum CLIAPI {
         return encode(CLIReadResponse(ok: true, content: content, truncated: truncated ? true : nil))
     }
 
+    // MARK: agentic browser automation
+
+    static func snapshot(_ appModel: AppModel, body: Data) async -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes else {
+            return encode(CLIBrowserSnapshotResponse(ok: false, error: "request too large"))
+        }
+        guard let req = try? JSONDecoder().decode(CLIBrowserSnapshotRequest.self, from: body) else {
+            return encode(CLIBrowserSnapshotResponse(ok: false, error: "bad request"))
+        }
+        guard let session = target(appModel, req.session) else {
+            return encode(CLIBrowserSnapshotResponse(
+                ok: false, error: missingSession(req.session)))
+        }
+        guard let tab = appModel.browser?.tab(for: session.name) else {
+            return encode(CLIBrowserSnapshotResponse(
+                ok: false, error: "no open page — run `passcli browser open <url>` first"))
+        }
+        guard let webViews = appModel.webViews else {
+            return encode(CLIBrowserSnapshotResponse(
+                ok: false, error: "browser is not ready"))
+        }
+
+        webViews.load(tab)
+        await webViews.awaitLoaded(tab.id)
+        do {
+            let snapshot = try await webViews.automationSnapshot(
+                tab.id, includeOffscreen: req.all ?? false)
+            return encode(CLIBrowserSnapshotResponse(
+                ok: true,
+                url: snapshot.url,
+                title: snapshot.title,
+                revision: snapshot.revision,
+                viewport: snapshot.viewport,
+                elements: snapshot.elements,
+                truncated: snapshot.truncated ? true : nil))
+        } catch {
+            return encode(CLIBrowserSnapshotResponse(
+                ok: false, error: error.localizedDescription))
+        }
+    }
+
+    static func action(_ appModel: AppModel, body: Data) async -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes else {
+            return encode(CLIBrowserActionResponse(ok: false, error: "request too large"))
+        }
+        guard let req = try? JSONDecoder().decode(CLIBrowserActionRequest.self, from: body) else {
+            return encode(CLIBrowserActionResponse(ok: false, error: "bad request"))
+        }
+        if let error = browserActionValidationError(req) {
+            return encode(CLIBrowserActionResponse(
+                ok: false, action: req.action, ref: req.ref, error: error))
+        }
+        guard let session = target(appModel, req.session) else {
+            return encode(CLIBrowserActionResponse(
+                ok: false, action: req.action, ref: req.ref,
+                error: missingSession(req.session)))
+        }
+        guard let tab = appModel.browser?.tab(for: session.name) else {
+            return encode(CLIBrowserActionResponse(
+                ok: false, action: req.action, ref: req.ref,
+                error: "no open page — run `passcli browser open <url>` first"))
+        }
+        guard let webViews = appModel.webViews else {
+            return encode(CLIBrowserActionResponse(
+                ok: false, action: req.action, ref: req.ref,
+                error: "browser is not ready"))
+        }
+
+        let amount = req.action == "scroll"
+            ? (req.amount ?? PassConfig.cliDefaultAutomationScrollAmount)
+            : req.amount
+        let action = BrowserAutomationAction(
+            action: req.action,
+            ref: req.ref,
+            text: req.text,
+            key: req.key,
+            direction: req.direction,
+            amount: amount,
+            revision: req.revision)
+
+        webViews.load(tab)
+        await webViews.awaitLoaded(tab.id)
+        do {
+            let result = try await webViews.performAutomationAction(tab.id, action: action)
+            return encode(CLIBrowserActionResponse(
+                ok: true,
+                action: req.action,
+                ref: req.ref,
+                url: result.url,
+                title: result.title,
+                revision: result.revision,
+                viewport: result.viewport,
+                target: result.target,
+                snapshotRecommended: result.snapshotRecommended))
+        } catch {
+            return encode(CLIBrowserActionResponse(
+                ok: false,
+                action: req.action,
+                ref: req.ref,
+                error: error.localizedDescription))
+        }
+    }
+
     // MARK: extension authoring
 
     /// Validate a draft with the exact decoder/catalog/runtime rules the app uses. This endpoint
@@ -317,6 +460,68 @@ enum CLIAPI {
             return "no target session — pass --session, or run inside a pass tmux session ($PASS_SESSION)"
         }
         return "unknown session '\(name)' — check tmux ls (pass-* sessions)"
+    }
+
+    static func browserActionValidationError(_ req: CLIBrowserActionRequest) -> String? {
+        let allowedActions = ["click", "fill", "type", "select", "press", "scroll"]
+        guard allowedActions.contains(req.action) else {
+            return "unsupported action '\(req.action)' — use click, fill, type, select, press, or scroll"
+        }
+        if let revision = req.revision, revision <= 0 {
+            return "revision must be a positive integer"
+        }
+        if let ref = req.ref, !isValidBrowserElementRef(ref) {
+            return "ref must match @e<number> (for example @e1) — take a fresh snapshot to get refs"
+        }
+        if let text = req.text, text.utf8.count > PassConfig.cliMaxAutomationTextBytes {
+            return "text is too long (maximum 32 KB)"
+        }
+        if let key = req.key, key.utf8.count > PassConfig.cliMaxAutomationKeyBytes {
+            return "key is too long (maximum 64 bytes)"
+        }
+
+        switch req.action {
+        case "click":
+            if req.ref == nil {
+                return "click requires ref — take a snapshot and pass an @e<number>"
+            }
+        case "fill", "type", "select":
+            if req.ref == nil {
+                return "\(req.action) requires ref — take a snapshot and pass an @e<number>"
+            }
+            if req.text == nil {
+                return "\(req.action) requires text"
+            }
+        case "press":
+            if req.key?.isEmpty != false {
+                return "press requires key"
+            }
+        case "scroll":
+            guard let direction = req.direction,
+                  ["up", "down", "left", "right"].contains(direction) else {
+                return "scroll direction must be up, down, left, or right"
+            }
+            let amount = req.amount ?? PassConfig.cliDefaultAutomationScrollAmount
+            guard amount.isFinite,
+                  amount >= PassConfig.cliMinAutomationScrollAmount,
+                  amount <= PassConfig.cliMaxAutomationScrollAmount else {
+                return "scroll amount must be between 1 and 10000"
+            }
+        default:
+            break
+        }
+        return nil
+    }
+
+    static func isValidBrowserElementRef(_ ref: String) -> Bool {
+        let bytes = Array(ref.utf8)
+        guard bytes.count >= 3,
+              bytes[0] == 0x40,
+              bytes[1] == 0x65,
+              (49...57).contains(bytes[2]) else {
+            return false
+        }
+        return bytes.dropFirst(3).allSatisfy { (48...57).contains($0) }
     }
 
     private static func encode<T: Encodable>(_ value: T) -> Data {

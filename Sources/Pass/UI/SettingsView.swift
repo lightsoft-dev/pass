@@ -522,7 +522,7 @@ struct SettingsView: View {
                     else { ClaudeHooksInstaller.removeAdvertise() }
                     advertiseOn = ClaudeHooksInstaller.isAdvertiseInstalled()
                 }
-            Text("Agents open pages beside their terminal (passcli browser open) and can read them back (screenshot/read). Note: whatever the embedded browser shows is readable by that session's agent.")
+            Text("Agents can open, inspect, and interact with pages beside their terminal through passcli (snapshot/click/fill/scroll), as well as capture or read them. Whatever the embedded browser shows — including imported login sessions — is readable and operable by that session's agent.")
                 .font(.caption).foregroundStyle(.secondary)
             Button("Clear browser website data") {
                 Task { await WebViewPool.clearWebsiteData() }
@@ -560,7 +560,7 @@ struct SettingsView: View {
                         .foregroundStyle(chromeImportStatus.hasPrefix("Imported") ? .green : .orange)
                 }
             }
-            Text("Copies cookies from the selected local Chrome profile into Pass once. Passwords, extensions, history, and Chrome files are never copied or changed. Imported logins are readable by agents through the embedded browser.")
+            Text("Copies cookies from the selected local Chrome profile into Pass once. Passwords, extensions, history, and Chrome files are never copied or changed. Agents can read and interact with pages that use imported logins through the embedded browser.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

@@ -23,6 +23,11 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
 - **Interactive terminal** — opening a session embeds a real terminal attached to its tmux
   session: type straight into Claude (keys, arrows, permission answers), full color and sizing.
   `⌘[` steps back to the home; `⌘⏎` opens it in Ghostty.
+- **Agentic embedded browser** — the page beside a session is both human-visible and controllable
+  through `passcli`. An agent can `open`, take a compact interactive `snapshot`, then use stable
+  `@eN` references to `click`, `fill`, `type`, `select`, `press`, and `scroll`; `screenshot` and
+  `read` close the visual verification loop. Commands act on the same persistent WKWebView the
+  user sees, without exposing arbitrary JavaScript execution.
 - **Hooks-driven attention** — Claude permission prompts / questions / completions arrive via
   Claude Code hooks; the selected session surfaces at the top with what it needs and how long
   it's waited (worktree badge, branch, agent glyph).
@@ -143,8 +148,8 @@ Claude Code (in tmux)  ──hooks(HTTP)──►  HookServer (127.0.0.1:49817)
   environment (the S0 spikes that de-risked the architecture before any Swift was written).
 - `BUILD.md` — build/signing setup and platform gotchas (notification signing, non-activating
   panel `collectionBehavior`, tmux `-F` control-byte escaping, accessory-app edit shortcuts).
-- `docs/BROWSER.md` — design (M6, pre-implementation): the embedded browser pane
-  (terminal │ WKWebView split) and the `passcli` CLI that lets agents open pages in it
-  (`passcli browser open <url>`), plus the S6 spikes to validate before building.
+- `docs/BROWSER.md` — implemented embedded browser design: the terminal │ WKWebView split and
+  the `passcli` snapshot/ref/action protocol that lets agents open, inspect, and operate the same
+  page the user sees.
 - `docs/mobile-remote-architecture.md` — implemented developer MVP status plus the secure pairing,
   hardening, and voice-management roadmap for mobile access.

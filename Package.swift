@@ -72,6 +72,8 @@ let package = Package(
                 "MirrorDeviceTests.swift",
                 // Tests the macOS Keychain-backed extension API bridge, excluded above.
                 "ExtensionPassAPIServiceTests.swift",
+                // Tests WKWebView automation, excluded with the macOS-only UI layer above.
+                "BrowserAutomationTests.swift",
                 // Tests SwiftUI/AppKit terminal views, excluded from the portable Pass target.
                 "TerminalMouseInteractionPolicyTests.swift",
             ]

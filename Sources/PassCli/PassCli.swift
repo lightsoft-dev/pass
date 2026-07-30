@@ -8,7 +8,7 @@ import Foundation
 struct PassCli: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "passcli",
-        abstract: "Control the pass app from a session — show pages in its embedded browser, beside your terminal.",
+        abstract: "Control the pass app and its agent-interactive embedded browser from a session.",
         discussion: """
         Runs inside a pass tmux session ($PASS_SESSION identifies you) or anywhere with \
         --session. Talks to the pass app's loopback server (127.0.0.1:49817; override with \
@@ -77,9 +77,11 @@ struct Advertise: AsyncParsableCommand {
         - "\(cli)" browser screenshot -o <path>.png — capture what the user currently sees, \
         then read that file to check your frontend work
         - "\(cli)" browser read — the open page as plain text
+        - Agentic loop: run "\(cli)" browser snapshot, then "\(cli)" browser click @e1 \
+        --revision <n> or "\(cli)" browser fill @e2 <text> --revision <n>; \
+        "\(cli)" browser scroll down when needed, and snapshot again after each action
         - "\(cli)" config url add <url> --label <name> — save a project URL into \
         pass-config.json so it appears in the session URL bar
-        It shows pages to the human — it is NOT a browser-automation tool (no clicking, no JS).
         """
         let payload: [String: Any] = [
             "hookSpecificOutput": [

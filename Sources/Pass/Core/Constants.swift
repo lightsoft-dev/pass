@@ -47,6 +47,11 @@ enum PassConfig {
     static let cliMaxBodyBytes = 64 * 1024
     static let cliMaxURLBytes = 8 * 1024
     static let cliMaxReadBytes = 512 * 1024
+    static let cliMaxAutomationTextBytes = 32 * 1024
+    static let cliMaxAutomationKeyBytes = 64
+    static let cliDefaultAutomationScrollAmount = 600.0
+    static let cliMinAutomationScrollAmount = 1.0
+    static let cliMaxAutomationScrollAmount = 10_000.0
 
     /// Reconcile poll interval (session list truth).
     static let reconcileInterval: TimeInterval = 2.0
