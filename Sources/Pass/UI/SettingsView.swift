@@ -153,7 +153,7 @@ struct SettingsView: View {
         Section("Project directories") {
             let directories = appModel.projects?.projectDirectories ?? []
             if directories.isEmpty {
-                Text("No directories are being synced. Add a folder that contains your projects.")
+                Text("No directories are being synced. Add a project folder or a folder that contains projects.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(directories, id: \.self) { path in
@@ -179,7 +179,7 @@ struct SettingsView: View {
             if let msg = appModel.lastProjectSyncMessage {
                 Text(msg).font(.caption).foregroundStyle(.secondary)
             }
-            Text("Pass discovers projects from these folders. Removing a folder stops syncing it, without deleting projects or active sessions.")
+            Text("Pass supports regular folders and Git repositories. A folder containing Git repositories one level inside is treated as a project collection. Removing it stops syncing without deleting projects or active sessions.")
                 .font(.caption).foregroundStyle(.secondary)
         }
 

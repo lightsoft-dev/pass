@@ -65,6 +65,7 @@ permission is absent.
 | `notify` | Post a macOS notification |
 | `open:url` | Open a URL in the default handler |
 | `ui:window` | Open an extension-owned HTML window |
+| `network:pass-api` | Call the host's narrow authenticated Pass API allowlist |
 | `events:attention` | Subscribe to `attention.*` events |
 | `events:session` | Subscribe to `session.*` events |
 
@@ -85,6 +86,9 @@ An action must contain exactly one of:
 { "notify": { "title": "Pass", "body": "${attention.preview}" } }
 { "openURL": "https://example.com/${project.name}" }
 { "openWindow": "dashboard" }
+{ "script": "scripts/collect.py", "returns": "json" }
+{ "passAPI": { "method": "GET", "path": "v2/usage/leaderboard?days=7" } }
+{ "passAPI": { "method": "PUT", "path": "v2/usage/snapshots", "bodyInput": "payload" } }
 ```
 
 - Resource paths are relative to the extension folder. Absolute paths, missing resources, and
@@ -92,9 +96,14 @@ An action must contain exactly one of:
 - Background scripts run with the extension folder as cwd, receive expanded `args`, and receive
   the complete event/context object as JSON on stdin. Timeout defaults to 30 seconds and is
   clamped to 1–600 seconds.
+- A named background script with `"returns": "json"` returns up to 1 MiB of parsed stdout to
+  `pass.runAction`. Other successful actions return `{ "ok": true }`.
 - `terminal: true` additionally requires `session:create` and opens a visible shell session.
 - `sendText` inherits Pass's shell-safety checks; it is not raw terminal automation.
 - `openWindow` is command/named-action only, not allowed from an automatic event rule.
+- `passAPI` requires `network:pass-api`. Pass keeps the desktop credential in Keychain and
+  currently allows only `GET v2/usage/leaderboard` plus `PUT|DELETE v2/usage/snapshots`.
+  A PUT body is the JSON object string in the declared named-action `bodyInput`.
 
 Template variables include `${event.name}`, `${session.name}`, `${session.displayName}`,
 `${session.cwd}`, `${project.root}`, `${project.name}`, `${git.branch}`,
@@ -155,8 +164,9 @@ window.pass.closeWindow();
 
 - `pass.on(event, callback)` accepts only declared window subscriptions.
 - `pass.getSnapshot()` requires `session:read` and returns the current session snapshot.
-- `pass.runAction(id, input)` accepts only actions declared in `contributes.actions`. It never
-  exposes raw shell, filesystem, network, or native objects to JavaScript.
+- `pass.runAction(id, input)` accepts only actions declared in `contributes.actions` and resolves
+  with the action's JSON result. It never exposes raw shell, filesystem, credentials, unrestricted
+  network, or native objects to JavaScript.
 - A named `sendText` action uses `input.sessionName` as its target.
 - `pass.closeWindow()` closes only the current extension window.
 - Reloading, disabling, or modifying an approved extension closes its windows. Changing any

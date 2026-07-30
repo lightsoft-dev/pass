@@ -1,0 +1,60 @@
+{
+  "apiVersion": 2,
+  "id": "usage-leaderboard",
+  "name": "Usage Leaderboard",
+  "version": "0.1.0",
+  "description": "Claude Code, Codex, Pi의 로컬 토큰 합계를 선택적으로 공유하고 7일·30일 사용자 랭킹을 봅니다.",
+  "permissions": ["ui:window", "run:script", "network:pass-api"],
+  "contributes": {
+    "windows": [
+      {
+        "id": "leaderboard",
+        "title": "Pass Usage League",
+        "entry": "ui/index.html",
+        "width": 1040,
+        "height": 720
+      }
+    ],
+    "commands": [
+      {
+        "id": "usage-leaderboard",
+        "title": "토큰 사용량 랭킹 보기",
+        "context": "global",
+        "run": { "openWindow": "leaderboard" }
+      }
+    ],
+    "actions": {
+      "collect": {
+        "script": "scripts/collect_usage.py",
+        "args": ["--days", "30"],
+        "timeoutSeconds": 60,
+        "returns": "json"
+      },
+      "rankings-week": {
+        "passAPI": {
+          "method": "GET",
+          "path": "v2/usage/leaderboard?days=7&limit=50"
+        }
+      },
+      "rankings-month": {
+        "passAPI": {
+          "method": "GET",
+          "path": "v2/usage/leaderboard?days=30&limit=50"
+        }
+      },
+      "publish": {
+        "passAPI": {
+          "method": "PUT",
+          "path": "v2/usage/snapshots",
+          "bodyInput": "payload"
+        }
+      },
+      "stop-sharing": {
+        "passAPI": {
+          "method": "DELETE",
+          "path": "v2/usage/snapshots"
+        }
+      }
+    }
+  }
+}

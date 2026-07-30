@@ -267,6 +267,18 @@ describe("extension marketplace", () => {
       {
         ...manifest,
         contributes: {
+          actions: { usage: { passAPI: "not-an-object" } },
+        },
+      },
+      {
+        ...manifest,
+        contributes: {
+          actions: { collect: { script: "collect.py", returns: 7 } },
+        },
+      },
+      {
+        ...manifest,
+        contributes: {
           windows: [{ id: "main", title: "Main", entry: "index.html", width: "wide" }],
         },
       },
@@ -321,6 +333,14 @@ describe("extension marketplace", () => {
           send: { sendText: "Continue" },
           source: { openURL: "https://github.com/pass-test/shape-guard" },
           window: { openWindow: "main" },
+          collect: { script: "collect.py", returns: "json" },
+          usage: {
+            passAPI: {
+              method: "PUT",
+              path: "v2/usage/snapshots",
+              bodyInput: "payload",
+            },
+          },
         },
         windows: [{
           id: "main",

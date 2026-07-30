@@ -136,6 +136,23 @@ fragments. Active repository URLs and manifest ids are unique, and both are immu
 publication so accumulated install counts cannot be transferred to different code. Marketplace
 mutations are also written to the existing `audit_events` table.
 
+## Usage leaderboard API
+
+The bundled `usage-leaderboard` extension joins this feature only after the person clicks
+**Share my usage**. Requests require an issued desktop access credential; mobile credentials and
+anonymous callers are rejected.
+
+- `PUT /v2/usage/snapshots` replaces that desktop's shared 30-day snapshot and joins the account
+  to the leaderboard.
+- `GET /v2/usage/leaderboard?days=7|30&limit=1..100` returns ranked participants and the caller's
+  own rank.
+- `DELETE /v2/usage/snapshots` opts the whole account out and deletes all of its shared totals.
+
+D1 stores only date, provider (`claude`, `codex`, or `pi`), and input/output/cache token totals.
+Conversation content, project paths and names, session ids, model names, and costs are rejected by
+the client contract and are not represented in the schema. Apply migration
+`0004_usage_leaderboard.sql` before deploying the Worker.
+
 ## WebSocket handshake
 
 Public clients connect to `GET /connect` with an issued access credential:

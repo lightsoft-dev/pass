@@ -11,6 +11,7 @@ enum ExtensionCatalog {
         "notify",           // post a macOS notification
         "open:url",         // open a URL in the default handler
         "ui:window",        // open an extension-owned HTML/CSS/JS window
+        "network:pass-api", // call a small allowlist of authenticated Pass APIs
         "events:attention", // subscribe to attention.* events
         "events:session",   // subscribe to session.* events
     ]
@@ -29,6 +30,34 @@ enum ExtensionCatalog {
         if event.hasPrefix("attention.") { return "events:attention" }
         if event.hasPrefix("session.") { return "events:session" }
         return nil
+    }
+
+    /// Extensions never receive the desktop credential. The host may use it only for these
+    /// reviewed, aggregate-only endpoints, and the route/method pair is rechecked at runtime.
+    static func isAllowedPassAPI(method: String, path: String) -> Bool {
+        guard method == method.uppercased(),
+              let components = URLComponents(string: path),
+              components.scheme == nil, components.host == nil,
+              components.fragment == nil else { return false }
+        let route = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let queryItems = components.queryItems ?? []
+        switch (method, route) {
+        case ("GET", "v2/usage/leaderboard"):
+            guard queryItems.allSatisfy({ $0.name == "days" || $0.name == "limit" }),
+                  Set(queryItems.map(\.name)).count == queryItems.count else { return false }
+            for item in queryItems {
+                guard let value = item.value else { return false }
+                if item.name == "days", !["7", "30"].contains(value) { return false }
+                if item.name == "limit" {
+                    guard let limit = Int(value), (1...100).contains(limit) else { return false }
+                }
+            }
+            return true
+        case ("PUT", "v2/usage/snapshots"), ("DELETE", "v2/usage/snapshots"):
+            return queryItems.isEmpty
+        default:
+            return false
+        }
     }
 }
 
@@ -125,6 +154,11 @@ struct ExtensionManifest: Codable, Hashable, Sendable {
         var openURL: String?
         /// Opens a contributed HTML window by id. Web windows require apiVersion 2.
         var openWindow: String?
+        /// For named background-script actions, parse stdout as JSON and return it to the page.
+        var returns: String?
+        /// Authenticated request performed by Pass. Only aggregate usage routes are currently
+        /// allowlisted; credentials and raw networking never cross the extension bridge.
+        var passAPI: PassAPI?
 
         /// Permissions this action needs the manifest to have declared.
         var requiredPermissions: Set<String> {
@@ -137,11 +171,13 @@ struct ExtensionManifest: Codable, Hashable, Sendable {
             if notify != nil { p.insert("notify") }
             if openURL != nil { p.insert("open:url") }
             if openWindow != nil { p.insert("ui:window") }
+            if passAPI != nil { p.insert("network:pass-api") }
             return p
         }
 
         var effectCount: Int {
-            [script != nil, sendText != nil, notify != nil, openURL != nil, openWindow != nil]
+            [script != nil, sendText != nil, notify != nil, openURL != nil, openWindow != nil,
+             passAPI != nil]
                 .filter { $0 }.count
         }
 
@@ -152,8 +188,16 @@ struct ExtensionManifest: Codable, Hashable, Sendable {
             if notify != nil { return "notify" }
             if openURL != nil { return "openURL" }
             if let openWindow { return "openWindow " + openWindow }
+            if let passAPI { return "passAPI \(passAPI.method) \(passAPI.path)" }
             return "(empty)"
         }
+    }
+
+    struct PassAPI: Codable, Hashable, Sendable {
+        var method: String
+        var path: String
+        /// The named action input whose value is a complete JSON object body.
+        var bodyInput: String?
     }
 
     struct Notify: Codable, Hashable, Sendable {
@@ -285,10 +329,34 @@ extension ExtensionManifest {
                                 directory: URL, fileManager: FileManager) -> [String] {
         var out: [String] = []
         if action.effectCount != 1 {
-            out.append("\(label): exactly one of script / sendText / notify / openURL / openWindow")
+            out.append("\(label): exactly one of script / sendText / notify / openURL / openWindow / passAPI")
         }
         if action.terminal == true && action.script == nil {
             out.append("\(label): terminal needs a script")
+        }
+        if let returns = action.returns {
+            if returns != "json" {
+                out.append("\(label): returns must be \"json\"")
+            }
+            if action.script == nil || action.terminal == true {
+                out.append("\(label): returns is only available for background scripts")
+            }
+        }
+        if let api = action.passAPI {
+            if !ExtensionCatalog.isAllowedPassAPI(method: api.method, path: api.path) {
+                out.append("\(label): passAPI route or method is not allowed")
+            }
+            if api.method == "PUT" {
+                if let bodyInput = api.bodyInput {
+                    if !Self.isValidInputKey(bodyInput) {
+                        out.append("\(label): passAPI bodyInput is not a valid input key")
+                    }
+                } else {
+                    out.append("\(label): PUT passAPI needs bodyInput")
+                }
+            } else if api.bodyInput != nil {
+                out.append("\(label): passAPI bodyInput is only valid for PUT")
+            }
         }
         for p in action.requiredPermissions.sorted() where !declared.contains(p) {
             out.append("\(label): permission \"\(p)\" not declared")
@@ -304,6 +372,13 @@ extension ExtensionManifest {
     static func isValidIdentifier(_ s: String) -> Bool {
         guard let first = s.first, first != "-" else { return false }
         return s.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }
+    }
+
+    static func isValidInputKey(_ key: String) -> Bool {
+        guard let first = key.first, first.isASCII, first.isLetter else { return false }
+        return key.allSatisfy {
+            $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_")
+        }
     }
 
     struct ResourceError: Error, CustomStringConvertible, ExpressibleByStringLiteral {
