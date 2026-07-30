@@ -48,6 +48,7 @@ import {
   saveUserSession,
 } from "../services/storage";
 import { initialRemoteState, remoteReducer } from "./reducer";
+import { storeDemoPairedDesktop, storeDemoState } from "./storeDemo";
 
 type CommandResult =
   | { ok: true; commandId: string }
@@ -93,12 +94,49 @@ interface RemoteContextValue {
 }
 
 const RemoteContext = createContext<RemoteContextValue | null>(null);
+const STORE_DEMO_MODE = process.env.EXPO_PUBLIC_PASS_STORE_DEMO === "1";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
 
-export function RemoteProvider({ children }: PropsWithChildren) {
+function StoreDemoProvider({ children }: PropsWithChildren) {
+  const ok = useCallback((): CommandResult => ({ ok: true, commandId: "store-demo-command" }), []);
+  const preferences: UserPreferences = {
+    notificationsEnabled: true,
+    decisionAlerts: true,
+    voiceMode: "push-to-talk",
+  };
+  const value = useMemo<RemoteContextValue>(
+    () => ({
+      state: storeDemoState,
+      pairedDesktop: storeDemoPairedDesktop,
+      userSession: null,
+      preferences,
+      hydrated: true,
+      pairingBusy: false,
+      pairingError: null,
+      pair: async () => ok(),
+      approveDeckPairing: async () => ok(),
+      completeSignIn: async () => undefined,
+      signOut: async () => undefined,
+      forgetPairing: async () => undefined,
+      updatePreferences: async () => undefined,
+      reconnect: () => undefined,
+      refresh: ok,
+      sendMessage: ok,
+      createSession: ok,
+      answerDecision: ok,
+      openTerminal: ok,
+      sendTerminalInput: ok,
+      closeTerminal: ok,
+    }),
+    [ok],
+  );
+  return <RemoteContext.Provider value={value}>{children}</RemoteContext.Provider>;
+}
+
+function LiveRemoteProvider({ children }: PropsWithChildren) {
   const [state, dispatch] = useReducer(remoteReducer, initialRemoteState);
   const [pairedDesktop, setPairedDesktop] = useState<PairedDesktop | null>(null);
   const [userSession, setUserSession] = useState<UserSession | null>(null);
@@ -408,6 +446,11 @@ export function RemoteProvider({ children }: PropsWithChildren) {
   );
 
   return <RemoteContext.Provider value={value}>{children}</RemoteContext.Provider>;
+}
+
+export function RemoteProvider({ children }: PropsWithChildren) {
+  if (STORE_DEMO_MODE) return <StoreDemoProvider>{children}</StoreDemoProvider>;
+  return <LiveRemoteProvider>{children}</LiveRemoteProvider>;
 }
 
 export function useRemote(): RemoteContextValue {

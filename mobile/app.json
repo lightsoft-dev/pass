@@ -2,6 +2,7 @@
   "expo": {
     "name": "Pass Remote",
     "slug": "pass-mobile",
+    "owner": "lightsoft-crew",
     "version": "0.1.0",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
@@ -13,10 +14,16 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "app.lightsoft.pass.remote"
+      "bundleIdentifier": "dev.lightsoft.passmobile",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
-      "package": "app.lightsoft.pass.remote"
+      "package": "dev.lightsoft.passmobile",
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "plugins": [
       "expo-router",
@@ -33,6 +40,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3daf1488-aa08-4d79-b939-4a06b9be9759"
+      }
     }
   }
 }
