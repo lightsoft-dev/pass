@@ -123,14 +123,13 @@ struct CommandView: View {
         jumpItems.indices.contains(jumpSelection) ? jumpItems[jumpSelection] : nil
     }
 
-    /// The session order the home renders — chat-room style in every mode: sessions you need to
-    /// respond to cluster at the BOTTOM, nearest the terminal/input. The oldest-waiting one sits
-    /// at the very bottom (next to handle); newer arrivals stack above it; the rest stay up top
-    /// by recency. Handling one drops it back up top.
+    /// The session order the home renders: sessions that need a response stay at the TOP in every
+    /// mode so they are immediately visible. Newer requests lead that group; the rest follow in
+    /// their existing recency order.
     private var orderedSessions: [Session] {
         let waiting = sessions.filter { $0.needsUser }.sorted { pendingSince($0) > pendingSince($1) }
         let rest = sessions.filter { !$0.needsUser }
-        return rest + waiting
+        return waiting + rest
     }
 
     private func pendingSince(_ s: Session) -> Date {
@@ -1147,12 +1146,12 @@ struct CommandView: View {
 
     /// Where the cursor lands when the panel opens: an explicitly requested session first
     /// (notification click, CLI browser open — `pendingPreselect`, consumed here), else the
-    /// waiting session nearest the input (bottom of the queue), else the top.
+    /// first waiting session at the top, else the first session.
     private func initialSelectionName() -> String? {
         let target = appModel.pendingPreselect
         appModel.pendingPreselect = nil
         if let target, orderedSessions.contains(where: { $0.name == target }) { return target }
-        if let waiting = orderedSessions.last(where: { $0.needsUser }) { return waiting.name }
+        if let waiting = orderedSessions.first(where: { $0.needsUser }) { return waiting.name }
         return orderedSessions.first?.name
     }
 
