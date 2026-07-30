@@ -21,9 +21,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated {
             doubleTapHotkey?.invalidate()
             shiftTapHotkey?.invalidate()
+            appModel.stopProjectDirectorySync()
             appModel.mirror?.shutdown()
             appModel.miniTerminals?.closeAll()
             appModel.sessions?.flushSave()
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            appModel.scheduleProjectDirectorySyncForVisibilityChange()
+        }
+    }
+
+    func applicationWillResignActive(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            appModel.scheduleProjectDirectorySyncForVisibilityChange()
         }
     }
 
