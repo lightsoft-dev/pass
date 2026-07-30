@@ -227,7 +227,7 @@ final class SessionStore {
             let isManaged = r.name.hasPrefix(PassConfig.sessionPrefix)
 
             let git = await resolveGit(r.cwd)
-            let agent = agentKind(for: r)
+            let agent = AgentKind.resolve(tagged: r.agentOption, paneCommand: r.paneCommand)
             let projectRoot = r.projectRootOption
                 ?? git?.projectRoot
                 ?? (r.cwd.isEmpty ? r.name : r.cwd)
@@ -235,6 +235,13 @@ final class SessionStore {
             // Adopt: a pass-* session missing our tag → write it back so identity persists.
             if isManaged && r.projectRootOption == nil && !r.cwd.isEmpty {
                 await tmux.adoptTag(name: r.name, projectRoot: projectRoot, agent: agent)
+            } else if isManaged,
+                      AgentKind.launchable.contains(AgentKind.infer(fromPaneCommand: r.paneCommand)),
+                      r.agentOption != agent.rawValue {
+                // The foreground process is definitive evidence that the user changed agents
+                // inside this tmux session. Persist it so later shell periods and app restarts
+                // continue to identify the session as the newly selected agent.
+                await tmux.setAgentTag(name: r.name, agent: agent)
             }
             // Any live session's project is worth remembering (shows up in @ afterwards) —
             // except ephemeral command sessions and pass's own state directory (extension
@@ -392,11 +399,6 @@ final class SessionStore {
             guard let text = session.liveTail, !text.isEmpty else { return nil }
             return (session.name, text)
         })
-    }
-
-    private func agentKind(for r: RawSession) -> AgentKind {
-        if let opt = r.agentOption, let k = AgentKind(rawValue: opt) { return k }
-        return AgentKind.infer(fromPaneCommand: r.paneCommand)
     }
 
     private func resolveGit(_ cwd: String) async -> GitIdentity? {

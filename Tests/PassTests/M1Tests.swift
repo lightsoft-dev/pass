@@ -30,6 +30,23 @@ final class AgentKindTests: XCTestCase {
         XCTAssertEqual(AgentKind.infer(fromPaneCommand: "vim"), .generic)
     }
 
+    func testForegroundAgentOverridesCreationTimeTag() {
+        XCTAssertEqual(AgentKind.resolve(tagged: "claude", paneCommand: "codex"), .codex)
+        XCTAssertEqual(AgentKind.resolve(tagged: "codex", paneCommand: "pi"), .pi)
+        XCTAssertEqual(AgentKind.resolve(tagged: "pi", paneCommand: "claude.exe"), .claude)
+    }
+
+    func testTagSurvivesShellWindowBetweenAgents() {
+        XCTAssertEqual(AgentKind.resolve(tagged: "codex", paneCommand: "zsh"), .codex)
+        XCTAssertEqual(AgentKind.resolve(tagged: "pi", paneCommand: "vim"), .pi)
+    }
+
+    func testPaneCommandIsUsedWhenSessionHasNoValidTag() {
+        XCTAssertEqual(AgentKind.resolve(tagged: nil, paneCommand: "bash"), .shell)
+        XCTAssertEqual(AgentKind.resolve(tagged: "unknown", paneCommand: "codex"), .codex)
+        XCTAssertEqual(AgentKind.resolve(tagged: "unknown", paneCommand: "vim"), .generic)
+    }
+
     func testGlyphsDistinct() {
         let glyphs = AgentKind.allCases.map(\.glyph)
         XCTAssertEqual(Set(glyphs).count, glyphs.count)
