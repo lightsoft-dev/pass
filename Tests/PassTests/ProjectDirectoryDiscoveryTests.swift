@@ -30,6 +30,29 @@ final class ProjectDirectoryDiscoveryTests: XCTestCase {
         XCTAssertTrue(roots.isEmpty)
     }
 
+    func testAsyncScanCombinesAvailableDirectoriesAndTracksMissingOnes() async throws {
+        let first = try makeTemporaryDirectory()
+        let second = try makeTemporaryDirectory()
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pass-missing-\(UUID().uuidString)", isDirectory: true)
+
+        let scan = await AppModel.scanProjectDirectories(
+            [first.path, missing.path, second.path],
+            knownProjectRoots: [first.path, missing.path]
+        )
+
+        XCTAssertEqual(
+            scan.discovered,
+            [first.standardizedFileURL.path, second.standardizedFileURL.path]
+        )
+        XCTAssertEqual(
+            scan.availableDirectories,
+            [first.path, second.path].sorted()
+        )
+        XCTAssertEqual(scan.existingKnownProjectRoots, [first.path])
+        XCTAssertEqual(scan.unavailableCount, 1)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("pass-project-discovery-\(UUID().uuidString)", isDirectory: true)
