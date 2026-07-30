@@ -31,6 +31,10 @@ final class IMETerminalView: LocalProcessTerminalView {
         // SwiftTerm clears local selections on streamed output while this is true. Keep local
         // selection as the steady state; the event bridge enables reporting only for Option-drag.
         allowMouseReporting = false
+        // A committed IME syllable reaches tmux asynchronously. Keep receiving display-change
+        // callbacks so the next in-progress syllable follows the echoed cursor instead of
+        // remaining over the previously committed character.
+        notifyUpdateChanges = true
         // Drop files (or text) onto the terminal → their escaped paths land in the agent's
         // input, Terminal.app-style.
         registerForDraggedTypes([.fileURL, .string])
@@ -39,6 +43,7 @@ final class IMETerminalView: LocalProcessTerminalView {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         allowMouseReporting = false
+        notifyUpdateChanges = true
         registerForDraggedTypes([.fileURL, .string])
     }
 
@@ -417,6 +422,14 @@ final class IMETerminalView: LocalProcessTerminalView {
         markedText = ""
         updateMarkedOverlay()
         super.insertText(string, replacementRange: replacementRange)
+    }
+
+    /// tmux echoes a committed syllable after the IME may already have begun composing the
+    /// next one. SwiftTerm updates its caret when that output arrives; move our overlay with it.
+    override func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
+        super.rangeChanged(source: source, startY: startY, endY: endY)
+        guard !markedText.isEmpty else { return }
+        updateMarkedOverlay()
     }
 
     /// Draw the composing text over the caret cell, in the terminal's own font/colors.
