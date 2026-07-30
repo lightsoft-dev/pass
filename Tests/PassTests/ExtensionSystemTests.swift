@@ -194,6 +194,74 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertEqual(m.contributes?.commands?.map(\.id), ["usage", "usage-month"])
     }
 
+    func testBundledUsageLeaderboardManifestIsValid() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let dir = repo.appendingPathComponent("Extensions/usage-leaderboard")
+        let data = try Data(contentsOf: dir.appendingPathComponent("extension.json"))
+        let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: data)
+
+        XCTAssertEqual(manifest.problems(directory: dir), [])
+        XCTAssertEqual(manifest.contributes?.commands?.map(\.id), ["usage-leaderboard"])
+        XCTAssertEqual(manifest.contributes?.actions?["collect"]?.returns, "json")
+        XCTAssertEqual(
+            manifest.contributes?.actions?["publish"]?.passAPI?.path,
+            "v2/usage/snapshots"
+        )
+    }
+
+    func testPassAPIActionsStayOnTheAggregateUsageAllowlist() throws {
+        let valid = try decode("""
+        {
+          "apiVersion": 2, "id": "slack-notify", "name": "Usage",
+          "permissions": ["network:pass-api"],
+          "contributes": { "actions": {
+            "rank": { "passAPI": {
+              "method": "GET", "path": "v2/usage/leaderboard?days=7&limit=50"
+            } },
+            "publish": { "passAPI": {
+              "method": "PUT", "path": "v2/usage/snapshots", "bodyInput": "payload"
+            } }
+          } }
+        }
+        """)
+        XCTAssertEqual(valid.problems(directory: dir), [])
+
+        let blocked = try decode("""
+        {
+          "apiVersion": 2, "id": "slack-notify", "name": "Usage",
+          "permissions": ["network:pass-api"],
+          "contributes": { "actions": {
+            "credentials": { "passAPI": {
+              "method": "DELETE", "path": "v2/desktops/desk-secret"
+            } },
+            "bad-body": { "passAPI": {
+              "method": "GET", "path": "v2/usage/leaderboard", "bodyInput": "payload"
+            } }
+          } }
+        }
+        """)
+        let problems = blocked.problems(directory: dir)
+        XCTAssertTrue(problems.contains { $0.contains("route or method is not allowed") })
+        XCTAssertTrue(problems.contains { $0.contains("bodyInput is only valid for PUT") })
+    }
+
+    func testJSONScriptResultsMustBeBackgroundScripts() throws {
+        try Data("#!/bin/sh\n".utf8).write(to: dir.appendingPathComponent("run.sh"))
+        let manifest = try decode("""
+        {
+          "apiVersion": 2, "id": "slack-notify", "name": "Usage",
+          "permissions": ["run:script", "session:create"],
+          "contributes": { "actions": {
+            "bad": { "script": "run.sh", "terminal": true, "returns": "xml" }
+          } }
+        }
+        """)
+        let problems = manifest.problems(directory: dir)
+        XCTAssertTrue(problems.contains { $0.contains("returns must be \"json\"") })
+        XCTAssertTrue(problems.contains { $0.contains("only available for background scripts") })
+    }
+
     func testDecodesAndValidatesWebWindowManifest() throws {
         let ui = dir.appendingPathComponent("ui", isDirectory: true)
         try FileManager.default.createDirectory(at: ui, withIntermediateDirectories: true)

@@ -2,10 +2,23 @@ import AppKit
 import Foundation
 import WebKit
 
+enum ExtensionActionResult {
+    case success(Any)
+    case failure(String)
+
+    var error: String? {
+        if case .failure(let message) = self { return message }
+        return nil
+    }
+
+    static var ok: ExtensionActionResult { .success(["ok": true]) }
+}
+
 @MainActor
 protocol ExtensionWindowRuntime: AnyObject {
     func webSnapshot(extensionId: String, permissions: Set<String>) -> [String: Any]
-    func runNamedAction(extensionId: String, actionId: String, input: [String: String]) async -> String?
+    func runNamedAction(extensionId: String, actionId: String,
+                        input: [String: String]) async -> ExtensionActionResult
 }
 
 /// Owns extension HTML windows. The app owns the NSWindow/WKWebView lifecycle; an extension owns
@@ -77,8 +90,8 @@ final class ExtensionWindowManager {
     }
 
     fileprivate func runAction(extensionId: String, actionId: String,
-                               input: [String: String]) async -> String? {
-        guard let runtime else { return "extension runtime is not ready" }
+                               input: [String: String]) async -> ExtensionActionResult {
+        guard let runtime else { return .failure("extension runtime is not ready") }
         return await runtime.runNamedAction(extensionId: extensionId, actionId: actionId, input: input)
     }
 }
@@ -223,10 +236,15 @@ private final class ExtensionWebWindowController: NSObject, NSWindowDelegate,
             let input = Self.sanitizedInput(body["input"])
             Task { [weak self] in
                 guard let self else { return }
-                let error = await manager?.runAction(extensionId: extensionId,
-                                                     actionId: actionId, input: input)
-                if let error { resolve(requestId, ok: false, payload: error) }
-                else { resolve(requestId, ok: true, payload: ["ok": true]) }
+                let result = await manager?.runAction(
+                    extensionId: extensionId, actionId: actionId, input: input
+                ) ?? .failure("extension runtime is not ready")
+                switch result {
+                case .success(let payload):
+                    resolve(requestId, ok: true, payload: payload)
+                case .failure(let error):
+                    resolve(requestId, ok: false, payload: error)
+                }
             }
 
         case "closeWindow":
@@ -403,12 +421,5 @@ final class ExtensionResourceSchemeHandler: NSObject, WKURLSchemeHandler {
             html = meta + html
         }
         return Data(html.utf8)
-    }
-}
-
-private extension ExtensionManifest {
-    static func isValidInputKey(_ key: String) -> Bool {
-        guard let first = key.first, first.isASCII, first.isLetter else { return false }
-        return key.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
     }
 }

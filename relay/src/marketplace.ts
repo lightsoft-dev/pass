@@ -767,6 +767,8 @@ function actionStructureProblem(action: JSONBody, path: string): string | null {
     const problem = optionalStringShapeProblem(action[field], `${path}.${field}`);
     if (problem !== null) return problem;
   }
+  const returnsProblem = optionalStringShapeProblem(action.returns, `${path}.returns`);
+  if (returnsProblem !== null) return returnsProblem;
   const argsProblem = optionalStringArrayShapeProblem(action.args, `${path}.args`);
   if (argsProblem !== null) return argsProblem;
   if (
@@ -789,6 +791,17 @@ function actionStructureProblem(action: JSONBody, path: string): string | null {
     if (typeof notify.title !== "string") return `${path}.notify.title must be a string.`;
     const bodyProblem = optionalStringShapeProblem(notify.body, `${path}.notify.body`);
     if (bodyProblem !== null) return bodyProblem;
+  }
+  const passAPI = action.passAPI;
+  if (passAPI !== undefined && passAPI !== null) {
+    if (!isRecord(passAPI)) return `${path}.passAPI must be an object or null.`;
+    if (typeof passAPI.method !== "string") return `${path}.passAPI.method must be a string.`;
+    if (typeof passAPI.path !== "string") return `${path}.passAPI.path must be a string.`;
+    const bodyInputProblem = optionalStringShapeProblem(
+      passAPI.bodyInput,
+      `${path}.passAPI.bodyInput`,
+    );
+    if (bodyInputProblem !== null) return bodyInputProblem;
   }
   return null;
 }
