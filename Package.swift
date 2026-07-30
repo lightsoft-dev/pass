@@ -69,6 +69,8 @@ let package = Package(
                 "CLIAPITests.swift",
                 // Tests AppKit UI mirror types, excluded from the portable Pass target.
                 "MirrorDeviceTests.swift",
+                // Tests WKWebView automation, excluded with the macOS-only UI layer above.
+                "BrowserAutomationTests.swift",
                 // Tests SwiftUI/AppKit terminal views, excluded from the portable Pass target.
                 "TerminalMouseInteractionPolicyTests.swift",
             ]

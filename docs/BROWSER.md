@@ -1,6 +1,6 @@
 # M6 설계 — 내장 브라우저 + `passcli` CLI
 
-> Status: **구현 완료(M6.1–M6.4), 온디바이스 검증 대기.** 이 문서가 M6의 계약이다.
+> Status: **구현 완료(M6.1–M6.5), 온디바이스 검증 대기.** 이 문서가 M6의 계약이다.
 > 머지 전 S6 스파이크(§10)를 실기기에서 실행해 위험 가정을 검증한다 — S0(FINDINGS.md)과
 > 같은 방식. 결과에 따라 이 문서와 구현을 함께 갱신한다.
 
@@ -19,13 +19,15 @@ dev 서버 미리보기, PR 페이지, CI 로그, 에러 페이지 — 지금은
    에이전트의 어휘가 된다.
 3. **에이전트 관찰 루프(v1.5)** — `screenshot` / `read`로 에이전트가 그 페이지를
    다시 읽어 스스로 검증한다(프론트엔드 verify 루프).
+4. **에이전트 상호작용 루프(v1.6)** — `snapshot`으로 현재 화면의 조작 가능한 요소를
+   `@eN` 참조로 관찰하고 `click` / `fill` / `type` / `select` / `press` / `scroll`로
+   사용자가 보는 같은 페이지를 조작한 뒤 다시 관찰한다.
 
 **비목표 (명시적으로 안 하는 것)**
 
-- **브라우저 자동화 아님.** 클릭/입력/JS 주입(`js`, `click` 등)은 만들지 않는다.
-  자동화가 필요한 에이전트는 자기 도구(Playwright, chrome-devtools MCP)를 쓰면 된다.
-  pass의 브라우저는 **에이전트와 사람이 공유하는 화면**이다 — pass가 제공하는 동사는
-  "보여주기(open)"와 "관찰(screenshot/read)"까지.
+- **임의 JavaScript·selector 실행은 제공하지 않는다.** 조작은 직전 `snapshot`이 돌려준
+  요소 참조와 검증된 동사에만 한정한다. pass의 브라우저는 별도 headless 인스턴스가 아니라
+  **에이전트와 사람이 공유하는 화면**이며, 페이지 내부 ref가 없는 임의 DOM 접근은 열지 않는다.
 - 탭 스트립, 북마크, 다중 창 — v2. v1은 세션당 활성 페이지 1개 + 최근 URL 회상.
 - 다운로드 관리 — HTML이 아닌 응답은 기본 브라우저로 넘긴다.
 - Safari 프로필 공유나 Chrome 프로필 직접 연결 — pass 전용 저장소를 유지한다.
@@ -43,6 +45,9 @@ dev 서버 미리보기, PR 페이지, CI 로그, 에러 페이지 — 지금은
    → 파일을 Read → 스타일 깨짐을 스스로 발견하고 고친다. 사용자는 같은 화면을 실시간으로 본다.
 4. **스펙 문서 연계** — SpecsView의 Dev 미리보기 실행 후 "브라우저에서 열기" 버튼이
    dev 서버 URL을 같은 브라우저 스플릿에 띄운다.
+5. **에이전트 기능 테스트(v1.6)** — `passcli browser snapshot`에서
+   `@e3 role="button" name="Save"`를
+   찾고 `passcli browser click @e3`, 다시 snapshot/read/screenshot으로 결과를 확인한다.
 
 ## 3. 아키텍처 개요
 
@@ -220,6 +225,13 @@ passcli browser close [--session <name>] [--json]
 passcli browser tabs [--json]
 passcli browser screenshot [-o <path>] [--session <name>] [--json]   # v1.5
 passcli browser read [--format text|html] [--session <name>]         # v1.5
+passcli browser snapshot [--all] [--session <name>] [--json]         # v1.6
+passcli browser click <@ref> [--revision <n>] [--session <name>] [--json]
+passcli browser fill <@ref> <text> [--revision <n>] [--session <name>] [--json]
+passcli browser type <@ref> <text> [--revision <n>] [--session <name>] [--json]
+passcli browser select <@ref> <value> [--revision <n>] [--session <name>] [--json]
+passcli browser press <key> [--ref <@ref>] [--revision <n>] [--session <name>] [--json]
+passcli browser scroll <up|down|left|right> [amount] [--revision <n>] [--session <name>] [--json]
 passcli status [--json]        # pass 실행 여부 + 버전 + 포트
 passcli advertise              # SessionStart 훅 전용 (§5.2)
 ```
@@ -229,8 +241,9 @@ passcli advertise              # SessionStart 훅 전용 (§5.2)
   tmux 폴백 덕에 PASS_SESSION 주입 전에 시작된 어댑트 세션에서도 동작한다.
 - **출력**: 기본은 사람용 한 줄(`opened http://localhost:5173 · session pass-myapp`),
   `--json`은 서버 응답 그대로. 에러는 stderr.
-- **종료 코드**: `0` 성공 · `1` 서버가 거부(본문에 이유) · `2` 사용법/세션 미결정 ·
-  `3` pass 미실행(connection refused — "pass가 실행 중인지 확인하세요" 안내).
+- **종료 코드**: `0` 성공 · `1` 서버가 거부(본문에 이유) · `2` 세션 미결정 ·
+  `3` pass 미실행(connection refused — "pass가 실행 중인지 확인하세요" 안내) ·
+  `64` 잘못된 명령/인자/validation(`ArgumentParser`의 `EX_USAGE`).
 - 포트는 `PASS_PORT` 환경변수로 오버라이드 가능(기본 49817, `PassConfig.hookPort`).
 
 ### 5.4 HTTP 프로토콜 — `/cli/*`
@@ -250,6 +263,10 @@ POST /cli/browser/close      { "session": "pass-myapp" }            → { "ok": 
 GET  /cli/browser/tabs                                              → { "ok": true, "tabs": [ {id,url,title,session,unseen} ] }
 POST /cli/browser/screenshot { "session": "…", "path": "/abs.png" } → { "ok": true, "path": "/abs.png" }   # v1.5
 POST /cli/browser/read       { "session": "…", "format": "text" }   → { "ok": true, "content": "…" }       # v1.5, 512KB 상한
+POST /cli/browser/snapshot   { "session": "…", "all": false }
+  → { "ok": true, "revision": 4, "elements": [ { "ref": "@e1", "role": "button", "name": "Save" } ], … }
+POST /cli/browser/action     { "session": "…", "action": "click", "ref": "@e1", "revision": 4 }
+  → { "ok": true, "url": "…", "snapshotRecommended": true, … }
 ```
 
 - 항상 200 + JSON 본문(`ok`/`error`) — 훅 서버의 "에이전트를 기다리게 하지 않는다"
@@ -260,6 +277,30 @@ POST /cli/browser/read       { "session": "…", "format": "text" }   → { "ok"
   상대 경로는 CLI가 절대화해서 보낸다. 뷰포트 캡처(`takeSnapshot`); 전체 페이지는
   `createPDF` 기반 `passcli browser pdf`로 v2 후보.
 - `read`: `document.body.innerText`(text) / `outerHTML`(html) evaluateJavaScript 1회.
+- `snapshot`: 기본은 현재 viewport의 보이는 interactive element만 최대 200개 반환한다.
+  `--all`은 화면 밖의 렌더된 요소도 포함한다. role·accessible name·상태를 우선하며 password
+  value는 절대 반환하지 않는다. 다른 form value도 요소당 2,000자로 제한해 페이지가 CLI
+  출력을 무제한으로 키울 수 없게 한다.
+- `action`: ref는 해당 WKWebView 문서의 격리된 content world에만 존재한다. navigation,
+  LRU 해제, DOM 교체, 이름/role 변경 또는 revision 불일치는 stale 오류가 되며 에이전트는
+  다시 snapshot해야 한다. 입력 문자열은 JavaScript 소스에 보간하지 않고 WebKit argument로
+  전달한다.
+
+### 5.5 참고한 오픈소스
+
+- [Vercel agent-browser](https://github.com/vercel-labs/agent-browser) — CLI 동사,
+  compact snapshot, `@eN` ref와 재-snapshot 루프의 직접 기준.
+- [Microsoft Playwright CLI](https://github.com/microsoft/playwright-cli) 및
+  [Playwright locator 지침](https://playwright.dev/docs/locators) — DOM 경로보다 role,
+  accessible name, label처럼 사용자에게 보이는 식별자를 우선하는 기준.
+- [Browser Use](https://github.com/browser-use/browser-use) — 명령 사이 세션 유지와
+  작고 구조화된 상태 반환 패턴.
+- [Browserbase Stagehand](https://github.com/browserbase/stagehand) — 이후 자연어
+  `observe → 검토 → act` 계층을 올릴 때의 참고. v1.6은 예측 가능한 저수준 동사만 제공한다.
+
+pass는 이미 떠 있는 WKWebView와 loopback `passcli` 제어면을 보유하므로 별도 Chromium
+daemon이나 CDP 포트를 추가하지 않았다. 공개 9222 포트 없이 사용자가 보는 동일한 페이지를
+조작하고, WebKit의 named content world로 ref 상태를 페이지 JavaScript에서 분리한다.
 
 ## 6. 보안·신뢰 모델
 
@@ -268,13 +309,23 @@ POST /cli/browser/read       { "session": "…", "format": "text" }   → { "ok"
   `passcli`은 새 능력을 부여하는 게 아니라 **의도를 구조화**한다(임의 AppleScript 대신
   선언적 open). 루프백 전용 바인딩(127.0.0.1)·무인증은 기존 `/hook/*`·`/share/*`와 동일
   자세를 유지하고, 공유 시크릿 도입은 서버 전체 차원의 후속 과제로 남긴다.
+- 브라우저 페이지가 loopback 제어면을 CSRF로 호출하지 못하도록 `/cli/*` POST는
+  `Content-Type: application/json`이면서 `Origin` 헤더가 없는 요청만 처리한다. 일반
+  cross-origin fetch/form은 빈 요청으로 거부되고, 실제 passcli 요청만 기존 JSON 계약을 탄다.
 - **스킴 화이트리스트**: `http` `https` `file`만. `javascript:` 등은 서버에서 거부.
   URL 길이 8KB 상한, 본문 64KB 상한.
-- **JS 주입 동사 없음**(§1 비목표). `read`/`screenshot`은 표시 중인 페이지의 관찰일 뿐.
-  단, pass 브라우저에 로그인한 페이지도 에이전트가 읽을 수 있다는 사실을 Settings 문구로
-  명시한다("이 브라우저 화면은 세션의 에이전트가 읽을 수 있습니다").
+- **임의 JS 주입 동사 없음.** 앱 내부 구현은 named `WKContentWorld`에서 고정된 snapshot/action
+  스크립트만 실행한다. CLI 입력은 action argument일 뿐 코드가 될 수 없다.
+- pass 브라우저에 로그인한 페이지는 에이전트가 읽고 조작할 수 있다. Settings 문구에 이를
+  명시하며 password input의 현재 값은 snapshot/action 응답에서 숨긴다.
 - 웹 콘텐츠 → pass 방향 브리지 없음(`WKScriptMessageHandler`는 v1.5 콘솔 수집 전까지
   등록하지 않고, 등록 후에도 수신 전용).
+- JS `element.click()`과 합성 input/key event는 `isTrusted == false`다. 일반 HTML/SPA
+  폼은 지원하지만 파일 선택, CAPTCHA, 사용자 gesture가 필요한 clipboard/payment API,
+  cross-origin iframe, closed shadow root, OS 권한 시트는 지원 범위 밖이다.
+- `press`는 효과를 재현할 수 있는 Enter/Space 활성화, 폼 Enter, Tab, Escape, 텍스트 한 글자만
+  지원한다. 합성 이벤트로 브라우저 기본 동작을 보장할 수 없는 방향키 등의 조합은 성공한
+  것처럼 보고하지 않고 명시적으로 거부한다.
 
 ## 7. 동작 규칙·엣지 케이스
 
@@ -344,6 +395,8 @@ POST /cli/browser/read       { "session": "…", "format": "text" }   → { "ok"
   심링크·PASS_CLI 주입, 표면화 규칙. (에이전트가 열 수 있음)
 - **M6.3 발견** — `advertise` + ClaudeHooksInstaller 머지, Settings UI.
 - **M6.4 관찰 (v1.5)** — `screenshot`, `read`, 스펙 문서 연계 버튼, (여유 시) 콘솔 로그 수집.
+- **M6.5 상호작용 (v1.6)** — isolated snapshot/ref, 제한된 action endpoint와 CLI,
+  stale-ref 검증, 비밀번호 redaction, WKWebView fixture 테스트.
 
 ## 9. 테스트 계획
 
@@ -353,6 +406,8 @@ POST /cli/browser/read       { "session": "…", "format": "text" }   → { "ok"
 - `BrowserStoreTests` — open reuse/새 세션, close, pruneSessions, unseen 배지 전이,
   recentURLs 상한, 영속 스냅숏 왕복.
 - `CLIAPITests` — 요청/응답 인코딩, 미지 세션·비허용 스킴·크기 상한 거부.
+- `BrowserAutomationTests` — 로컬 HTML에서 snapshot/ref/click/fill/scroll, DOM 교체 뒤
+  stale ref, password value redaction.
 - `ClaudeHooksInstallerTests` 확장 — advertise 훅 머지 멱등성, 기존 훅 보존.
 - PassCli: 인자 파싱·세션 결정 순서·종료 코드(서버는 로컬 목 URLSession).
 - 수동 검증 스크립트: `PASS_DEBUG_OPEN`과 나란히 `PASS_DEBUG_BROWSER=<session>|<url>`

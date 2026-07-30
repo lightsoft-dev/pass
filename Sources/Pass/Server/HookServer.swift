@@ -24,8 +24,34 @@ struct CLIHandlers: Sendable {
     var tabs: @Sendable () async -> Data
     var screenshot: @Sendable (Data) async -> Data
     var read: @Sendable (Data) async -> Data
+    var snapshot: @Sendable (Data) async -> Data
+    var action: @Sendable (Data) async -> Data
     var validateExtension: @Sendable (Data) async -> Data
     var configURLAdd: @Sendable (Data) async -> Data
+}
+
+enum CLIRequestPolicy {
+    static func allowsJSON(contentType: String?, origin: String?) -> Bool {
+        let mediaType = contentType?
+            .split(separator: ";", maxSplits: 1)
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return mediaType == "application/json" && origin == nil
+    }
+}
+
+/// Browser automation makes `/cli/*` state-changing, so reject browser-originated form/fetch
+/// requests before they reach the handlers. Real passcli requests are JSON and have no Origin.
+private func cliJSONBody(_ request: HTTPRequest) async -> Data {
+    guard CLIRequestPolicy.allowsJSON(
+        contentType: request.headers[.contentType],
+        origin: request.headers[HTTPHeader("Origin")]) else {
+        // Consume the body so a rejected request cannot disturb HTTP keep-alive framing.
+        _ = try? await request.bodyData
+        return Data()
+    }
+    return (try? await request.bodyData) ?? Data()
 }
 
 /// Loopback HTTP server that receives agent hook POSTs. Binds 127.0.0.1 only (no firewall
@@ -74,31 +100,39 @@ actor HookServer {
         if let cli {
             let json = [HTTPHeader("Content-Type"): "application/json"]
             await server.appendRoute("POST /cli/browser/open") { request in
-                let body = (try? await request.bodyData) ?? Data()
+                let body = await cliJSONBody(request)
                 return HTTPResponse(statusCode: .ok, headers: json, body: await cli.open(body))
             }
             await server.appendRoute("POST /cli/browser/close") { request in
-                let body = (try? await request.bodyData) ?? Data()
+                let body = await cliJSONBody(request)
                 return HTTPResponse(statusCode: .ok, headers: json, body: await cli.close(body))
             }
             await server.appendRoute("GET /cli/browser/tabs") { _ in
                 HTTPResponse(statusCode: .ok, headers: json, body: await cli.tabs())
             }
             await server.appendRoute("POST /cli/browser/screenshot") { request in
-                let body = (try? await request.bodyData) ?? Data()
+                let body = await cliJSONBody(request)
                 return HTTPResponse(statusCode: .ok, headers: json, body: await cli.screenshot(body))
             }
             await server.appendRoute("POST /cli/browser/read") { request in
-                let body = (try? await request.bodyData) ?? Data()
+                let body = await cliJSONBody(request)
                 return HTTPResponse(statusCode: .ok, headers: json, body: await cli.read(body))
             }
+            await server.appendRoute("POST /cli/browser/snapshot") { request in
+                let body = await cliJSONBody(request)
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.snapshot(body))
+            }
+            await server.appendRoute("POST /cli/browser/action") { request in
+                let body = await cliJSONBody(request)
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.action(body))
+            }
             await server.appendRoute("POST /cli/extension/validate") { request in
-                let body = (try? await request.bodyData) ?? Data()
+                let body = await cliJSONBody(request)
                 return HTTPResponse(statusCode: .ok, headers: json,
                                     body: await cli.validateExtension(body))
             }
             await server.appendRoute("POST /cli/config/url/add") { request in
-                let body = (try? await request.bodyData) ?? Data()
+                let body = await cliJSONBody(request)
                 return HTTPResponse(statusCode: .ok, headers: json, body: await cli.configURLAdd(body))
             }
         }
