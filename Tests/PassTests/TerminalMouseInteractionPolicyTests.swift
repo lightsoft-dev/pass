@@ -8,6 +8,44 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
         let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
 
         XCTAssertFalse(terminal.allowMouseReporting)
+        XCTAssertTrue(terminal.notifyUpdateChanges)
+    }
+
+    @MainActor
+    func testIMECompositionFollowsCursorWhenCommittedTextEchoes() throws {
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        let window = NSWindow(
+            contentRect: terminal.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = terminal
+
+        terminal.setMarkedText(
+            "개",
+            selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        let overlay = try XCTUnwrap(
+            terminal.subviews.compactMap { $0 as? NSTextField }.first(where: { !$0.isHidden })
+        )
+        let xBeforeEcho = overlay.frame.minX
+
+        // The previous Korean syllable was committed, then returned through tmux after the
+        // next syllable had already entered its marked-text phase.
+        terminal.feed(text: "지")
+        let cursorUpdate = expectation(description: "SwiftTerm display update")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            cursorUpdate.fulfill()
+        }
+        wait(for: [cursorUpdate], timeout: 1)
+
+        XCTAssertGreaterThan(
+            overlay.frame.minX,
+            xBeforeEcho,
+            "The marked text should be re-anchored after tmux advances the terminal cursor"
+        )
     }
 
     @MainActor
