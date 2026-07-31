@@ -20,6 +20,7 @@ import { colors, spacing } from "../theme/theme";
 type Props = {
   blocks: ConversationBlock[];
   truncated?: boolean;
+  regularWidth?: boolean;
 };
 
 function InlineText({ value }: { value: string }) {
@@ -196,7 +197,7 @@ function ConversationItem({ block }: { block: ConversationBlock }) {
   );
 }
 
-export function ConversationSurface({ blocks, truncated = false }: Props) {
+export function ConversationSurface({ blocks, truncated = false, regularWidth = false }: Props) {
   const scrollView = useRef<ScrollView>(null);
   const nearBottom = useRef(true);
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -210,7 +211,7 @@ export function ConversationSurface({ blocks, truncated = false }: Props) {
   return (
     <ScrollView
       ref={scrollView}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, regularWidth && styles.contentRegular]}
       keyboardDismissMode="interactive"
       keyboardShouldPersistTaps="handled"
       onContentSizeChange={followLatest}
@@ -241,6 +242,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
     gap: 18,
   },
+  contentRegular: { maxWidth: 920, paddingHorizontal: spacing.lg },
   userRow: { alignItems: "flex-end", flexGrow: 0 },
   userMessage: {
     maxWidth: "88%",

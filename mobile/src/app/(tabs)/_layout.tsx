@@ -1,6 +1,7 @@
 import { Tabs } from "expo-router";
 import { Text, type ColorValue } from "react-native";
 
+import { useAdaptiveLayout } from "../../hooks/useAdaptiveLayout";
 import { colors } from "../../theme/theme";
 
 function TabGlyph({ glyph, color }: { glyph: string; color: ColorValue }) {
@@ -8,13 +9,42 @@ function TabGlyph({ glyph, color }: { glyph: string; color: ColorValue }) {
 }
 
 export default function TabLayout() {
+  const { isRegular } = useAdaptiveLayout();
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.subtle,
-        tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.border },
+        tabBarPosition: isRegular ? "left" : "bottom",
+        tabBarVariant: isRegular ? "material" : "uikit",
+        tabBarLabelPosition: isRegular ? "beside-icon" : "below-icon",
+        tabBarLabelStyle: isRegular
+          ? { fontSize: 14, fontWeight: "700" }
+          : { fontSize: 10, fontWeight: "700" },
+        tabBarItemStyle: isRegular
+          ? {
+              flex: 0,
+              height: 52,
+              marginHorizontal: 10,
+              marginVertical: 3,
+              borderRadius: 12,
+            }
+          : undefined,
+        tabBarStyle: isRegular
+          ? {
+              width: 212,
+              paddingTop: 18,
+              backgroundColor: colors.surface,
+              borderTopWidth: 0,
+              borderRightWidth: 1,
+              borderRightColor: colors.border,
+            }
+          : {
+              backgroundColor: colors.surface,
+              borderTopColor: colors.border,
+            },
         sceneStyle: { backgroundColor: colors.background },
       }}
     >

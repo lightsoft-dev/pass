@@ -13,6 +13,7 @@ import {
 
 import { AppButton } from "../components/AppButton";
 import { Screen } from "../components/Screen";
+import { useAdaptiveLayout } from "../hooks/useAdaptiveLayout";
 import { publicOIDCConfiguration } from "../services/authService";
 import { useRemote } from "../state/RemoteProvider";
 import { colors, radius, spacing } from "../theme/theme";
@@ -21,6 +22,7 @@ const sampleRelay = process.env.EXPO_PUBLIC_PASS_RELAY_URL ?? "https://relay.exa
 
 export default function PairScreen() {
   const router = useRouter();
+  const { isRegular } = useAdaptiveLayout();
   const { pair, pairingBusy, pairingError, userSession } = useRemote();
   const publicMode = publicOIDCConfiguration() !== null;
   const [permission, requestPermission] = useCameraPermissions();
@@ -57,94 +59,100 @@ export default function PairScreen() {
         style={styles.flex}
       >
         <ScrollView
-          contentContainerStyle={styles.content}
+          contentContainerStyle={[styles.content, isRegular && styles.contentRegular]}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.hero}>
-            <View style={styles.mark}><Text style={styles.markText}>P</Text></View>
-            <Text style={styles.eyebrow}>PASS REMOTE</Text>
-            <Text style={styles.title}>Pair your Mac</Text>
-            <Text style={styles.subtitle}>
-              {publicMode
-                ? "Open Pass settings on your Mac and scan its one-time code."
-                : "Scan a development pairing code from Pass on your Mac."}
-            </Text>
-          </View>
+          <View style={[styles.columns, isRegular && styles.columnsRegular]}>
+            <View style={[styles.introColumn, isRegular && styles.columnRegular]}>
+              <View style={[styles.hero, isRegular && styles.heroRegular]}>
+                <View style={styles.mark}><Text style={styles.markText}>P</Text></View>
+                <Text style={styles.eyebrow}>PASS REMOTE</Text>
+                <Text style={[styles.title, isRegular && styles.titleRegular]}>Pair your Mac</Text>
+                <Text style={[styles.subtitle, isRegular && styles.subtitleRegular]}>
+                  {publicMode
+                    ? "Open Pass settings on your Mac and scan its one-time code."
+                    : "Scan a development pairing code from Pass on your Mac."}
+                </Text>
+              </View>
 
-          {!publicMode ? (
-            <View style={styles.warning}>
-              <Text style={styles.warningTitle}>Development mode</Text>
-              <Text style={styles.warningText}>
-                This build accepts the reusable relay token from a v1 pairing code.
+              {!publicMode ? (
+                <View style={styles.warning}>
+                  <Text style={styles.warningTitle}>Development mode</Text>
+                  <Text style={styles.warningText}>
+                    This build accepts the reusable relay token from a v1 pairing code.
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            <View style={[styles.pairColumn, isRegular && styles.columnRegular]}>
+              {showScanner ? (
+                <View style={styles.scannerShell}>
+                  <CameraView
+                    style={styles.scanner}
+                    facing="back"
+                    barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+                    onBarcodeScanned={
+                      scanned
+                        ? undefined
+                        : ({ data }) => {
+                            void submit(data);
+                          }
+                    }
+                  />
+                  <View style={styles.scannerFooter}>
+                    <Text style={styles.scannerHint}>
+                      Align the Pass pairing code inside the frame
+                    </Text>
+                    <AppButton
+                      compact
+                      variant="ghost"
+                      label="Close scanner"
+                      onPress={() => setShowScanner(false)}
+                    />
+                  </View>
+                </View>
+              ) : (
+                <AppButton label="Scan pairing code" onPress={openScanner} />
+              )}
+
+              <View style={styles.dividerRow}>
+                <View style={styles.divider} />
+                <Text style={styles.or}>OR ENTER CODE</Text>
+                <View style={styles.divider} />
+              </View>
+
+              <TextInput
+                accessibilityLabel="Pairing JSON"
+                autoCapitalize="none"
+                autoCorrect={false}
+                multiline
+                numberOfLines={7}
+                onChangeText={setRawPayload}
+                placeholder={
+                  publicMode
+                    ? `{"v":2,"relayUrl":"${sampleRelay}","desktopId":"desk_...","pairingId":"pair_...","pairingSecret":"...","expiresAt":"..."}`
+                    : `{"v":1,"relayUrl":"${sampleRelay}","desktopId":"desk_...","authorizationToken":"..."}`
+                }
+                placeholderTextColor={colors.subtle}
+                style={styles.input}
+                value={rawPayload}
+              />
+              {pairingError ? <Text style={styles.error}>{pairingError}</Text> : null}
+              <AppButton
+                label="Pair and connect"
+                loading={pairingBusy}
+                disabled={!rawPayload.trim()}
+                onPress={() => void submit()}
+              />
+
+              <Text style={styles.footnote}>
+                {publicMode
+                  ? "The code expires after five minutes and can be claimed only once."
+                  : "HTTP relay URLs are accepted only in development builds."}
               </Text>
             </View>
-          ) : null}
-
-          {showScanner ? (
-            <View style={styles.scannerShell}>
-              <CameraView
-                style={styles.scanner}
-                facing="back"
-                barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-                onBarcodeScanned={
-                  scanned
-                    ? undefined
-                    : ({ data }) => {
-                        void submit(data);
-                      }
-                }
-              />
-              <View style={styles.scannerFooter}>
-                <Text style={styles.scannerHint}>
-                  Align the Pass pairing code inside the frame
-                </Text>
-                <AppButton
-                  compact
-                  variant="ghost"
-                  label="Close scanner"
-                  onPress={() => setShowScanner(false)}
-                />
-              </View>
-            </View>
-          ) : (
-            <AppButton label="Scan pairing code" onPress={openScanner} />
-          )}
-
-          <View style={styles.dividerRow}>
-            <View style={styles.divider} />
-            <Text style={styles.or}>OR ENTER CODE</Text>
-            <View style={styles.divider} />
           </View>
-
-          <TextInput
-            accessibilityLabel="Pairing JSON"
-            autoCapitalize="none"
-            autoCorrect={false}
-            multiline
-            numberOfLines={7}
-            onChangeText={setRawPayload}
-            placeholder={
-              publicMode
-                ? `{"v":2,"relayUrl":"${sampleRelay}","desktopId":"desk_...","pairingId":"pair_...","pairingSecret":"...","expiresAt":"..."}`
-                : `{"v":1,"relayUrl":"${sampleRelay}","desktopId":"desk_...","authorizationToken":"..."}`
-            }
-            placeholderTextColor={colors.subtle}
-            style={styles.input}
-            value={rawPayload}
-          />
-          {pairingError ? <Text style={styles.error}>{pairingError}</Text> : null}
-          <AppButton
-            label="Pair and connect"
-            loading={pairingBusy}
-            disabled={!rawPayload.trim()}
-            onPress={() => void submit()}
-          />
-
-          <Text style={styles.footnote}>
-            {publicMode
-              ? "The code expires after five minutes and can be claimed only once."
-              : "HTTP relay URLs are accepted only in development builds."}
-          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
@@ -154,7 +162,14 @@ export default function PairScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: { padding: spacing.lg, gap: spacing.md, maxWidth: 640, width: "100%", alignSelf: "center" },
+  contentRegular: { maxWidth: 1_040, padding: spacing.xl },
+  columns: { gap: spacing.md },
+  columnsRegular: { flexDirection: "row", alignItems: "center", gap: spacing.xl },
+  columnRegular: { flex: 1, minWidth: 0 },
+  introColumn: { gap: spacing.md },
+  pairColumn: { gap: spacing.md },
   hero: { alignItems: "center", paddingVertical: spacing.md, gap: spacing.sm },
+  heroRegular: { alignItems: "flex-start" },
   mark: {
     width: 58,
     height: 58,
@@ -166,7 +181,9 @@ const styles = StyleSheet.create({
   markText: { color: colors.white, fontSize: 29, fontWeight: "900" },
   eyebrow: { color: colors.accent, fontSize: 11, fontWeight: "900", letterSpacing: 1.7 },
   title: { color: colors.text, fontSize: 28, fontWeight: "800" },
+  titleRegular: { fontSize: 36 },
   subtitle: { color: colors.muted, fontSize: 15, lineHeight: 22, textAlign: "center" },
+  subtitleRegular: { textAlign: "left", maxWidth: 400 },
   warning: {
     backgroundColor: "#2a2216",
     borderColor: "#55401f",
