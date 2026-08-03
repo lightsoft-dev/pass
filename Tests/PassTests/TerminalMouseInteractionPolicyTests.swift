@@ -79,6 +79,58 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
         XCTAssertEqual(pasteboard.string(forType: .string), selectedBeforeOutput)
     }
 
+    @MainActor
+    func testPlainTextURLHitUsesExactCellsWithKoreanAroundIt() throws {
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 720, height: 240))
+        let url = "https://print-so.lightsoft.dev"
+        terminal.feed(text: "한글 \(url)에서")
+
+        let cellWidth = terminal.caretFrame.width
+        let cellHeight = terminal.caretFrame.height
+        XCTAssertGreaterThan(cellWidth, 0)
+        XCTAssertGreaterThan(cellHeight, 0)
+
+        // 한/글 each occupy two terminal cells, followed by one space.
+        let urlStartColumn = 5
+        func point(column: Int) -> NSPoint {
+            NSPoint(
+                x: (CGFloat(column) + 0.5) * cellWidth,
+                y: terminal.bounds.height - cellHeight / 2
+            )
+        }
+
+        let hit = try XCTUnwrap(terminal.urlHit(at: point(column: urlStartColumn + 8)))
+        XCTAssertEqual(hit.url.absoluteString, url)
+        let underline = try XCTUnwrap(hit.rects.first)
+        XCTAssertEqual(underline.minX, CGFloat(urlStartColumn) * cellWidth, accuracy: 0.001)
+        XCTAssertEqual(underline.width, CGFloat(url.count) * cellWidth, accuracy: 0.001)
+
+        XCTAssertNil(terminal.urlHit(at: point(column: 0)))
+        XCTAssertNil(terminal.urlHit(at: point(column: urlStartColumn + url.count)))
+    }
+
+    @MainActor
+    func testPlainTextURLHitFollowsSwiftTermSoftWrap() throws {
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 160))
+        let url = "https://example.com/abcdefghijklmnopqrstuvwxyz0123456789"
+        XCTAssertGreaterThan(url.count, terminal.getTerminal().cols)
+        terminal.feed(text: url)
+
+        let cellWidth = terminal.caretFrame.width
+        let cellHeight = terminal.caretFrame.height
+        let continuationColumn = 4
+        let point = NSPoint(
+            x: (CGFloat(continuationColumn) + 0.5) * cellWidth,
+            y: terminal.bounds.height - 1.5 * cellHeight
+        )
+
+        let hit = try XCTUnwrap(terminal.urlHit(at: point))
+        XCTAssertEqual(hit.url.absoluteString, url)
+        XCTAssertGreaterThanOrEqual(hit.rects.count, 2)
+        XCTAssertEqual(hit.rects[0].minX, 0, accuracy: 0.001)
+        XCTAssertEqual(hit.rects[1].minX, 0, accuracy: 0.001)
+    }
+
     func testPlainDragUsesPersistentLocalSelection() {
         XCTAssertTrue(TerminalMouseInteractionPolicy.usesLocalSelection(modifierFlags: []))
     }

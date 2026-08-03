@@ -254,54 +254,95 @@ final class IMETerminalView: LocalProcessTerminalView {
         }
     }
 
-    /// The http(s) URL under a point, with the cell rects it occupies (for the hover
-    /// underline). Scans the pointed row's text plus the next two rows (long URLs wrap; tmux
-    /// marks wrapping internally but SwiftTerm doesn't expose it, so extend heuristically).
-    /// Column ≈ string index — exact on ASCII rows, close enough elsewhere; a row containing
-    /// exactly one URL matches regardless of the exact column.
-    fileprivate func urlHit(at point: NSPoint) -> (url: URL, rects: [NSRect])? {
+    /// The http(s) URL under a point, with the exact terminal-cell rects it occupies.
+    /// SwiftTerm exposes its real cell size through `caretFrame`; deriving it from the full
+    /// bounds also includes the scrollbar and leftover pixels, causing cumulative x/y drift.
+    func urlHit(at point: NSPoint) -> (url: URL, rects: [NSRect])? {
         let terminal = getTerminal()
         let cols = max(terminal.cols, 1), rows = max(terminal.rows, 1)
-        let cellW = max(bounds.width / CGFloat(cols), 1)
-        let cellH = max(bounds.height / CGFloat(rows), 1)
-        let col = min(cols - 1, max(0, Int(point.x / cellW)))
+        let renderedCell = caretFrame.size
+        let cellW = renderedCell.width > 0
+            ? renderedCell.width
+            : max(bounds.width / CGFloat(cols), 1)
+        let cellH = renderedCell.height > 0
+            ? renderedCell.height
+            : max(bounds.height / CGFloat(rows), 1)
         let fromTop = isFlipped ? point.y : bounds.height - point.y
-        let row = min(rows - 1, max(0, Int(fromTop / cellH)))
+        let contentWidth = CGFloat(cols) * cellW
+        let contentHeight = CGFloat(rows) * cellH
+        guard point.x >= 0, point.x < contentWidth,
+              fromTop >= 0, fromTop < contentHeight
+        else { return nil }
 
-        var text = ""
-        for r in row..<min(row + 3, rows) {
-            guard let line = terminal.getLine(row: r) else { break }
-            var s = line.translateToString(trimRight: true)
-            // Pad each row to exactly `cols` so string index ↔ cell column stays aligned.
-            if s.count < cols { s += String(repeating: " ", count: cols - s.count) }
-            text += s
-        }
-        guard let regex = try? NSRegularExpression(pattern: #"https?://[^\s<>"'`\)\]]+"#) else { return nil }
-        let ns = text as NSString
-        // Only URLs that START on the pointed row count (the extra rows are continuations).
-        let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
-            .filter { $0.range.location < cols }
-        guard let m = matches.first(where: { $0.range.location <= col && col < $0.range.location + $0.range.length })
-                ?? (matches.count == 1 ? matches[0] : nil) else { return nil }
-        var raw = ns.substring(with: m.range)
-        while let last = raw.last, ".,;:!?".contains(last) { raw.removeLast() } // trailing prose punctuation
-        guard let url = URL(string: raw) else { return nil }
+        let col = Int(point.x / cellW)
+        let row = Int(fromTop / cellH)
+        let terminalRows = linkRows(containing: row, terminal: terminal)
+        guard let match = TerminalLinkResolver.match(
+            rows: terminalRows,
+            at: .init(row: row, column: col)
+        ) else { return nil }
 
-        // Underline rects, one per covered row.
-        var rects: [NSRect] = []
-        var idx = m.range.location
-        let end = m.range.location + (raw as NSString).length
-        while idx < end {
-            let r = row + idx / cols
-            let cStart = idx % cols
-            let cEnd = min(cols, cStart + (end - idx))
-            let y = isFlipped ? CGFloat(r + 1) * cellH - 1.5
-                              : bounds.height - CGFloat(r + 1) * cellH
-            rects.append(NSRect(x: CGFloat(cStart) * cellW, y: max(0, y),
-                                width: CGFloat(cEnd - cStart) * cellW, height: 1.5))
-            idx += (cEnd - cStart)
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+        let thickness = max(round(scale * font.underlineThickness) / scale, 0.5)
+        let baselineOffset = ceil(abs(font.descender) + font.leading)
+        let underlineOffset = max(0, baselineOffset + font.underlinePosition)
+        let rects = match.ranges.map { range in
+            let y: CGFloat
+            if isFlipped {
+                let cellBottom = CGFloat(range.row + 1) * cellH
+                y = cellBottom - underlineOffset - thickness
+            } else {
+                let cellBottom = bounds.height - CGFloat(range.row + 1) * cellH
+                y = cellBottom + underlineOffset
+            }
+            return NSRect(
+                x: CGFloat(range.startColumn) * cellW,
+                y: max(0, y),
+                width: CGFloat(range.endColumn - range.startColumn) * cellW,
+                height: thickness
+            )
         }
-        return (url, rects)
+        return (match.url, rects)
+    }
+
+    /// Returns the complete visible soft-wrapped line containing `row`. SwiftTerm keeps
+    /// `BufferLine.isWrapped` internal, but its public text API preserves hard newlines, so a
+    /// boundary without `\n` is an exact soft-wrap boundary rather than a three-row guess.
+    private func linkRows(containing row: Int, terminal: Terminal) -> [TerminalLinkResolver.Row] {
+        var first = row
+        while first > 0, rowJoinsPrevious(first, terminal: terminal) { first -= 1 }
+
+        var last = row
+        while last + 1 < terminal.rows,
+              rowJoinsPrevious(last + 1, terminal: terminal) {
+            last += 1
+        }
+
+        return (first...last).compactMap { screenRow in
+            guard let line = terminal.getLine(row: screenRow) else { return nil }
+            let data = line.getData()
+            let cells: [Character?] = (0..<terminal.cols).map { column in
+                guard data.indices.contains(column) else { return nil }
+                let character = terminal.getCharacter(for: data[column])
+                return character.unicodeScalars.first?.value == 0 ? nil : character
+            }
+            return TerminalLinkResolver.Row(
+                index: screenRow,
+                cells: cells,
+                joinsPrevious: screenRow > first
+                    && rowJoinsPrevious(screenRow, terminal: terminal)
+            )
+        }
+    }
+
+    private func rowJoinsPrevious(_ screenRow: Int, terminal: Terminal) -> Bool {
+        guard screenRow > 0 else { return false }
+        let absoluteRow = terminal.buffer.yDisp + screenRow
+        let boundary = terminal.getText(
+            start: Position(col: 0, row: absoluteRow - 1),
+            end: Position(col: min(1, terminal.cols), row: absoluteRow)
+        )
+        return !boundary.contains("\n")
     }
 
     // MARK: Link hover underline
@@ -328,7 +369,7 @@ final class IMETerminalView: LocalProcessTerminalView {
             clearLinkHover()
             return
         }
-        let key = hit.url.absoluteString + hit.rects.map { "\($0.origin)" }.joined()
+        let key = hit.url.absoluteString + hit.rects.map(NSStringFromRect).joined()
         guard key != hoverKey else { return }
         clearLinkHover()
         hoverKey = key
@@ -543,6 +584,7 @@ final class IMETerminalView: LocalProcessTerminalView {
     /// next one. SwiftTerm updates its caret when that output arrives; move our overlay with it.
     override func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
         super.rangeChanged(source: source, startY: startY, endY: endY)
+        clearLinkHover()
         guard !markedText.isEmpty else { return }
         updateMarkedOverlay()
     }
