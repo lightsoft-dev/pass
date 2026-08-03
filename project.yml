@@ -20,6 +20,9 @@ packages:
   ArgumentParser:
     url: https://github.com/apple/swift-argument-parser
     from: 1.3.0
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: "2.9.5"
 
 targets:
   Pass:
@@ -42,6 +45,7 @@ targets:
       - package: FlyingFox
         product: FlyingSocks
       - package: SwiftTerm
+      - package: Sparkle
       - target: PassShare
       # Build ordering only — passcli is copied into Contents/MacOS by the script below
       # (a tool target can't be linked or framework-embedded).
@@ -69,11 +73,16 @@ targets:
         PassOIDCIssuer: $(PASS_OIDC_ISSUER)
         PassOIDCClientID: $(PASS_OIDC_CLIENT_ID)
         PassOIDCAudience: $(PASS_OIDC_AUDIENCE)
+        SUFeedURL: https://github.com/lightsoft-dev/pass/releases/latest/download/appcast.xml
+        SUPublicEDKey: vH3dGI+h8J3h4k8uKD2zZVjXVt9DM6NHipW5TUL+KEU=
+        SUEnableAutomaticChecks: true
+        SUAutomaticallyUpdate: false
+        SUScheduledCheckInterval: 21600
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass
-        MARKETING_VERSION: "0.1.7"
-        CURRENT_PROJECT_VERSION: "8"
+        MARKETING_VERSION: "0.1.8"
+        CURRENT_PROJECT_VERSION: "9"
         # Stable signing via the free Apple Development cert. Ad-hoc ("-") builds, but its
         # cdhash changes every build and macOS then refuses notifications ("not allowed").
         # A real Development identity gives a stable code identity so notifications work.
@@ -140,8 +149,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass.share
-        MARKETING_VERSION: "0.1.7"
-        CURRENT_PROJECT_VERSION: "8"
+        MARKETING_VERSION: "0.1.8"
+        CURRENT_PROJECT_VERSION: "9"
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: H66C2M66DC

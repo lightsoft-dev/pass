@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 import SwiftUI
 import UserNotifications
 
@@ -11,6 +12,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var doubleTapHotkey: DoubleTapHotkey?
     private var shiftTapHotkey: DoubleTapHotkey?
     private var onboardingController: OnboardingWindowController?
+    /// Retaining the standard controller starts Sparkle's scheduled checks and owns its UI.
+    private lazy var updaterController = SPUStandardUpdaterController(
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Always called on the main thread; assert it so we can touch main-actor state.
@@ -47,7 +53,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         // A minimal main menu so standard editing shortcuts (⌘X/C/V/A/Z) work inside the
         // panel's text fields even though we have no visible menu bar (FINDINGS/plan R5).
-        NSApp.mainMenu = Self.makeMainMenu()
+        appModel.checkForAppUpdateHandler = { [weak self] in
+            self?.updaterController.checkForUpdates(nil)
+        }
+        NSApp.mainMenu = makeMainMenu()
+#if DEBUG
+        if ProcessInfo.processInfo.environment["PASS_DEBUG_CHECK_FOR_UPDATES"] == "1" {
+            DispatchQueue.main.async { [weak self] in
+                self?.updaterController.checkForUpdates(nil)
+            }
+        }
+#endif
 
         // Build stores + start the reconcile loop.
         appModel.configure()
@@ -247,7 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     // MARK: Main menu
 
     @MainActor
-    private static func makeMainMenu() -> NSMenu {
+    private func makeMainMenu() -> NSMenu {
         let main = NSMenu()
 
         // App menu (Quit).
@@ -255,6 +271,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         main.addItem(appItem)
         let appMenu = NSMenu()
         appItem.submenu = appMenu
+        let updateItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        updateItem.target = self
+        appMenu.addItem(updateItem)
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit pass", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         // Edit menu — enables ⌘X/C/V/A/Z in text fields for an accessory app.
@@ -270,5 +294,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         return main
+    }
+
+    @objc private func checkForUpdates(_ sender: Any?) {
+        updaterController.checkForUpdates(sender)
     }
 }
