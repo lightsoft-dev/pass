@@ -2,6 +2,28 @@ import AppKit
 import Foundation
 import SwiftUI
 
+/// Shared session-titlebar control for showing the embedded browser workspace pane.
+struct BrowserPaneButton: View {
+    let sessionName: String
+
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        Button {
+            if appModel.mirror?.attachedSessionName == sessionName {
+                appModel.mirror?.detach()
+            }
+            appModel.focusBrowserAddress(for: sessionName)
+        } label: {
+            Image(systemName: "globe")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Show browser pane and focus address (⌘L)")
+        .accessibilityLabel("Show browser pane")
+    }
+}
+
 /// A session's workspace: its terminal, plus — when the session has a visible browser tab —
 /// the browser pane in a draggable split beside it (⌘⇧B expands the browser full-width).
 /// Wraps every place a terminal renders (home stack card, list/sidebar panel, detail view)
