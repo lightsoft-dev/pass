@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pass CLI"
+  short_description: "Operate Pass sessions and embedded browser"
+  default_prompt: "Use $pass-cli to open and verify this app in Pass's embedded browser."
