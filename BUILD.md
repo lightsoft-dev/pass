@@ -15,6 +15,20 @@
 
 The built app lands at `.build/Build/Products/Debug/Pass.app`.
 
+## In-app updates
+
+The macOS app uses Sparkle 2. It checks the stable GitHub Release feed URL every six hours
+and shows Sparkle's standard update window when a newer build is available. The user clicks
+Install; Sparkle downloads, verifies, replaces, and relaunches the app without a manual DMG
+download. `SUAutomaticallyUpdate` is intentionally off so an update never restarts the app
+without the user's confirmation.
+
+Every release must upload a Sparkle-signed `appcast.xml` beside its notarized DMG. The public
+EdDSA key is embedded as `SUPublicEDKey`; its private counterpart stays in the release
+operator's login Keychain and must never be committed. See `AGENTS.md` for the release checks.
+The first release containing Sparkle is a one-time manual-install bootstrap for v0.1.7 and
+older; every release after that can use the in-app flow.
+
 ## Signing (M0 finding — load-bearing)
 Sign with a real **Apple Development** identity, not ad-hoc (`-`). `project.yml` sets
 `CODE_SIGN_IDENTITY: "Apple Development"`, `DEVELOPMENT_TEAM`, manual style. Reason: ad-hoc

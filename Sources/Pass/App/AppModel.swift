@@ -59,6 +59,9 @@ final class AppModel {
     /// AppDelegate wires this to the reusable first-run window.
     var showOnboardingHandler: (() -> Void)?
 
+    /// AppDelegate wires this to Sparkle's standard in-app updater UI.
+    @ObservationIgnored var checkForAppUpdateHandler: (() -> Void)?
+
     /// Set to force the panel to open a specific session's terminal (used for testing).
     var forceOpenSession: String?
 
@@ -406,6 +409,10 @@ final class AppModel {
 
     func summon() {
         panelController?.toggle()
+    }
+
+    func checkForAppUpdate() {
+        checkForAppUpdateHandler?()
     }
 
     /// Unconditionally bring the panel up. Unlike `summon()` this never toggles it away, so
