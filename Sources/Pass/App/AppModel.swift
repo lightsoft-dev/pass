@@ -118,6 +118,9 @@ final class AppModel {
     @ObservationIgnored private var remoteCredentialRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var remotePairingExpiryTask: Task<Void, Never>?
     @ObservationIgnored private var projectSyncLoopTask: Task<Void, Never>?
+    @ObservationIgnored private var projectSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var projectSyncDebounceTask: Task<Void, Never>?
+    @ObservationIgnored private var projectSyncRequestedAfterCurrent = false
     @ObservationIgnored private var remoteAccountService: RemoteAccountService!
 
     weak var panelController: PanelController?
@@ -598,9 +601,17 @@ final class AppModel {
 
     /// Re-scan every registered source. New repositories become available everywhere Pass
     /// lists projects; project paths that no longer exist are removed unless a live session
-    /// still references them. Runs at launch and on demand from Settings.
+    /// still references them. Runs at launch, on visibility changes, and on demand from
+    /// Settings. Filesystem work stays off the main actor.
     func syncProjectDirectories(automatic: Bool = false) {
-        guard !isProjectSyncing else { return }
+        if projectSyncTask != nil {
+            // A foreground/background transition can arrive while the previous scan is still
+            // finishing. Remember one follow-up instead of silently dropping that transition.
+            projectSyncRequestedAfterCurrent = true
+            if !automatic { lastProjectSyncMessage = nil }
+            return
+        }
+
         let directories = projects?.projectDirectories ?? []
         guard !directories.isEmpty else {
             if !automatic { lastProjectSyncMessage = "Add a directory before syncing." }
@@ -609,41 +620,74 @@ final class AppModel {
 
         isProjectSyncing = true
         if !automatic { lastProjectSyncMessage = nil }
-        Task { @MainActor in
-            let knownBefore = Set(projects?.projects.map(\.rootPath) ?? [])
-            var discovered: Set<String> = []
-            var availableDirectories: [String] = []
-            var unavailable = 0
-
-            for directory in directories {
-                if await Self.directoryExists(directory) {
-                    availableDirectories.append(directory)
-                    discovered.formUnion(await Self.resolveProjectRoots(under: directory))
-                } else {
-                    unavailable += 1
-                }
+        let knownBefore = Set(projects?.projects.map(\.rootPath) ?? [])
+        projectSyncTask = Task { [weak self] in
+            guard let self else { return }
+            let scan = await Self.scanProjectDirectories(
+                directories,
+                knownProjectRoots: knownBefore
+            )
+            guard !Task.isCancelled else {
+                self.finishProjectDirectorySync()
+                return
             }
 
-            for root in discovered {
+            for root in scan.discovered {
                 projects?.rememberIfNew(rootPath: root)
             }
 
             let liveRoots = Set(sessions?.sessions.map(\.projectRoot) ?? [])
-            let missing = (projects?.projects ?? []).filter { project in
-                Self.isPath(project.rootPath, insideAny: availableDirectories)
-                    && !FileManager.default.fileExists(atPath: project.rootPath)
-                    && !liveRoots.contains(project.rootPath)
+            let missingRoots = knownBefore.filter { root in
+                Self.isPath(root, insideAny: scan.availableDirectories)
+                    && !scan.existingKnownProjectRoots.contains(root)
+                    && !liveRoots.contains(root)
             }
-            missing.forEach { projects?.forget(rootPath: $0.rootPath) }
+            missingRoots.forEach { self.projects?.forget(rootPath: $0) }
 
-            let added = discovered.subtracting(knownBefore).count
-            let unavailableSuffix = unavailable == 0
+            let added = scan.discovered.subtracting(knownBefore).count
+            let unavailableSuffix = scan.unavailableCount == 0
                 ? ""
-                : " · \(unavailable) unavailable director\(unavailable == 1 ? "y" : "ies")"
-            lastProjectSyncMessage = "Synced \(directories.count) director\(directories.count == 1 ? "y" : "ies") · \(added) new · \(missing.count) removed\(unavailableSuffix)"
-            isProjectSyncing = false
-            Log.app.info("project sync: \(discovered.count) found, \(added) new, \(missing.count) removed")
+                : " · \(scan.unavailableCount) unavailable director\(scan.unavailableCount == 1 ? "y" : "ies")"
+            lastProjectSyncMessage = "Synced \(directories.count) director\(directories.count == 1 ? "y" : "ies") · \(added) new · \(missingRoots.count) removed\(unavailableSuffix)"
+            Log.app.info("project sync: \(scan.discovered.count) found, \(added) new, \(missingRoots.count) removed")
+            finishProjectDirectorySync()
         }
+    }
+
+    /// Panel show/hide and app activation callbacks can happen together. Debounce the burst so
+    /// one transition produces one scan; a transition during an active scan is coalesced into
+    /// exactly one follow-up by `syncProjectDirectories`.
+    func scheduleProjectDirectorySyncForVisibilityChange() {
+        projectSyncDebounceTask?.cancel()
+        projectSyncDebounceTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.projectSyncDebounceTask = nil
+            self.syncProjectDirectories(automatic: true)
+        }
+    }
+
+    func stopProjectDirectorySync() {
+        projectSyncLoopTask?.cancel()
+        projectSyncLoopTask = nil
+        projectSyncDebounceTask?.cancel()
+        projectSyncDebounceTask = nil
+        projectSyncTask?.cancel()
+        projectSyncTask = nil
+        projectSyncRequestedAfterCurrent = false
+        isProjectSyncing = false
+    }
+
+    private func finishProjectDirectorySync() {
+        projectSyncTask = nil
+        isProjectSyncing = false
+        guard projectSyncRequestedAfterCurrent else { return }
+        projectSyncRequestedAfterCurrent = false
+        syncProjectDirectories(automatic: true)
     }
 
     func setNewProjectParentDirectory(_ path: String) {
@@ -682,12 +726,58 @@ final class AppModel {
         }
     }
 
-    private static func directoryExists(_ path: String) async -> Bool {
-        await Task.detached {
-            var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
-                && isDirectory.boolValue
-        }.value
+    struct ProjectDirectoryScan: Sendable {
+        var discovered: Set<String>
+        var availableDirectories: [String]
+        var existingKnownProjectRoots: Set<String>
+        var unavailableCount: Int
+    }
+
+    private struct ProjectDirectoryScanEntry: Sendable {
+        var directory: String
+        /// Nil means the directory was unavailable. An available plain folder always resolves
+        /// to at least itself.
+        var roots: [String]?
+    }
+
+    nonisolated static func scanProjectDirectories(
+        _ directories: [String],
+        knownProjectRoots: Set<String>
+    ) async -> ProjectDirectoryScan {
+        await withTaskGroup(of: ProjectDirectoryScanEntry.self) { group in
+            for directory in directories {
+                group.addTask(priority: .utility) {
+                    ProjectDirectoryScanEntry(
+                        directory: directory,
+                        roots: resolveProjectRootsSynchronously(under: directory)
+                    )
+                }
+            }
+
+            var discovered: Set<String> = []
+            var availableDirectories: [String] = []
+            var unavailableCount = 0
+            for await entry in group {
+                if let roots = entry.roots {
+                    availableDirectories.append(entry.directory)
+                    discovered.formUnion(roots)
+                } else {
+                    unavailableCount += 1
+                }
+            }
+
+            // This method is nonisolated, so these potentially slow network-volume checks do
+            // not block SwiftUI or the summon-panel animation.
+            let existingKnownProjectRoots = Set(knownProjectRoots.filter {
+                FileManager.default.fileExists(atPath: $0)
+            })
+            return ProjectDirectoryScan(
+                discovered: discovered,
+                availableDirectories: availableDirectories.sorted(),
+                existingKnownProjectRoots: existingKnownProjectRoots,
+                unavailableCount: unavailableCount
+            )
+        }
     }
 
     private static func isPath(_ path: String, insideAny directories: [String]) -> Bool {
@@ -698,39 +788,48 @@ final class AppModel {
         }
     }
 
-    static func resolveProjectRoots(under dir: String) async -> [String] {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let fm = FileManager.default
-                var isDirectory: ObjCBool = false
-                guard fm.fileExists(atPath: dir, isDirectory: &isDirectory),
-                      isDirectory.boolValue else {
-                    cont.resume(returning: [])
-                    return
-                }
-                // The picked folder is itself a repo → register just it.
-                if let id = GitIdentityService.identity(for: dir) {
-                    cont.resume(returning: [id.projectRoot]); return
-                }
-                // Otherwise treat it as a parent and register each child repo.
-                var roots: Set<String> = []
-                let children = (try? fm.contentsOfDirectory(atPath: dir)) ?? []
-                for name in children where !name.hasPrefix(".") {
-                    let child = (dir as NSString).appendingPathComponent(name)
-                    var isDir: ObjCBool = false
-                    guard fm.fileExists(atPath: child, isDirectory: &isDir), isDir.boolValue else { continue }
-                    if let id = GitIdentityService.identity(for: child) { roots.insert(id.projectRoot) }
-                }
-                // With no repositories to discover, the selected folder is the project.
-                // This also keeps directory registration useful on systems without Git.
-                if roots.isEmpty {
-                    roots.insert(
-                        URL(fileURLWithPath: dir, isDirectory: true).standardizedFileURL.path
-                    )
-                }
-                cont.resume(returning: Array(roots).sorted())
+    nonisolated static func resolveProjectRoots(under dir: String) async -> [String] {
+        await Task.detached(priority: .userInitiated) {
+            resolveProjectRootsSynchronously(under: dir) ?? []
+        }.value
+    }
+
+    /// Synchronous scanner used only from detached/task-group work.
+    private nonisolated static func resolveProjectRootsSynchronously(
+        under dir: String
+    ) -> [String]? {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: dir, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+        // The picked folder is itself a repo → register just it.
+        if let id = GitIdentityService.identity(for: dir) {
+            return [id.projectRoot]
+        }
+        // Otherwise treat it as a parent and register each child repo.
+        var roots: Set<String> = []
+        let children = (try? fm.contentsOfDirectory(atPath: dir)) ?? []
+        for name in children where !name.hasPrefix(".") {
+            guard !Task.isCancelled else { return [] }
+            let child = (dir as NSString).appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: child, isDirectory: &isDir), isDir.boolValue else {
+                continue
+            }
+            if let id = GitIdentityService.identity(for: child) {
+                roots.insert(id.projectRoot)
             }
         }
+        // With no repositories to discover, the selected folder is the project.
+        // This also keeps directory registration useful on systems without Git.
+        if roots.isEmpty {
+            roots.insert(
+                URL(fileURLWithPath: dir, isDirectory: true).standardizedFileURL.path
+            )
+        }
+        return Array(roots).sorted()
     }
 
     // MARK: Backup / export

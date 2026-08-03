@@ -25,6 +25,7 @@ final class WebViewPool {
 
     private var views: [UUID: WKWebView] = [:]
     private var coordinators: [UUID: WebViewCoordinator] = [:]
+    private var automationControllers: [UUID: BrowserAutomationController] = [:]
     private var order: [UUID] = [] // LRU — most recently used last
     private let capacity = 4
 
@@ -93,6 +94,7 @@ final class WebViewPool {
         order.removeAll { $0 == id }
         views.removeValue(forKey: id)?.stopLoading()
         coordinators.removeValue(forKey: id)
+        automationControllers.removeValue(forKey: id)
     }
 
     func prune(keeping live: Set<UUID>) {
@@ -150,6 +152,23 @@ final class WebViewPool {
         }
     }
 
+    /// Agent-facing semantic page state. Element refs are scoped to this live pooled webview
+    /// and are maintained in a JavaScript content world that the page cannot inspect.
+    func automationSnapshot(
+        _ id: UUID,
+        includeOffscreen: Bool
+    ) async throws -> BrowserAutomationSnapshot {
+        try await automationController(for: id).snapshot(includeOffscreen: includeOffscreen)
+    }
+
+    /// Performs one validated action against the latest semantic snapshot.
+    func performAutomationAction(
+        _ id: UUID,
+        action: BrowserAutomationAction
+    ) async throws -> BrowserAutomationActionResult {
+        try await automationController(for: id).perform(action)
+    }
+
     /// Settings → "Clear browser website data" (cookies, storage, caches of the app store).
     static func clearWebsiteData() async {
         await withCheckedContinuation { cont in
@@ -195,6 +214,18 @@ final class WebViewPool {
         } else {
             wv.load(URLRequest(url: url))
         }
+    }
+
+    private func automationController(for id: UUID) throws -> BrowserAutomationController {
+        guard let webView = views[id] else {
+            throw BrowserAutomationError.tabNotFound
+        }
+        if let controller = automationControllers[id] {
+            return controller
+        }
+        let controller = BrowserAutomationController(webView: webView)
+        automationControllers[id] = controller
+        return controller
     }
 
     private func touch(_ id: UUID) {

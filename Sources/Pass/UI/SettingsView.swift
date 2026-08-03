@@ -33,7 +33,7 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             SettingsSidebar(selection: settingsSelection)
-                .frame(width: 184)
+                .frame(width: 210)
             Divider()
             VStack(alignment: .leading, spacing: 0) {
                 SettingsHeader(section: selectedSection)
@@ -45,7 +45,7 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 820, height: 640)
+        .frame(width: 960, height: 720)
         .onAppear {
             floating = appModel.panelFloating
             cliLinked = CLIInstaller.isLinked
@@ -126,6 +126,7 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
     private var homeSection: some View {
         Section("Home") {
             Picker("Layout", selection: $homeModeRaw) {
@@ -136,15 +137,13 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
             Text("Card stack: the focused session shown large with its own input, others small. Compact list: uniform rows with one input at the bottom.")
                 .font(.caption).foregroundStyle(.secondary)
-            Picker("Terminal theme", selection: $terminalThemeRaw) {
-                ForEach(TerminalTheme.allCases, id: \.rawValue) { theme in
-                    Text(theme.label).tag(theme.rawValue)
-                }
-            }
-            .onChange(of: terminalThemeRaw) { _, _ in
-                // Every live terminal (home pool + detail) restyles immediately.
-                NotificationCenter.default.post(name: .passTerminalThemeChanged, object: nil)
-            }
+        }
+
+        Section("Terminal appearance") {
+            TerminalThemePicker(selection: $terminalThemeRaw)
+            Text("Choose a palette for every embedded terminal. Your active terminals update immediately, and the choice is remembered.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -522,7 +521,7 @@ struct SettingsView: View {
                     else { ClaudeHooksInstaller.removeAdvertise() }
                     advertiseOn = ClaudeHooksInstaller.isAdvertiseInstalled()
                 }
-            Text("Agents open pages beside their terminal (passcli browser open) and can read them back (screenshot/read). Note: whatever the embedded browser shows is readable by that session's agent.")
+            Text("Agents can open, inspect, and interact with pages beside their terminal through passcli (snapshot/click/fill/scroll), as well as capture or read them. Whatever the embedded browser shows — including imported login sessions — is readable and operable by that session's agent.")
                 .font(.caption).foregroundStyle(.secondary)
             Button("Clear browser website data") {
                 Task { await WebViewPool.clearWebsiteData() }
@@ -560,7 +559,7 @@ struct SettingsView: View {
                         .foregroundStyle(chromeImportStatus.hasPrefix("Imported") ? .green : .orange)
                 }
             }
-            Text("Copies cookies from the selected local Chrome profile into Pass once. Passwords, extensions, history, and Chrome files are never copied or changed. Imported logins are readable by agents through the embedded browser.")
+            Text("Copies cookies from the selected local Chrome profile into Pass once. Passwords, extensions, history, and Chrome files are never copied or changed. Agents can read and interact with pages that use imported logins through the embedded browser.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -800,7 +799,7 @@ private struct SettingsSidebar: View {
     @State private var hovered: SettingsSection?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(SettingsSection.allCases) { section in
                 Button {
                     selection = section
@@ -809,8 +808,8 @@ private struct SettingsSidebar: View {
                         .font(.system(size: 13, weight: selection == section ? .semibold : .regular))
                         .foregroundStyle(selection == section ? Color.primary : .secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 7)
-                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
                         .background {
                             if selection == section {
                                 RoundedRectangle(cornerRadius: 7)
@@ -834,7 +833,7 @@ private struct SettingsSidebar: View {
             }
             Spacer()
         }
-        .padding(12)
+        .padding(16)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }
@@ -854,6 +853,92 @@ private struct SettingsHeader: View {
         .padding(.horizontal, 24)
         .padding(.top, 22)
         .padding(.bottom, 8)
+    }
+}
+
+/// A compact palette gallery is more legible than a long picker of theme names, especially for
+/// users comparing closely related dark themes. It deliberately previews real terminal colors
+/// rather than creating a separate Settings-only color system.
+private struct TerminalThemePicker: View {
+    @Binding var selection: String
+
+    private let columns = [
+        GridItem(.flexible(minimum: 170), spacing: 10),
+        GridItem(.flexible(minimum: 170), spacing: 10),
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(TerminalTheme.allCases, id: \.rawValue) { theme in
+                let selected = selection == theme.rawValue
+                Button {
+                    selection = theme.rawValue
+                    // Every live terminal (home pool + detail) restyles immediately.
+                    NotificationCenter.default.post(name: .passTerminalThemeChanged, object: nil)
+                } label: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TerminalThemePreview(theme: theme)
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(theme.label)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                Text(theme.detail)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            if selected {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(Color.accentColor)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                    }
+                    .padding(8)
+                    .background {
+                        RoundedRectangle(cornerRadius: 9)
+                            .fill(selected ? Color.accentColor.opacity(0.1) : Color.primary.opacity(0.035))
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 9)
+                            .stroke(selected ? Color.accentColor.opacity(0.75) : Color.primary.opacity(0.08),
+                                    lineWidth: selected ? 1.5 : 1)
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 9))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(theme.label) terminal theme")
+                .accessibilityValue(selected ? "Selected" : "")
+            }
+        }
+        .padding(.vertical, 3)
+    }
+}
+
+private struct TerminalThemePreview: View {
+    let theme: TerminalTheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                ForEach(Array(theme.previewColors.enumerated()), id: \.offset) { _, color in
+                    Circle().fill(Color(nsColor: color)).frame(width: 7, height: 7)
+                }
+                Spacer()
+            }
+            HStack(spacing: 4) {
+                Text("$ pass")
+                    .foregroundStyle(Color(nsColor: theme.previewColors[2]))
+                Text("ready")
+                    .foregroundStyle(Color(nsColor: theme.nsForeground).opacity(0.74))
+            }
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: theme.nsBackground), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 

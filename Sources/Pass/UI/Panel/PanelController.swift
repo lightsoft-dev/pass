@@ -77,10 +77,14 @@ final class PanelController {
             // Only remember drags in normal mode — floating mode re-centers itself each summon.
             if self?.isFloating == false { self?.savedOrigin = origin }
         },
-        onMiniaturize: { [weak self] in self?.appModel.panelVisible = false },
+        onMiniaturize: { [weak self] in
+            self?.appModel.panelVisible = false
+            self?.appModel.scheduleProjectDirectorySyncForVisibilityChange()
+        },
         onDeminiaturize: { [weak self] in
             self?.appModel.panelVisible = true
             self?.appModel.focusToken &+= 1
+            self?.appModel.scheduleProjectDirectorySyncForVisibilityChange()
         }
     )
 
@@ -133,6 +137,7 @@ final class PanelController {
         NSApp.activate(ignoringOtherApps: true)
         if panel.isMiniaturized { panel.deminiaturize(nil) }
         panel.makeKeyAndOrderFront(nil)
+        appModel.scheduleProjectDirectorySyncForVisibilityChange()
     }
 
     func show(preselecting session: String?) {
@@ -151,11 +156,13 @@ final class PanelController {
         panel.makeKeyAndOrderFront(nil)
         appModel.panelVisible = true  // home attaches its live terminal only while visible
         appModel.focusToken &+= 1 // tell the omnibox to (re)take focus on every show
+        appModel.scheduleProjectDirectorySyncForVisibilityChange()
     }
 
     func hide() {
         appModel.panelVisible = false // detaches the home terminal (the session keeps running)
         panel?.orderOut(nil)
+        appModel.scheduleProjectDirectorySyncForVisibilityChange()
     }
 
     /// Normal-window placement: reuse the saved drag position if it lands on a connected screen,

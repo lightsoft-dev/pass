@@ -21,9 +21,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         MainActor.assumeIsolated {
             doubleTapHotkey?.invalidate()
             shiftTapHotkey?.invalidate()
+            appModel.stopProjectDirectorySync()
             appModel.mirror?.shutdown()
             appModel.miniTerminals?.closeAll()
             appModel.sessions?.flushSave()
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            appModel.scheduleProjectDirectorySyncForVisibilityChange()
+        }
+    }
+
+    func applicationWillResignActive(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            appModel.scheduleProjectDirectorySyncForVisibilityChange()
         }
     }
 
@@ -194,6 +207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 tabs: { await MainActor.run { CLIAPI.tabs(appModel) } },
                 screenshot: { body in await CLIAPI.screenshot(appModel, body: body) },
                 read: { body in await CLIAPI.read(appModel, body: body) },
+                snapshot: { body in await CLIAPI.snapshot(appModel, body: body) },
+                action: { body in await CLIAPI.action(appModel, body: body) },
                 validateExtension: { body in await MainActor.run {
                     CLIAPI.validateExtension(body: body)
                 } },

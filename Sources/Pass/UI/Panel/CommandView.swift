@@ -838,6 +838,7 @@ struct CommandView: View {
                     SessionPresentationPicker(readableMode: $readableMode) {
                         DispatchQueue.main.async { live.focus() }
                     }
+                    BrowserPaneButton(sessionName: s.name)
                     DevicePaneButton(sessionName: s.name)
                 }
                 .padding(.horizontal, 8).padding(.vertical, 5)
@@ -1280,6 +1281,7 @@ struct FocusedSessionCard: View {
             SessionPresentationPicker(readableMode: $readableMode) {
                 DispatchQueue.main.async { terminal?.focus() }
             }
+            BrowserPaneButton(sessionName: session.name)
             DevicePaneButton(sessionName: session.name)
             SessionRenameButton(session: session, show: $renaming)
             if let onDelete {

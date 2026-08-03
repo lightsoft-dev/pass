@@ -50,6 +50,7 @@ struct SessionDetailView: View {
                     DispatchQueue.main.async { terminal?.focus() }
                 }
                 MiniTerminalButton(session: session)
+                BrowserPaneButton(sessionName: session.name)
                 DevicePaneButton(sessionName: session.name)
                 Button { appModel.attach(session) } label: {
                     Image(systemName: "macwindow.on.rectangle").foregroundStyle(.secondary)

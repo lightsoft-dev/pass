@@ -16,6 +16,7 @@ import { ConversationSurface } from "../../components/ConversationSurface";
 import { Screen } from "../../components/Screen";
 import { TerminalSurface } from "../../components/TerminalSurface";
 import { buildConversation } from "../../conversation/terminalConversation";
+import { useAdaptiveLayout } from "../../hooks/useAdaptiveLayout";
 import {
   COMMAND_LIMITS,
   splitUTF8ByBytes,
@@ -38,6 +39,7 @@ function labelForStatus(status: string) {
 
 export default function SessionDetailScreen() {
   const params = useLocalSearchParams<{ name: string | string[] }>();
+  const { isRegular } = useAdaptiveLayout();
   const sessionName = Array.isArray(params.name) ? params.name[0] : params.name;
   const {
     state,
@@ -183,44 +185,53 @@ export default function SessionDetailScreen() {
         style={styles.flex}
       >
         <View style={styles.header}>
-          <View style={styles.identity}>
-            <Text numberOfLines={1} style={styles.headerTitle}>{session.displayName}</Text>
-            <Text numberOfLines={1} style={styles.headerMeta}>
-              {session.agent}{session.gitBranch ? ` · ${session.gitBranch}` : ""} · {labelForStatus(session.attention.status)}
-            </Text>
-          </View>
-          <View accessibilityRole="tablist" style={styles.segmented}>
-            {(["conversation", "terminal"] as const).map((item) => (
-              <Pressable
-                key={item}
-                accessibilityRole="tab"
-                accessibilityState={{ selected: mode === item }}
-                onPress={() => setMode(item)}
-                style={[styles.segment, mode === item && styles.segmentSelected]}
+          <View style={[styles.headerContent, isRegular && styles.headerContentRegular]}>
+            <View style={styles.identity}>
+              <Text
+                numberOfLines={1}
+                style={[styles.headerTitle, isRegular && styles.headerTitleRegular]}
               >
-                <Text style={[styles.segmentText, mode === item && styles.segmentTextSelected]}>
-                  {item === "conversation" ? "Chat" : "Terminal"}
-                </Text>
-              </Pressable>
-            ))}
+                {session.displayName}
+              </Text>
+              <Text numberOfLines={1} style={styles.headerMeta}>
+                {session.agent}{session.gitBranch ? ` · ${session.gitBranch}` : ""} · {labelForStatus(session.attention.status)}
+              </Text>
+            </View>
+            <View accessibilityRole="tablist" style={styles.segmented}>
+              {(["conversation", "terminal"] as const).map((item) => (
+                <Pressable
+                  key={item}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: mode === item }}
+                  onPress={() => setMode(item)}
+                  style={[styles.segment, mode === item && styles.segmentSelected]}
+                >
+                  <Text style={[styles.segmentText, mode === item && styles.segmentTextSelected]}>
+                    {item === "conversation" ? "Chat" : "Terminal"}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
         </View>
 
         {attentionVisible ? (
           <View style={styles.attentionBand}>
-            <View style={styles.attentionCopy}>
-              <Text style={styles.attentionTitle}>{labelForStatus(session.attention.status)}</Text>
-              <Text numberOfLines={2} style={styles.attentionText}>
-                {session.attention.preview || "Review the pending request below."}
-              </Text>
-            </View>
-            {session.attention.status === "decision" ? (
-              <View style={styles.decisionActions}>
-                <AppButton compact label="Once" disabled={!canDecide} onPress={() => decide("allowOnce")} />
-                <AppButton compact variant="secondary" label="All" disabled={!canDecide} onPress={() => decide("allowAll")} />
-                <AppButton compact variant="danger" label="Deny" disabled={!canDecide} onPress={() => decide("deny")} />
+            <View style={[styles.attentionContent, isRegular && styles.attentionContentRegular]}>
+              <View style={styles.attentionCopy}>
+                <Text style={styles.attentionTitle}>{labelForStatus(session.attention.status)}</Text>
+                <Text numberOfLines={2} style={styles.attentionText}>
+                  {session.attention.preview || "Review the pending request below."}
+                </Text>
               </View>
-            ) : null}
+              {session.attention.status === "decision" ? (
+                <View style={styles.decisionActions}>
+                  <AppButton compact label="Once" disabled={!canDecide} onPress={() => decide("allowOnce")} />
+                  <AppButton compact variant="secondary" label="All" disabled={!canDecide} onPress={() => decide("allowAll")} />
+                  <AppButton compact variant="danger" label="Deny" disabled={!canDecide} onPress={() => decide("deny")} />
+                </View>
+              ) : null}
+            </View>
           </View>
         ) : null}
 
@@ -228,34 +239,37 @@ export default function SessionDetailScreen() {
           <>
             <ConversationSurface
               blocks={conversation}
+              regularWidth={isRegular}
               truncated={responseTruncated}
             />
             <View style={styles.composer}>
-              {resultText ? <Text numberOfLines={2} style={styles.result}>{resultText}</Text> : null}
-              <View style={styles.composerRow}>
-                <TextInput
-                  accessibilityLabel="Message to coding session"
-                  maxLength={COMMAND_LIMITS.messageCharacters}
-                  multiline
-                  onChangeText={setMessage}
-                  placeholder={`Message ${session.agent}…`}
-                  placeholderTextColor={colors.subtle}
-                  style={styles.composerInput}
-                  value={message}
-                />
-                <Pressable
-                  accessibilityLabel="Send message"
-                  accessibilityRole="button"
-                  disabled={!canWrite || !message.trim()}
-                  onPress={send}
-                  style={({ pressed }) => [
-                    styles.sendButton,
-                    (!canWrite || !message.trim()) && styles.sendButtonDisabled,
-                    pressed && canWrite && message.trim() && styles.sendButtonPressed,
-                  ]}
-                >
-                  <Text style={styles.sendIcon}>↑</Text>
-                </Pressable>
+              <View style={[styles.composerContent, isRegular && styles.composerContentRegular]}>
+                {resultText ? <Text numberOfLines={2} style={styles.result}>{resultText}</Text> : null}
+                <View style={styles.composerRow}>
+                  <TextInput
+                    accessibilityLabel="Message to coding session"
+                    maxLength={COMMAND_LIMITS.messageCharacters}
+                    multiline
+                    onChangeText={setMessage}
+                    placeholder={`Message ${session.agent}…`}
+                    placeholderTextColor={colors.subtle}
+                    style={styles.composerInput}
+                    value={message}
+                  />
+                  <Pressable
+                    accessibilityLabel="Send message"
+                    accessibilityRole="button"
+                    disabled={!canWrite || !message.trim()}
+                    onPress={send}
+                    style={({ pressed }) => [
+                      styles.sendButton,
+                      (!canWrite || !message.trim()) && styles.sendButtonDisabled,
+                      pressed && canWrite && message.trim() && styles.sendButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.sendIcon}>↑</Text>
+                  </Pressable>
+                </View>
               </View>
             </View>
           </>
@@ -291,17 +305,24 @@ const styles = StyleSheet.create({
   muted: { color: colors.muted, fontSize: 13, lineHeight: 19 },
   header: {
     minHeight: 58,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
     backgroundColor: colors.surface,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
+  headerContent: {
+    width: "100%",
+    minHeight: 58,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "center",
+    gap: spacing.sm,
+  },
+  headerContentRegular: { maxWidth: 968, paddingHorizontal: spacing.lg },
   identity: { flex: 1, minWidth: 0, gap: 3 },
   headerTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },
+  headerTitleRegular: { fontSize: 18 },
   headerMeta: { color: colors.subtle, fontSize: 10, textTransform: "capitalize" },
   segmented: {
     width: 156,
@@ -318,21 +339,28 @@ const styles = StyleSheet.create({
   segmentText: { color: colors.subtle, fontSize: 11, fontWeight: "700" },
   segmentTextSelected: { color: colors.text },
   attentionBand: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
     backgroundColor: "#2a2216",
     borderBottomWidth: 1,
     borderBottomColor: "#60481f",
   },
+  attentionContent: {
+    width: "100%",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "center",
+    gap: spacing.sm,
+  },
+  attentionContentRegular: { maxWidth: 968, paddingHorizontal: spacing.lg },
   attentionCopy: { flex: 1, minWidth: 0, gap: 2 },
   attentionTitle: { color: colors.warning, fontSize: 12, fontWeight: "800" },
   attentionText: { color: colors.text, fontSize: 11, lineHeight: 15 },
   decisionActions: { flexDirection: "row", gap: 5 },
   terminalUnavailable: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl, gap: spacing.sm },
-  composer: { backgroundColor: "#121519", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: 6 },
+  composer: { backgroundColor: "#121519", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  composerContent: { width: "100%", alignSelf: "center", paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: 6 },
+  composerContentRegular: { maxWidth: 968, paddingHorizontal: spacing.lg },
   composerRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
   composerInput: { flex: 1, minHeight: 44, maxHeight: 120, color: colors.text, backgroundColor: "#1b1f24", borderWidth: 1, borderColor: "#303741", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 11, fontSize: 14, lineHeight: 20, textAlignVertical: "top" },
   sendButton: { width: 44, height: 44, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: "#61bd8e" },
