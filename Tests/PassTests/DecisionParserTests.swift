@@ -18,6 +18,7 @@ final class DecisionParserTests: XCTestCase {
         XCTAssertTrue(opts[0].highlighted)      // ❯ marks option 1
         XCTAssertFalse(opts[2].highlighted)
         XCTAssertTrue(opts[1].label.contains("allow all"))
+        XCTAssertEqual(opts.map(\.row), [2, 3, 4])
     }
 
     func testAskUserQuestionStyle() {
@@ -74,5 +75,23 @@ final class DecisionParserTests: XCTestCase {
 
     func testPromptNilWithoutMenu() {
         XCTAssertNil(DecisionParser.prompt("just some prose with no menu here"))
+    }
+
+    func testUsesBottomMostMenuAndRecognizesCodexMarker() {
+        let pane = """
+          1. stale one
+        ❯ 2. stale two
+
+        Pick the current action:
+          1. Continue
+        › 2. Stop
+        """
+
+        let opts = DecisionParser.parse(pane)
+
+        XCTAssertEqual(opts.map(\.label), ["Continue", "Stop"])
+        XCTAssertEqual(opts.map(\.row), [4, 5])
+        XCTAssertTrue(opts[1].highlighted)
+        XCTAssertEqual(DecisionParser.prompt(pane), "Pick the current action:")
     }
 }

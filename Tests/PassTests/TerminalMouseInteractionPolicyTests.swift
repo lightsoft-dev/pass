@@ -105,6 +105,42 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
         )
     }
 
+    func testChoiceClickMovesFromHighlightAndConfirms() throws {
+        let options = DecisionParser.parse("""
+        ❯ 1. First
+          2. Second
+          3. Third
+        """)
+
+        let input = try XCTUnwrap(TerminalChoiceInteraction.input(for: options[2], among: options))
+
+        XCTAssertEqual(input, "\u{1b}[B\u{1b}[B\r")
+    }
+
+    func testChoiceClickRequiresExactlyOneHighlight() {
+        let options = DecisionParser.parse("""
+          1. First
+          2. Second
+        """)
+
+        XCTAssertNil(TerminalChoiceInteraction.input(for: options[1], among: options))
+    }
+
+    @MainActor
+    func testDecisionOptionHitMapsTerminalCoordinatesToRows() throws {
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        terminal.getTerminal().feed(text: "Question?\r\n❯ 1. First\r\n  2. Second")
+        let rows = max(terminal.getTerminal().rows, 1)
+        let cellHeight = terminal.bounds.height / CGFloat(rows)
+        let secondOptionRow = 2
+        let point = NSPoint(
+            x: 40,
+            y: terminal.bounds.height - (CGFloat(secondOptionRow) + 0.5) * cellHeight
+        )
+
+        XCTAssertEqual(terminal.decisionOption(at: point)?.number, 2)
+    }
+
     func testMiniTerminalRecognizesPasteByPhysicalKeyWithKoreanInput() throws {
         let event = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown,

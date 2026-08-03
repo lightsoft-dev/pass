@@ -18,6 +18,24 @@ enum TerminalMouseInteractionPolicy {
     }
 }
 
+/// Convert a semantic click on a numbered TUI option into the same input a keyboard user would
+/// produce. Arrow-and-Enter works across Claude/Codex/Pi-style menus without assuming that a
+/// provider binds number keys, and requires exactly one visibly highlighted choice.
+enum TerminalChoiceInteraction {
+    static func input(for target: DecisionOption, among options: [DecisionOption]) -> String? {
+        let highlighted = options.indices.filter { options[$0].highlighted }
+        guard highlighted.count == 1,
+              let targetIndex = options.firstIndex(where: { $0.number == target.number })
+        else { return nil }
+
+        let distance = targetIndex - highlighted[0]
+        if distance < 0 {
+            return String(repeating: "\u{1b}[A", count: -distance) + "\r"
+        }
+        return String(repeating: "\u{1b}[B", count: distance) + "\r"
+    }
+}
+
 /// SwiftTerm's macOS view ignores IME composition (`setMarkedText` is an empty stub), so while
 /// typing Korean/Japanese/Chinese NOTHING shows until the character is committed — it feels
 /// like keystrokes are swallowed. This subclass renders the in-progress composition at the
@@ -108,9 +126,9 @@ final class IMETerminalView: LocalProcessTerminalView {
             let term = terminalView(under: event)
             switch event.type {
             case .mouseMoved:
-                if hoverTerm !== term { hoverTerm?.clearLinkHover() }
+                if hoverTerm !== term { hoverTerm?.clearInteractiveHover() }
                 hoverTerm = term
-                term?.updateLinkHover(event)
+                term?.updateInteractiveHover(event)
             case .leftMouseDragged:
                 let dragTerm = mouseDownTerm ?? term
                 if mouseGestureUsesTmux {
@@ -122,7 +140,7 @@ final class IMETerminalView: LocalProcessTerminalView {
                     // selection, which remains visible after mouse-up and is handled by ⌘C.
                     dragTerm?.allowMouseReporting = false
                 }
-                dragTerm?.clearLinkHover()
+                dragTerm?.clearInteractiveHover()
                 if mouseGestureUsesTmux { return eventForTmux(event) }
             case .leftMouseDown:
                 // Recover if a previous gesture was interrupted before its mouse-up arrived.
@@ -169,6 +187,17 @@ final class IMETerminalView: LocalProcessTerminalView {
                     hypot(event.locationInWindow.x - $0.x, event.locationInWindow.y - $0.y) > 4
                 } ?? true
                 let cmd = event.modifierFlags.contains(.command)
+                let plainClick = event.modifierFlags
+                    .intersection([.command, .option, .control, .shift]).isEmpty
+                // Numbered agent menus are generally keyboard-only. Turn a click on an exact
+                // option row into relative arrows + Enter, after re-reading the live screen.
+                if !moved, plainClick,
+                   term.activateDecisionOption(
+                       at: term.convert(event.locationInWindow, from: nil)
+                   ) {
+                    debugLog("click choice")
+                    return event
+                }
                 // A stationary click (not the end of a drag-selection) or a ⌘-click on a URL
                 // opens it.
                 if cmd || !moved,
@@ -319,6 +348,92 @@ final class IMETerminalView: LocalProcessTerminalView {
         linkUnderlines.forEach { $0.removeFromSuperview() }
         linkUnderlines.removeAll()
         NSCursor.iBeam.set()
+    }
+
+    // MARK: Numbered choice hover + click
+
+    private var choiceHighlight: NSView?
+    private var choiceHoverRow: Int?
+
+    /// Prefer a numbered menu row over a URL for a plain hover. Command-click still reaches
+    /// the URL path on mouse-up, while ordinary clicks choose the option containing that URL.
+    fileprivate func updateInteractiveHover(_ event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let hit = decisionOptionHit(at: point) {
+            clearLinkHover()
+            updateChoiceHover(row: hit.option.row, rect: hit.rect)
+            NSCursor.pointingHand.set()
+        } else {
+            clearChoiceHover()
+            updateLinkHover(event)
+        }
+    }
+
+    fileprivate func clearInteractiveHover() {
+        clearChoiceHover()
+        clearLinkHover()
+    }
+
+    private func updateChoiceHover(row: Int, rect: NSRect) {
+        guard choiceHoverRow != row else { return }
+        clearChoiceHover()
+        let highlight = NSView(frame: rect.insetBy(dx: 2, dy: 1))
+        highlight.wantsLayer = true
+        highlight.layer?.backgroundColor = NSColor.controlAccentColor
+            .withAlphaComponent(0.13).cgColor
+        highlight.layer?.cornerRadius = 3
+        addSubview(highlight)
+        choiceHighlight = highlight
+        choiceHoverRow = row
+    }
+
+    private func clearChoiceHover() {
+        guard choiceHoverRow != nil || choiceHighlight != nil else { return }
+        choiceHighlight?.removeFromSuperview()
+        choiceHighlight = nil
+        choiceHoverRow = nil
+        NSCursor.iBeam.set()
+    }
+
+    /// The exact visible menu option under a terminal coordinate. Requiring one highlighted
+    /// option keeps ordinary numbered prose inert even if it happens to resemble a list.
+    func decisionOption(at point: NSPoint) -> DecisionOption? {
+        decisionOptionHit(at: point)?.option
+    }
+
+    private func decisionOptionHit(
+        at point: NSPoint
+    ) -> (option: DecisionOption, options: [DecisionOption], rect: NSRect)? {
+        let terminal = getTerminal()
+        let rows = max(terminal.rows, 1)
+        let row = screenRow(at: point, rows: rows)
+        let lines = (0..<rows).map {
+            terminal.getLine(row: $0)?.translateToString(trimRight: true) ?? ""
+        }
+        let options = DecisionParser.parse(lines.joined(separator: "\n"))
+        guard options.filter(\.highlighted).count == 1,
+              let option = options.first(where: { $0.row == row }) else { return nil }
+
+        let cellH = max(bounds.height / CGFloat(rows), 1)
+        let y = isFlipped ? CGFloat(row) * cellH : bounds.height - CGFloat(row + 1) * cellH
+        return (option, options, NSRect(x: 0, y: y, width: bounds.width, height: cellH))
+    }
+
+    /// Re-read the current screen and synchronously write the keyboard-equivalent input to the
+    /// same PTY. This avoids a session lookup/race between hit-testing and delivery.
+    fileprivate func activateDecisionOption(at point: NSPoint) -> Bool {
+        guard let hit = decisionOptionHit(at: point),
+              let input = TerminalChoiceInteraction.input(for: hit.option, among: hit.options)
+        else { return false }
+        send(source: self, data: ArraySlice(Array(input.utf8)))
+        clearInteractiveHover()
+        return true
+    }
+
+    private func screenRow(at point: NSPoint, rows: Int) -> Int {
+        let cellH = max(bounds.height / CGFloat(rows), 1)
+        let fromTop = isFlipped ? point.y : bounds.height - point.y
+        return min(rows - 1, max(0, Int(fromTop / cellH)))
     }
 
     private static let wheelForwarder: Any? =

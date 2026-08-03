@@ -6,6 +6,7 @@ struct DecisionOption: Identifiable, Equatable, Sendable {
     let number: Int
     let label: String
     let highlighted: Bool // the `❯`-marked current choice
+    let row: Int          // zero-based row in the parsed pane/screen
     var id: Int { number }
 }
 
@@ -15,20 +16,35 @@ struct DecisionOption: Identifiable, Equatable, Sendable {
 /// card without opening the terminal.
 enum DecisionParser {
     static func parse(_ pane: String) -> [DecisionOption] {
-        var found: [DecisionOption] = []
-        for rawLine in pane.split(separator: "\n", omittingEmptySubsequences: false) {
+        var runs: [[DecisionOption]] = []
+        var current: [DecisionOption] = []
+        let lines = pane.split(separator: "\n", omittingEmptySubsequences: false)
+
+        for (row, rawLine) in lines.enumerated() {
             let line = String(rawLine)
             guard let num = optionNumber(line) else { continue }
-            found.append(DecisionOption(number: num, label: optionLabel(line), highlighted: line.contains("❯")))
-        }
+            let option = DecisionOption(
+                number: num,
+                label: optionLabel(line),
+                highlighted: hasSelectionMarker(line),
+                row: row
+            )
 
-        // Keep the first occurrence per number, require a consecutive 1..N run of ≥2 — that's
-        // what distinguishes a real choice menu from a stray "1. foo" inside prose.
-        var seen = Set<Int>()
-        let unique = found.filter { seen.insert($0.number).inserted }.sorted { $0.number < $1.number }
-        guard unique.count >= 2 else { return [] }
-        for (i, opt) in unique.enumerated() where opt.number != i + 1 { return [] }
-        return unique
+            if num == 1 {
+                if current.count >= 2 { runs.append(current) }
+                current = [option]
+            } else if num == current.count + 1 {
+                current.append(option)
+            } else {
+                if current.count >= 2 { runs.append(current) }
+                current = []
+            }
+        }
+        if current.count >= 2 { runs.append(current) }
+
+        // A pane history can contain an older completed menu. The bottom-most consecutive
+        // 1...N run is the one currently visible/actionable.
+        return runs.last ?? []
     }
 
     /// The question/context shown above a numbered menu (e.g. "Do you want to create X?") — the
@@ -36,8 +52,7 @@ enum DecisionParser {
     /// no valid menu on screen.
     static func prompt(_ pane: String) -> String? {
         let lines = pane.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard !parse(pane).isEmpty,
-              let oneIdx = lines.lastIndex(where: { optionNumber($0) == 1 }) else { return nil }
+        guard let oneIdx = parse(pane).first?.row else { return nil }
 
         var collected: [String] = []
         var i = oneIdx - 1
@@ -57,7 +72,7 @@ enum DecisionParser {
 
     /// The option number if `rawLine` is a "N. label" choice (marker/whitespace tolerant), else nil.
     private static func optionNumber(_ rawLine: String) -> Int? {
-        let cleaned = rawLine.replacingOccurrences(of: "❯", with: " ").trimmingCharacters(in: .whitespaces)
+        let cleaned = removingSelectionMarker(rawLine)
         guard let dot = cleaned.firstIndex(of: "."), dot != cleaned.startIndex,
               let num = Int(cleaned[cleaned.startIndex..<dot]), (1...20).contains(num) else { return nil }
         let label = cleaned[cleaned.index(after: dot)...].trimmingCharacters(in: .whitespaces)
@@ -65,9 +80,20 @@ enum DecisionParser {
     }
 
     private static func optionLabel(_ rawLine: String) -> String {
-        let cleaned = rawLine.replacingOccurrences(of: "❯", with: " ").trimmingCharacters(in: .whitespaces)
+        let cleaned = removingSelectionMarker(rawLine)
         guard let dot = cleaned.firstIndex(of: ".") else { return "" }
         return String(cleaned[cleaned.index(after: dot)...]).trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func hasSelectionMarker(_ rawLine: String) -> Bool {
+        let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasPrefix("❯") || trimmed.hasPrefix("›")
+    }
+
+    private static func removingSelectionMarker(_ rawLine: String) -> String {
+        var cleaned = rawLine.trimmingCharacters(in: .whitespaces)
+        if cleaned.hasPrefix("❯") || cleaned.hasPrefix("›") { cleaned.removeFirst() }
+        return cleaned.trimmingCharacters(in: .whitespaces)
     }
 
     private static func isBoxBorder(_ t: String) -> Bool {
