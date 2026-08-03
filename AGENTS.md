@@ -37,11 +37,22 @@ or GitHub Release without the DMG does **not** complete the release.
    `Pass-vX.Y.Z.dmg`.
 6. Sign the DMG with **Developer ID Application**, submit it to Apple, wait for `Accepted`,
    staple its ticket, and validate it with `stapler`, Gatekeeper, and `hdiutil verify`.
-7. Record the DMG SHA-256 and upload the DMG as an asset of the matching GitHub Release.
-   The release is incomplete if its asset list is empty or contains only source/ZIP archives.
-8. Verify the public asset URL returns the DMG and check the live GitHub Pages site in a
+7. Record the DMG SHA-256. Use Sparkle's `generate_appcast --account dev.lightsoft.pass`
+   with the release EdDSA key to generate `appcast.xml` for the notarized DMG. Its enclosure
+   URL must be the matching GitHub Release DMG asset URL and its version/build must match the
+   tagged app. Verify the enclosure with Sparkle's `sign_update --verify` before upload.
+8. Upload both the DMG and `appcast.xml` as assets of the matching GitHub Release. Verify
+   `https://github.com/lightsoft-dev/pass/releases/latest/download/appcast.xml` returns the
+   feed and that the enclosure has a valid Sparkle signature. A DMG-only release breaks
+   in-app updates and is incomplete.
+9. Verify the public asset URL returns the DMG and check the live GitHub Pages site in a
    real browser. Every `[data-download]` button must resolve to the DMG
    `browser_download_url`, never the release HTML page.
 
-If signing, notarization, DMG creation, or upload cannot be completed, stop and report the
-release as blocked. Do not publish an empty release or describe the version build as complete.
+If signing, notarization, DMG creation, appcast generation, or upload cannot be completed,
+stop and report the release as blocked. Do not publish an incomplete release or describe the
+version build as complete.
+
+The first Sparkle-enabled release is a bootstrap release: users on v0.1.7 or older must install
+that DMG once because those builds have no updater. Do not advertise an in-app update path from
+a build that does not contain Sparkle and `SUPublicEDKey`.
