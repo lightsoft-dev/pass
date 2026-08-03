@@ -295,14 +295,25 @@ final class IMETerminalView: LocalProcessTerminalView {
                 let cellBottom = bounds.height - CGFloat(range.row + 1) * cellH
                 y = cellBottom + underlineOffset
             }
-            return NSRect(
+            let cellRect = NSRect(
                 x: CGFloat(range.startColumn) * cellW,
                 y: max(0, y),
                 width: CGFloat(range.endColumn - range.startColumn) * cellW,
                 height: thickness
             )
+            return visuallyInsetUnderline(in: cellRect, scale: scale)
         }
         return (match.url, rects)
+    }
+
+    /// A terminal cell includes the glyph's side bearings. Drawing the hover underline across
+    /// the full cell makes it visibly extend past the last character (especially for `r`,
+    /// punctuation, and a URL followed by Korean text). Keep the cell-derived range for hit
+    /// testing, but trim one device pixel from either end for the visual affordance.
+    private func visuallyInsetUnderline(in rect: NSRect, scale: CGFloat) -> NSRect {
+        let inset = 1 / max(scale, 1)
+        guard rect.width > inset * 2 else { return rect }
+        return rect.insetBy(dx: inset, dy: 0)
     }
 
     /// Returns the complete visible soft-wrapped line containing `row`. SwiftTerm keeps

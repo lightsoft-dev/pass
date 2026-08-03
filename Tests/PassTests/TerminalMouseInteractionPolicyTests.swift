@@ -81,8 +81,8 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
 
     @MainActor
     func testPlainTextURLHitUsesExactCellsWithKoreanAroundIt() throws {
-        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 720, height: 240))
-        let url = "https://print-so.lightsoft.dev"
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 960, height: 240))
+        let url = "https://print-so.lightsoft.dev/admin/printer"
         terminal.feed(text: "한글 \(url)에서")
 
         let cellWidth = terminal.caretFrame.width
@@ -102,8 +102,10 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
         let hit = try XCTUnwrap(terminal.urlHit(at: point(column: urlStartColumn + 8)))
         XCTAssertEqual(hit.url.absoluteString, url)
         let underline = try XCTUnwrap(hit.rects.first)
-        XCTAssertEqual(underline.minX, CGFloat(urlStartColumn) * cellWidth, accuracy: 0.001)
-        XCTAssertEqual(underline.width, CGFloat(url.count) * cellWidth, accuracy: 0.001)
+        let linkStart = CGFloat(urlStartColumn) * cellWidth
+        let linkEnd = linkStart + CGFloat(url.count) * cellWidth
+        XCTAssertGreaterThan(underline.minX, linkStart)
+        XCTAssertLessThan(underline.maxX, linkEnd)
 
         XCTAssertNil(terminal.urlHit(at: point(column: 0)))
         XCTAssertNil(terminal.urlHit(at: point(column: urlStartColumn + url.count)))
