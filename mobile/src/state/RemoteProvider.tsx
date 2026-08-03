@@ -233,7 +233,12 @@ export function RemoteProvider({ children }: PropsWithChildren) {
         }
         pairing = await claimDevicePairing(parsed.value, {
           userAccessToken: activeSession.accessToken,
-          deviceName: Platform.OS === "ios" ? "iPhone" : "Android device",
+          deviceName:
+            Platform.OS === "ios"
+              ? Platform.isPad
+                ? "iPad"
+                : "iPhone"
+              : "Android device",
           platform: Platform.OS === "ios" ? "ios" : "android",
         });
       } else {
@@ -256,7 +261,7 @@ export function RemoteProvider({ children }: PropsWithChildren) {
     setPairingBusy(true);
     setPairingError(null);
     try {
-      if (!pairedDesktop) throw new Error("Pair this phone with a desktop first.");
+      if (!pairedDesktop) throw new Error("Pair this device with a desktop first.");
       if (!userSession) throw new Error("Sign in before approving a Steam Deck.");
       let activeSession = userSession;
       if (!isUserSessionFresh(activeSession)) {
@@ -287,7 +292,7 @@ export function RemoteProvider({ children }: PropsWithChildren) {
 
   const revokeCurrentPairing = useCallback(async () => {
     if (!pairedDesktop || pairedDesktop.authenticationMode !== "device") return;
-    if (!userSession) throw new Error("Sign in again to revoke this phone.");
+    if (!userSession) throw new Error("Sign in again to revoke this device.");
     let activeSession = userSession;
     if (!isUserSessionFresh(activeSession)) {
       activeSession = await refreshUserSession(activeSession);

@@ -119,7 +119,7 @@ function ConfiguredLogin({
         <View style={styles.mark}><Text style={styles.markText}>P</Text></View>
         <Text style={styles.title}>Sign in to Pass</Text>
         <Text style={styles.subtitle}>
-          Use the same account on this phone and your Mac.
+          Use the same account on this device and your Mac.
         </Text>
         {!discovery ? (
           <View style={styles.discovery}>

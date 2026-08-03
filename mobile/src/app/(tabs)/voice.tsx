@@ -2,6 +2,7 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { AppButton } from "../../components/AppButton";
 import { Screen } from "../../components/Screen";
+import { useAdaptiveLayout } from "../../hooks/useAdaptiveLayout";
 import { useRemote } from "../../state/RemoteProvider";
 import { colors, radius, spacing } from "../../theme/theme";
 
@@ -9,65 +10,70 @@ const voiceStates = ["connecting", "listening", "thinking", "speaking", "interru
 const VOICE_TRANSPORT_IMPLEMENTED = false;
 
 export default function VoiceScreen() {
+  const { isRegular } = useAdaptiveLayout();
   const { state, preferences, updatePreferences } = useRemote();
   const voiceAvailable =
     state.capabilities.includes("voice:use") && VOICE_TRANSPORT_IMPLEMENTED;
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, isRegular && styles.contentRegular]}>
         <View style={styles.header}>
           <Text style={styles.eyebrow}>MANAGEMENT AGENT</Text>
-          <Text style={styles.title}>Voice control</Text>
+          <Text style={[styles.title, isRegular && styles.titleRegular]}>Voice control</Text>
           <Text style={styles.subtitle}>
             A separate management conversation that can summarize and route structured actions.
           </Text>
         </View>
 
-        <View style={styles.comingSoon}>
-          <Text style={styles.comingSoonLabel}>FOLLOW-UP PHASE</Text>
-          <Text style={styles.comingSoonTitle}>VoiceAgentCoordinator is not on the v1 wire</Text>
-          <Text style={styles.comingSoonText}>
-            Controls stay capability-gated until the desktop advertises voice:use and WebRTC
-            credentials. No microphone audio is currently recorded or uploaded.
-          </Text>
-        </View>
-
-        <View style={styles.orbArea}>
-          <View style={styles.orbOuter}>
-            <View style={styles.orb}><Text style={styles.orbGlyph}>◉</Text></View>
+        <View style={[styles.workspace, isRegular && styles.workspaceRegular]}>
+          <View style={[styles.comingSoon, isRegular && styles.workspaceColumn]}>
+            <Text style={styles.comingSoonLabel}>FOLLOW-UP PHASE</Text>
+            <Text style={styles.comingSoonTitle}>VoiceAgentCoordinator is not on the v1 wire</Text>
+            <Text style={styles.comingSoonText}>
+              Controls stay capability-gated until the desktop advertises voice:use and WebRTC
+              credentials. No microphone audio is currently recorded or uploaded.
+            </Text>
           </View>
-          <Text style={styles.voiceState}>IDLE · UNAVAILABLE</Text>
-          <View style={styles.stateRail}>
-            {voiceStates.map((state) => <Text key={state} style={styles.stateLabel}>{state}</Text>)}
+
+          <View style={[styles.controls, isRegular && styles.workspaceColumn]}>
+            <View style={styles.orbArea}>
+              <View style={styles.orbOuter}>
+                <View style={styles.orb}><Text style={styles.orbGlyph}>◉</Text></View>
+              </View>
+              <Text style={styles.voiceState}>IDLE · UNAVAILABLE</Text>
+              <View style={styles.stateRail}>
+                {voiceStates.map((state) => <Text key={state} style={styles.stateLabel}>{state}</Text>)}
+              </View>
+            </View>
+
+            <View style={styles.modeRow}>
+              <AppButton
+                compact
+                variant={preferences.voiceMode === "push-to-talk" ? "primary" : "secondary"}
+                label="Push to talk"
+                onPress={() => void updatePreferences({ voiceMode: "push-to-talk" })}
+                style={styles.modeButton}
+              />
+              <AppButton
+                compact
+                variant={preferences.voiceMode === "hands-free" ? "primary" : "secondary"}
+                label="Hands free"
+                onPress={() => void updatePreferences({ voiceMode: "hands-free" })}
+                style={styles.modeButton}
+              />
+            </View>
+
+            <AppButton label="Start management agent" disabled={!voiceAvailable} onPress={() => undefined} />
+            <AppButton
+              label="Interrupt speech"
+              variant="danger"
+              disabled={!voiceAvailable}
+              onPress={() => undefined}
+              style={styles.interrupt}
+            />
           </View>
         </View>
-
-        <View style={styles.modeRow}>
-          <AppButton
-            compact
-            variant={preferences.voiceMode === "push-to-talk" ? "primary" : "secondary"}
-            label="Push to talk"
-            onPress={() => void updatePreferences({ voiceMode: "push-to-talk" })}
-            style={styles.modeButton}
-          />
-          <AppButton
-            compact
-            variant={preferences.voiceMode === "hands-free" ? "primary" : "secondary"}
-            label="Hands free"
-            onPress={() => void updatePreferences({ voiceMode: "hands-free" })}
-            style={styles.modeButton}
-          />
-        </View>
-
-        <AppButton label="Start management agent" disabled={!voiceAvailable} onPress={() => undefined} />
-        <AppButton
-          label="Interrupt speech"
-          variant="danger"
-          disabled={!voiceAvailable}
-          onPress={() => undefined}
-          style={styles.interrupt}
-        />
 
         <View style={styles.auditCard}>
           <Text style={styles.auditTitle}>Shared audit trail</Text>
@@ -83,10 +89,16 @@ export default function VoiceScreen() {
 
 const styles = StyleSheet.create({
   content: { padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.lg, maxWidth: 680, width: "100%", alignSelf: "center" },
+  contentRegular: { maxWidth: 1_000, padding: spacing.lg },
   header: { gap: spacing.xs },
   eyebrow: { color: colors.accent, fontSize: 11, fontWeight: "900", letterSpacing: 1.6 },
   title: { color: colors.text, fontSize: 28, fontWeight: "800" },
+  titleRegular: { fontSize: 34 },
   subtitle: { color: colors.muted, fontSize: 14, lineHeight: 21 },
+  workspace: { gap: spacing.lg },
+  workspaceRegular: { flexDirection: "row", alignItems: "stretch" },
+  workspaceColumn: { flex: 1, minWidth: 0 },
+  controls: { gap: spacing.sm },
   comingSoon: { backgroundColor: colors.accentSoft, borderColor: "#4a4384", borderWidth: 1, borderRadius: radius.lg, padding: spacing.md, gap: spacing.xs },
   comingSoonLabel: { color: colors.accent, fontSize: 10, fontWeight: "900", letterSpacing: 1.2 },
   comingSoonTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },

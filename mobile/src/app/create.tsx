@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-
 
 import { AppButton } from "../components/AppButton";
 import { Screen } from "../components/Screen";
+import { useAdaptiveLayout } from "../hooks/useAdaptiveLayout";
 import { COMMAND_LIMITS } from "../protocol/commands";
 import type { AgentKind } from "../protocol/types";
 import { useRemote } from "../state/RemoteProvider";
@@ -19,6 +20,7 @@ const agents: Array<{ id: LaunchableAgent; glyph: string; detail: string }> = [
 
 export default function CreateSessionScreen() {
   const router = useRouter();
+  const { isRegular } = useAdaptiveLayout();
   const { state, createSession, refresh } = useRemote();
   const projects = useMemo(() => selectProjects(state), [state]);
   const [projectRoot, setProjectRoot] = useState("");
@@ -43,76 +45,90 @@ export default function CreateSessionScreen() {
 
   return (
     <Screen edges={["left", "right", "bottom"]}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Project</Text>
-            <AppButton compact variant="ghost" label="Reload" onPress={() => refresh()} />
-          </View>
-          {projects.length === 0 ? (
-            <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>No registered projects</Text>
-              <Text style={styles.muted}>Add a project in the Pass desktop settings, then reload.</Text>
+      <ScrollView
+        contentContainerStyle={[styles.content, isRegular && styles.contentRegular]}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={[styles.formColumns, isRegular && styles.formColumnsRegular]}>
+          <View style={[styles.section, isRegular && styles.formColumn]}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Project</Text>
+              <AppButton compact variant="ghost" label="Reload" onPress={() => refresh()} />
             </View>
-          ) : (
-            projects.map((project) => {
-              const selected = project.rootPath === projectRoot;
-              return (
-                <Pressable
-                  key={project.rootPath}
-                  onPress={() => setProjectRoot(project.rootPath)}
-                  style={[styles.choice, selected && styles.choiceSelected]}
-                >
-                  <Text style={styles.choiceEmoji}>{project.emoji ?? "▣"}</Text>
-                  <View style={styles.choiceText}>
-                    <Text style={styles.choiceTitle}>{project.name}</Text>
-                    <Text style={styles.choiceDetail} numberOfLines={1}>{project.rootPath}</Text>
-                  </View>
-                  <Text style={selected ? styles.checkSelected : styles.check}>●</Text>
-                </Pressable>
-              );
-            })
-          )}
-        </View>
+            {projects.length === 0 ? (
+              <View style={styles.empty}>
+                <Text style={styles.emptyTitle}>No registered projects</Text>
+                <Text style={styles.muted}>Add a project in the Pass desktop settings, then reload.</Text>
+              </View>
+            ) : (
+              projects.map((project) => {
+                const selected = project.rootPath === projectRoot;
+                return (
+                  <Pressable
+                    key={project.rootPath}
+                    onPress={() => setProjectRoot(project.rootPath)}
+                    style={[styles.choice, selected && styles.choiceSelected]}
+                  >
+                    <Text style={styles.choiceEmoji}>{project.emoji ?? "▣"}</Text>
+                    <View style={styles.choiceText}>
+                      <Text style={styles.choiceTitle}>{project.name}</Text>
+                      <Text style={styles.choiceDetail} numberOfLines={1}>{project.rootPath}</Text>
+                    </View>
+                    <Text style={selected ? styles.checkSelected : styles.check}>●</Text>
+                  </Pressable>
+                );
+              })
+            )}
+          </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Agent</Text>
-          <View style={styles.agentGrid}>
-            {agents.map((item) => {
-              const selected = item.id === agent;
-              return (
-                <Pressable
-                  key={item.id}
-                  onPress={() => setAgent(item.id)}
-                  style={[styles.agentChoice, selected && styles.choiceSelected]}
-                >
-                  <Text style={styles.agentGlyph}>{item.glyph}</Text>
-                  <Text style={styles.agentName}>{item.id}</Text>
-                  <Text style={styles.agentDetail}>{item.detail}</Text>
-                </Pressable>
-              );
-            })}
+          <View style={[styles.rightColumn, isRegular && styles.formColumn]}>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Agent</Text>
+              <View style={styles.agentGrid}>
+                {agents.map((item) => {
+                  const selected = item.id === agent;
+                  return (
+                    <Pressable
+                      key={item.id}
+                      onPress={() => setAgent(item.id)}
+                      style={[styles.agentChoice, selected && styles.choiceSelected]}
+                    >
+                      <Text style={styles.agentGlyph}>{item.glyph}</Text>
+                      <Text style={styles.agentName}>{item.id}</Text>
+                      <Text style={styles.agentDetail}>{item.detail}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Initial instruction (optional)</Text>
+              <TextInput
+                maxLength={COMMAND_LIMITS.initialPromptCharacters}
+                multiline
+                onChangeText={setPrompt}
+                placeholder="Describe the task to start immediately…"
+                placeholderTextColor={colors.subtle}
+                style={[styles.prompt, isRegular && styles.promptRegular]}
+                value={prompt}
+              />
+            </View>
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Initial instruction (optional)</Text>
-          <TextInput
-            maxLength={COMMAND_LIMITS.initialPromptCharacters}
-            multiline
-            onChangeText={setPrompt}
-            placeholder="Describe the task to start immediately…"
-            placeholderTextColor={colors.subtle}
-            style={styles.prompt}
-            value={prompt}
+        <View style={[styles.footer, isRegular && styles.footerRegular]}>
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+          <AppButton
+            label="Create session"
+            disabled={!canCreate}
+            onPress={create}
+            style={isRegular ? styles.createButton : undefined}
           />
+          {state.connection.phase !== "online" ? (
+            <Text style={styles.muted}>The desktop must be online; creation commands are never buffered.</Text>
+          ) : null}
         </View>
-
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <AppButton label="Create session" disabled={!canCreate} onPress={create} />
-        {state.connection.phase !== "online" ? (
-          <Text style={styles.muted}>The desktop must be online; creation commands are never buffered.</Text>
-        ) : null}
       </ScrollView>
     </Screen>
   );
@@ -120,6 +136,11 @@ export default function CreateSessionScreen() {
 
 const styles = StyleSheet.create({
   content: { padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.lg, maxWidth: 760, width: "100%", alignSelf: "center" },
+  contentRegular: { maxWidth: 1_040, padding: spacing.lg },
+  formColumns: { gap: spacing.lg },
+  formColumnsRegular: { flexDirection: "row", alignItems: "flex-start" },
+  formColumn: { flex: 1, minWidth: 0 },
+  rightColumn: { gap: spacing.lg },
   section: { gap: spacing.sm },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   sectionTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },
@@ -137,8 +158,12 @@ const styles = StyleSheet.create({
   agentName: { color: colors.text, fontSize: 13, fontWeight: "800", textTransform: "capitalize" },
   agentDetail: { color: colors.subtle, fontSize: 9, textAlign: "center" },
   prompt: { minHeight: 120, color: colors.text, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.md, textAlignVertical: "top", fontSize: 14, lineHeight: 21 },
+  promptRegular: { minHeight: 190 },
   empty: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.md, gap: spacing.xs },
   emptyTitle: { color: colors.text, fontWeight: "700" },
   muted: { color: colors.muted, fontSize: 13, lineHeight: 19 },
   error: { color: colors.danger, fontSize: 13 },
+  footer: { gap: spacing.sm },
+  footerRegular: { alignItems: "flex-end" },
+  createButton: { minWidth: 220 },
 });
