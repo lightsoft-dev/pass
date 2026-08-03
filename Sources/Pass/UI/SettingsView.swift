@@ -33,7 +33,7 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             SettingsSidebar(selection: settingsSelection)
-                .frame(width: 184)
+                .frame(width: 210)
             Divider()
             VStack(alignment: .leading, spacing: 0) {
                 SettingsHeader(section: selectedSection)
@@ -45,7 +45,7 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 820, height: 640)
+        .frame(width: 960, height: 720)
         .onAppear {
             floating = appModel.panelFloating
             cliLinked = CLIInstaller.isLinked
@@ -799,7 +799,7 @@ private struct SettingsSidebar: View {
     @State private var hovered: SettingsSection?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(SettingsSection.allCases) { section in
                 Button {
                     selection = section
@@ -808,8 +808,8 @@ private struct SettingsSidebar: View {
                         .font(.system(size: 13, weight: selection == section ? .semibold : .regular))
                         .foregroundStyle(selection == section ? Color.primary : .secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 7)
-                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
                         .background {
                             if selection == section {
                                 RoundedRectangle(cornerRadius: 7)
@@ -833,7 +833,7 @@ private struct SettingsSidebar: View {
             }
             Spacer()
         }
-        .padding(12)
+        .padding(16)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }
