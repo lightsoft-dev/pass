@@ -63,6 +63,10 @@ export async function handleControlRequest(
   if (url.pathname === "/v2/desktops" && request.method === "POST") {
     return handleRegisterDesktop(request, env);
   }
+  const desktopController = /^\/v2\/desktops\/([A-Za-z0-9._:-]+)\/controllers$/.exec(url.pathname);
+  if (desktopController?.[1] && request.method === "POST") {
+    return handleAuthorizeOwnedDesktop(request, env, desktopController[1]);
+  }
   if (/^\/v2\/desktops\/[A-Za-z0-9._:-]+$/.test(url.pathname) && request.method === "DELETE") {
     return handleRevokeDesktop(request, env, url.pathname.split("/").at(-1) ?? "");
   }
@@ -293,6 +297,80 @@ async function handleRegisterDesktop(request: Request, env: ControlEnv): Promise
   ]);
   return apiResponse({
     desktop: { id: desktopId, name, createdAt: isoDate(now) },
+    credentials: credentialResponse(credentials),
+    relayUrl: publicRelayURL(request),
+  }, 201);
+}
+
+/**
+ * Issues a device-scoped controller credential for a desktop owned by the signed-in account.
+ * This is the account-native counterpart to QR pairing: OIDC proves account ownership, while
+ * the resulting credential remains independently revocable and limited to one desktop.
+ */
+async function handleAuthorizeOwnedDesktop(
+  request: Request,
+  env: ControlEnv,
+  desktopId: string,
+): Promise<Response> {
+  const context = await accountContext(request, env);
+  if (context instanceof Response) return context;
+  const body = await parseJSONBody(request);
+  if (body instanceof Response) return body;
+  const deviceName = boundedString(body.deviceName, 100);
+  const platform = parsePlatform(body.platform);
+  if (!deviceName || platform === null) {
+    return apiError(400, "invalid_request", "Controller name and platform are required.");
+  }
+  const pepper = requiredPepper(env);
+  if (pepper instanceof Response) return pepper;
+
+  const desktop = await env.CONTROL_DB.prepare(
+    "SELECT id, name FROM desktops WHERE id = ? AND account_id = ? AND revoked_at IS NULL",
+  ).bind(desktopId, context.account.id).first<{ id: string; name: string }>();
+  if (desktop === null) return apiError(404, "not_found", "Desktop not found for this account.");
+
+  const now = Date.now();
+  const deviceId = `device_${compactUUID()}`;
+  const credentials = await createCredentialPair(pepper, now);
+  const scopesJSON = JSON.stringify(MOBILE_SCOPES);
+  await env.CONTROL_DB.batch([
+    env.CONTROL_DB.prepare(
+      "INSERT INTO devices (id, account_id, name, platform, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).bind(deviceId, context.account.id, deviceName, platform, now),
+    env.CONTROL_DB.prepare(
+      "INSERT INTO desktop_devices (desktop_id, device_id, scopes_json, paired_at) VALUES (?, ?, ?, ?)",
+    ).bind(desktopId, deviceId, scopesJSON, now),
+    credentialInsert(env.CONTROL_DB, credentials.access, {
+      accountId: context.account.id,
+      subjectType: "device",
+      subjectId: deviceId,
+      desktopId,
+      role: "mobile",
+      scopesJSON,
+    }),
+    credentialInsert(env.CONTROL_DB, credentials.refresh, {
+      accountId: context.account.id,
+      subjectType: "device",
+      subjectId: deviceId,
+      desktopId,
+      role: "mobile",
+      scopesJSON,
+    }),
+    auditInsert(
+      env.CONTROL_DB,
+      context.account.id,
+      "user",
+      context.identity.subject,
+      "desktop.controller.authorize",
+      "device",
+      deviceId,
+      now,
+    ),
+  ]);
+  return apiResponse({
+    device: { id: deviceId, name: deviceName, platform },
+    desktop: { id: desktop.id, name: desktop.name },
+    scopes: MOBILE_SCOPES,
     credentials: credentialResponse(credentials),
     relayUrl: publicRelayURL(request),
   }, 201);

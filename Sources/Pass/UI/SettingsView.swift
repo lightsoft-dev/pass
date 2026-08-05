@@ -371,7 +371,7 @@ struct SettingsView: View {
     }
 
     private var mobileAccessSection: some View {
-        Section(appModel.remotePublicAccessAvailable ? "Mobile access" : "Mobile access · developer preview") {
+        Section(appModel.remotePublicAccessAvailable ? "Remote access" : "Remote access · developer preview") {
             if appModel.remotePublicAccessAvailable {
                 LabeledContent("Account", value: remoteAccountStatus)
                 if appModel.remoteUsesPublicCredentials {
@@ -386,6 +386,30 @@ struct SettingsView: View {
                             .foregroundStyle(remoteGatewayStatus.color)
                             .multilineTextAlignment(.trailing)
                     }
+                    LabeledContent("Linked Macs") {
+                        Text("\(appModel.remoteControllers.connections.count)")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    }
+                    if !appModel.remoteControllers.connections.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(appModel.remoteControllers.connections) { connection in
+                                HStack(spacing: 6) {
+                                    Circle().fill(remoteControllerColor(connection.state))
+                                        .frame(width: 6, height: 6)
+                                    Text(connection.profile.desktopName)
+                                        .font(.system(size: 10, weight: .medium))
+                                    Text("REMOTE")
+                                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(.orange)
+                                    Spacer()
+                                }
+                            }
+                        }
+                    }
+                    Button("Refresh linked Macs", systemImage: "arrow.clockwise") {
+                        appModel.refreshLinkedDesktops()
+                    }
+                    .disabled(remoteAccountBusy)
                     Button("Create one-time pairing code", systemImage: "qrcode") {
                         appModel.createRemotePairing()
                     }
@@ -403,7 +427,7 @@ struct SettingsView: View {
                     }
                     .disabled(remoteAccountBusy)
                 } else {
-                    Button("Sign in", systemImage: "person.crop.circle") {
+                    Button("Sign in or create account", systemImage: "person.crop.circle") {
                         appModel.signInForRemoteAccess()
                     }
                     .disabled(remoteAccountBusy)
@@ -416,7 +440,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
-                Text("The Mac connects outbound to the relay. Account and desktop credentials are stored in Keychain; pairing codes are short-lived and device-scoped.")
+                Text("Macs signed in with the same account link automatically through device-scoped credentials. QR pairing remains available for companion devices. All secrets are stored in Keychain.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 Toggle("Enable outbound relay connection", isOn: $remoteAccessEnabled)
@@ -662,6 +686,15 @@ struct SettingsView: View {
         }
     }
 
+    private func remoteControllerColor(_ state: RemoteControllerConnectionState) -> Color {
+        switch state {
+        case .online: return .green
+        case .hostOffline: return .orange
+        case .connecting: return .secondary
+        case .error: return .red
+        }
+    }
+
     private var remoteAccountBusy: Bool {
         switch appModel.remoteAccountState {
         case .signingIn, .creatingPairing, .signingOut: true
@@ -759,7 +792,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .backup: return "Backup"
         case .agents: return "Agents"
         case .extensions: return "Extensions"
-        case .mobile: return "Mobile"
+        case .mobile: return "Remote"
         case .integrations: return "Integrations"
         case .system: return "System"
         }
@@ -773,7 +806,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .backup: return "archivebox"
         case .agents: return "terminal"
         case .extensions: return "puzzlepiece.extension"
-        case .mobile: return "iphone"
+        case .mobile: return "network"
         case .integrations: return "point.3.connected.trianglepath.dotted"
         case .system: return "server.rack"
         }
@@ -787,7 +820,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .backup: return "Export project and settings bundle"
         case .agents: return "Default launch commands"
         case .extensions: return "Browse, publish, and manage extensions"
-        case .mobile: return "Remote access and device pairing"
+        case .mobile: return "Account, desktops, and device pairing"
         case .integrations: return "Hooks, CLI, and browser"
         case .system: return "Notifications and local listener"
         }

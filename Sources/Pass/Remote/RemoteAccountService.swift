@@ -82,6 +82,7 @@ struct RemoteCredentialPair: Codable, Equatable, Sendable {
     let refreshExpiresAt: String
 
     var accessExpiration: Date? { Self.parseDate(accessExpiresAt) }
+    var refreshExpiration: Date? { Self.parseDate(refreshExpiresAt) }
 
     private static func parseDate(_ value: String) -> Date? {
         let fractional = ISO8601DateFormatter()
@@ -95,6 +96,31 @@ struct RemoteDesktopRegistration: Codable, Equatable, Sendable {
     let name: String
     let relayURL: URL
     let credentials: RemoteCredentialPair
+}
+
+/// A desktop registered to the same account. These records contain no controller secret and are
+/// safe to use directly in UI lists.
+struct RemoteOwnedDesktop: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let createdAt: String
+    let lastSeenAt: String?
+}
+
+/// Device-scoped credentials that let this Mac control exactly one other account-owned desktop.
+/// Stored independently from the local desktop registration so either side can be revoked alone.
+struct RemoteControllerProfile: Codable, Identifiable, Equatable, Sendable {
+    var id: String { desktopID }
+    let desktopID: String
+    var desktopName: String
+    let deviceID: String
+    let relayURL: URL
+    var credentials: RemoteCredentialPair
+
+    private enum CodingKeys: String, CodingKey {
+        case desktopID = "desktopId"
+        case desktopName, deviceID, relayURL, credentials
+    }
 }
 
 struct RemoteUserSession: Codable, Equatable, Sendable {
@@ -128,6 +154,7 @@ enum RemoteCredentialStore {
     private static let service = "dev.lightsoft.pass.remote"
     private static let desktopAccount = "desktop-registration-v2"
     private static let userAccount = "user-session-v2"
+    private static let controllerAccounts = "controller-profiles-v1"
 
     static func loadDesktopRegistration() throws -> RemoteDesktopRegistration? {
         try load(RemoteDesktopRegistration.self, account: desktopAccount)
@@ -151,6 +178,18 @@ enum RemoteCredentialStore {
 
     static func deleteUserSession() throws {
         try delete(account: userAccount)
+    }
+
+    static func loadControllerProfiles() throws -> [RemoteControllerProfile] {
+        try load([RemoteControllerProfile].self, account: controllerAccounts) ?? []
+    }
+
+    static func saveControllerProfiles(_ profiles: [RemoteControllerProfile]) throws {
+        try save(profiles, account: controllerAccounts)
+    }
+
+    static func deleteControllerProfiles() throws {
+        try delete(account: controllerAccounts)
     }
 
     private static func load<T: Decodable>(_ type: T.Type, account: String) throws -> T? {
@@ -322,6 +361,44 @@ final class RemoteAccountService: NSObject, ASWebAuthenticationPresentationConte
         return (response.pairing, registration)
     }
 
+    /// Reconciles controller credentials for every other desktop on the signed-in account.
+    /// Existing credentials are reused; only newly discovered desktops receive a new device.
+    func syncControllerProfiles(
+        configuration: RemotePublicConfiguration,
+        localDesktopID: String
+    ) async throws -> [RemoteControllerProfile] {
+        guard let storedSession = try RemoteCredentialStore.loadUserSession() else {
+            throw RemoteAccountError.authorizationFailed("Sign in to discover your other desktops.")
+        }
+        let session = try await freshUserSession(storedSession)
+        var request = URLRequest(url: configuration.relayURL.appending(path: "v2/desktops"))
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        let response: DesktopListResponse = try await perform(request)
+
+        let remoteDesktops = response.desktops.filter { $0.id != localDesktopID }
+        let activeIDs = Set(remoteDesktops.map(\.id))
+        var profiles = try RemoteCredentialStore.loadControllerProfiles()
+            .filter { activeIDs.contains($0.desktopID) }
+        var profileByDesktop = Dictionary(uniqueKeysWithValues: profiles.map { ($0.desktopID, $0) })
+
+        for desktop in remoteDesktops {
+            if var existing = profileByDesktop[desktop.id],
+               existing.credentials.refreshExpiration.map({ $0 > Date().addingTimeInterval(60) }) == true {
+                existing.desktopName = desktop.name
+                profileByDesktop[desktop.id] = existing
+                continue
+            }
+            profileByDesktop[desktop.id] = try await authorizeController(
+                desktop: desktop,
+                session: session,
+                configuration: configuration
+            )
+        }
+        profiles = remoteDesktops.compactMap { profileByDesktop[$0.id] }
+        try RemoteCredentialStore.saveControllerProfiles(profiles)
+        return profiles
+    }
+
     func refreshDesktopRegistrationIfNeeded(
         margin: TimeInterval = 60
     ) async throws -> RemoteDesktopRegistration {
@@ -379,6 +456,7 @@ final class RemoteAccountService: NSObject, ASWebAuthenticationPresentationConte
             return
         }
         let session = try await freshUserSession(storedSession)
+        try await revokeControllerProfiles(configuration: configuration, session: session)
         var request = URLRequest(
             url: configuration.relayURL.appending(path: "v2/desktops/\(registration.id)")
         )
@@ -398,12 +476,62 @@ final class RemoteAccountService: NSObject, ASWebAuthenticationPresentationConte
         invalidateDesktopRefresh()
         try RemoteCredentialStore.deleteDesktopRegistration()
         try RemoteCredentialStore.deleteUserSession()
+        try RemoteCredentialStore.deleteControllerProfiles()
     }
 
     private func invalidateDesktopRefresh() {
         desktopRefreshRevision &+= 1
         desktopRefreshTask?.cancel()
         desktopRefreshTask = nil
+    }
+
+    private func authorizeController(
+        desktop: RemoteOwnedDesktop,
+        session: RemoteUserSession,
+        configuration: RemotePublicConfiguration
+    ) async throws -> RemoteControllerProfile {
+        var request = URLRequest(
+            url: configuration.relayURL.appending(path: "v2/desktops/\(desktop.id)/controllers")
+        )
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let controllerName = "\(Host.current().localizedName ?? "Mac") · Pass"
+        request.httpBody = try JSONEncoder().encode([
+            "deviceName": controllerName,
+            "platform": "macos",
+        ])
+        let response: ControllerAuthorizationResponse = try await perform(request)
+        guard response.desktop.id == desktop.id else { throw RemoteAccountError.invalidServerResponse }
+        return RemoteControllerProfile(
+            desktopID: response.desktop.id,
+            desktopName: response.desktop.name,
+            deviceID: response.device.id,
+            relayURL: response.relayURL,
+            credentials: response.credentials
+        )
+    }
+
+    private func revokeControllerProfiles(
+        configuration: RemotePublicConfiguration,
+        session: RemoteUserSession
+    ) async throws {
+        let profiles = try RemoteCredentialStore.loadControllerProfiles()
+        for profile in profiles {
+            var request = URLRequest(
+                url: configuration.relayURL.appending(path: "v2/devices/\(profile.deviceID)")
+            )
+            request.httpMethod = "DELETE"
+            request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) || http.statusCode == 404 else {
+                throw RemoteAccountError.server(
+                    status: (response as? HTTPURLResponse)?.statusCode ?? 0,
+                    message: "Could not revoke access to \(profile.desktopName)."
+                )
+            }
+        }
     }
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
@@ -555,6 +683,25 @@ private struct DesktopRegistrationResponse: Decodable {
     private enum CodingKeys: String, CodingKey {
         case desktop
         case credentials
+        case relayURL = "relayUrl"
+    }
+}
+
+private struct DesktopListResponse: Decodable {
+    let desktops: [RemoteOwnedDesktop]
+}
+
+private struct ControllerAuthorizationResponse: Decodable {
+    struct Device: Decodable { let id: String }
+    struct Desktop: Decodable { let id: String; let name: String }
+
+    let device: Device
+    let desktop: Desktop
+    let credentials: RemoteCredentialPair
+    let relayURL: URL
+
+    private enum CodingKeys: String, CodingKey {
+        case device, desktop, credentials
         case relayURL = "relayUrl"
     }
 }

@@ -226,6 +226,23 @@ describe("public account and device control plane", () => {
     expect(desktopCredentials.accessToken).toMatch(/^pass_at_cred_/);
     expect(desktopCredentials.refreshToken).toMatch(/^pass_rt_cred_/);
 
+    const accountController = await api(`/v2/desktops/${String(desktop.id)}/controllers`, {
+      token: ownerToken,
+      body: { deviceName: "Owner MacBook", platform: "macos" },
+    });
+    expect(accountController.status).toBe(201);
+    const accountControllerPayload = asObject(await accountController.json());
+    expect(nested(accountControllerPayload, "desktop").id).toBe(desktop.id);
+    expect(nested(accountControllerPayload, "device").platform).toBe("macos");
+    expect(nested(accountControllerPayload, "credentials").accessToken).toMatch(/^pass_at_cred_/);
+    expect(accountControllerPayload.scopes).toContain("sessions:terminal");
+
+    const crossAccountController = await api(`/v2/desktops/${String(desktop.id)}/controllers`, {
+      token: otherToken,
+      body: { deviceName: "Other Mac", platform: "macos" },
+    });
+    expect(crossAccountController.status).toBe(404);
+
     const desktopSocket = await connect(String(desktopCredentials.accessToken), {
       desktopId: "desk_spoofed",
       role: "mobile",
