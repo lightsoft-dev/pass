@@ -73,6 +73,7 @@ struct SettingsView: View {
         case .general:
             shortcutSection
             generalSection
+            softwareUpdateSection
         case .home:
             homeSection
         case .projects:
@@ -367,6 +368,34 @@ struct SettingsView: View {
             Toggle("Restore sessions after a restart", isOn: $restoreSessions)
             Text("If tmux was restarted (e.g. after a reboot), recreates your sessions with the same project and agent on launch — Claude resumes with --continue.")
                 .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var softwareUpdateSection: some View {
+        Section("Software Update") {
+            LabeledContent("Current version", value: currentAppVersion)
+            Button {
+                appModel.checkForAppUpdate()
+            } label: {
+                Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .accessibilityLabel("Check for Updates")
+            Text("Pass also checks automatically every six hours while it is running.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var currentAppVersion: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        switch (version, build) {
+        case let (version?, build?) where !build.isEmpty:
+            return "\(version) (\(build))"
+        case let (version?, _):
+            return version
+        default:
+            return "Unknown"
         }
     }
 
