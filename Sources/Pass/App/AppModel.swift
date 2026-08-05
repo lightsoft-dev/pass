@@ -104,6 +104,7 @@ final class AppModel {
     private(set) var extensionWindows: ExtensionWindowManager!
     private(set) var extensionBuilder: ExtensionBuilder!
     private(set) var extensionMarketplace: ExtensionMarketplaceService!
+    private(set) var remoteControllers: RemoteControllerStore!
 
     /// Outbound-only mobile control plane. The gateway is disabled unless its feature flag is
     /// enabled, so normal desktop launches never make a relay connection.
@@ -120,6 +121,7 @@ final class AppModel {
     @ObservationIgnored private var remoteGatewayRestartTask: Task<Void, Never>?
     @ObservationIgnored private var remoteCredentialRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var remotePairingExpiryTask: Task<Void, Never>?
+    @ObservationIgnored private var remoteControllerSyncTask: Task<Void, Never>?
     @ObservationIgnored private var projectSyncLoopTask: Task<Void, Never>?
     @ObservationIgnored private var projectSyncTask: Task<Void, Never>?
     @ObservationIgnored private var projectSyncDebounceTask: Task<Void, Never>?
@@ -137,6 +139,7 @@ final class AppModel {
     /// Build the stores and start the reconcile loop. Called once from AppDelegate.
     func configure() {
         remoteAccountService = RemoteAccountService()
+        remoteControllers = RemoteControllerStore()
         extensionMarketplace = ExtensionMarketplaceService(accountService: remoteAccountService)
         refreshRemoteAccountState()
         projects = ProjectStore()
@@ -182,6 +185,7 @@ final class AppModel {
         sessions.start()
         isReady = true
         installRemoteGateway()
+        installRemoteControllers(syncAccount: true)
         syncProjectDirectories(automatic: true)
         projectSyncLoopTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -296,6 +300,7 @@ final class AppModel {
                 self.remotePublicAccessAvailable = true
                 self.remoteAccountState = .registered
                 self.reconfigureRemoteGateway()
+                self.installRemoteControllers(syncAccount: true)
             } catch {
                 self.remoteAccountState = .failed(error.localizedDescription)
             }
@@ -346,6 +351,9 @@ final class AppModel {
                 self.remotePublicPairingPayload = nil
                 self.remoteUsesPublicCredentials = false
                 self.remoteAccountState = RemotePublicConfiguration.load() == nil ? .unavailable : .signedOut
+                self.remoteControllerSyncTask?.cancel()
+                self.remoteControllerSyncTask = nil
+                self.remoteControllers.stop()
                 self.reconfigureRemoteGateway()
             } catch {
                 self.remoteAccountState = .failed(error.localizedDescription)
@@ -359,6 +367,40 @@ final class AppModel {
         remotePublicAccessAvailable = hasConfiguration || hasCredentials
         remoteUsesPublicCredentials = hasCredentials
         remoteAccountState = hasCredentials ? .registered : (hasConfiguration ? .signedOut : .unavailable)
+    }
+
+    /// Loads cached controller credentials immediately, then reconciles newly registered account
+    /// desktops in the background. QR-paired devices continue to work independently.
+    private func installRemoteControllers(syncAccount: Bool) {
+        let cached = (try? RemoteCredentialStore.loadControllerProfiles()) ?? []
+        remoteControllers.install(profiles: cached)
+        guard syncAccount,
+              let configuration = RemotePublicConfiguration.load(),
+              let registration = try? RemoteCredentialStore.loadDesktopRegistration(),
+              (try? RemoteCredentialStore.loadUserSession()) != nil else { return }
+
+        remoteControllerSyncTask?.cancel()
+        remoteControllerSyncTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let profiles = try await self.remoteAccountService.syncControllerProfiles(
+                    configuration: configuration,
+                    localDesktopID: registration.id
+                )
+                guard !Task.isCancelled else { return }
+                self.remoteControllers.install(profiles: profiles)
+            } catch is CancellationError {
+                return
+            } catch {
+                // The local host connection remains useful even when discovery is temporarily
+                // unavailable. Surface the problem only when no cached remote can be used.
+                if cached.isEmpty { self.remoteAccountState = .failed(error.localizedDescription) }
+            }
+        }
+    }
+
+    func refreshLinkedDesktops() {
+        installRemoteControllers(syncAccount: true)
     }
 
     private func scheduleRemoteCredentialRefresh() {

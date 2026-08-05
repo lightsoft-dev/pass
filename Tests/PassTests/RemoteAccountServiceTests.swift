@@ -121,6 +121,33 @@ final class RemoteAccountServiceTests: XCTestCase {
         XCTAssertEqual(try configuration.validatedRelayURL().absoluteString, "ws://127.0.0.1:8787/connect")
     }
 
+    func testControllerProfileRoundTripsAndParsesCredentialExpirations() throws {
+        let profile = RemoteControllerProfile(
+            desktopID: "desk_studio",
+            desktopName: "Studio Mac",
+            deviceID: "device_laptop",
+            relayURL: try XCTUnwrap(URL(string: "https://relay.example.com")),
+            credentials: RemoteCredentialPair(
+                accessToken: "pass_at_controller",
+                accessExpiresAt: "2026-08-04T12:15:00.000Z",
+                refreshToken: "pass_rt_controller",
+                refreshExpiresAt: "2026-09-03T12:00:00.000Z"
+            )
+        )
+
+        let data = try JSONEncoder().encode(profile)
+        let decoded = try JSONDecoder().decode(RemoteControllerProfile.self, from: data)
+
+        XCTAssertEqual(decoded, profile)
+        XCTAssertEqual(decoded.id, "desk_studio")
+        XCTAssertNotNil(decoded.credentials.accessExpiration)
+        XCTAssertNotNil(decoded.credentials.refreshExpiration)
+        XCTAssertGreaterThan(
+            try XCTUnwrap(decoded.credentials.refreshExpiration),
+            try XCTUnwrap(decoded.credentials.accessExpiration)
+        )
+    }
+
     private func makeDefaults() -> (UserDefaults, String) {
         let suite = "RemoteAccountServiceTests.\(UUID().uuidString)"
         return (UserDefaults(suiteName: suite)!, suite)

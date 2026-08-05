@@ -5,7 +5,7 @@ instance: send messages to agent sessions, list/create sessions, observe state, 
 voice agent that speaks as a management layer instead of merely transcribing text into the
 existing chat box.
 
-## Implementation status (2026-07-20)
+## Implementation status (2026-08-04)
 
 The repository now contains a working control plane with a development compatibility mode and a
 public-account implementation:
@@ -21,6 +21,11 @@ public-account implementation:
   message and decision actions, and a capability-gated voice placeholder.
 - The macOS app implements the same PKCE account login, Keychain credential storage and rotation,
   desktop registration, and server-generated five-minute one-time pairing QR codes.
+- A signed-in Mac can now discover the other desktops owned by the same account, obtain a
+  revocable controller credential scoped to each desktop, and show their sessions beside local
+  sessions. Machine plates label every group as `LOCAL` or `REMOTE`, include connection presence,
+  and keep the remote machine name visible on each session card. The remote detail view supports
+  snapshots, messages, and decision responses; QR pairing remains available for companion devices.
 - The Steam Deck client uses a TV-style inverse pairing flow: it displays a five-minute QR, an
   already paired phone approves the target desktop, and the relay hands credentials back through
   an RSA-OAEP + AES-GCM envelope decryptable only by that Deck.
@@ -70,12 +75,12 @@ that binding.
 ## Proposed topology
 
 ```text
-Expo app ──TLS──► Pass Relay ──WebSocket/MQTT──► pass Desktop RemoteGateway
-   ▲                    │                                  │
-   │                    │                                  ├─► SessionStore
-   │                    │                                  ├─► AppModel.reply/createSession
-   │                    │                                  └─► VoiceAgentCoordinator
-   └──── WebRTC audio ◄─┴──────── ephemeral token ──────────┘
+Phone / second Mac ──TLS──► Pass Relay ──WebSocket──► pass Desktop RemoteGateway
+        ▲                       │                              │
+        │                       │                              ├─► SessionStore
+        │                       │                              ├─► AppModel.reply/createSession
+        │                       │                              └─► VoiceAgentCoordinator
+        └──── WebRTC audio ◄────┴────── ephemeral token ──────┘
 ```
 
 ### External access flow
@@ -106,6 +111,20 @@ Phone on LTE ──outbound TLS──► Relay ◄──outbound TLS── Mac a
 This is why the existing `127.0.0.1:49817` server remains private: it only serves local hooks and
 share-extension traffic. Remote access is a new outbound client connection from the desktop app,
 not a public listener on the Mac.
+
+### Same-account desktop flow
+
+QR pairing is still the explicit authorization path for phones and other companion clients. Macs
+signed in to the same account use an account-owned authorization path instead:
+
+1. Each Mac registers its own desktop identity and outbound gateway connection.
+2. The controller Mac lists desktops owned by the authenticated account and ignores its own id.
+3. For each other desktop, it requests a revocable device credential from
+   `POST /v2/desktops/:desktopId/controllers`.
+4. The relay verifies account ownership before issuing a desktop-scoped credential. Knowing a
+   desktop id alone is insufficient, and a request for another account's desktop returns `404`.
+5. The controller Mac stores these credentials in Keychain, connects to each desktop room, and
+   renders local and remote groups concurrently. Signing out revokes the controller devices.
 
 ### Recommended relay platform: Cloudflare
 

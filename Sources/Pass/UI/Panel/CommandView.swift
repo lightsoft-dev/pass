@@ -20,6 +20,7 @@ struct CommandView: View {
     @State private var terminal: TerminalController?  // live client attached to the selected session
     @State private var terminalTarget: String?        // which session the home terminal shows
     @State private var pool = TerminalPool()          // recent clients stay attached → instant switching
+    @State private var remoteSelection: RemoteSessionSelection?
     @FocusState private var omniboxFocused: Bool
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
@@ -41,6 +42,7 @@ struct CommandView: View {
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
     private var newSessionAgent: AgentKind { AgentKind(rawValue: newSessionAgentRaw) ?? .claude }
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
+    private var hasAnySessions: Bool { !sessions.isEmpty || appModel.remoteControllers.sessionCount > 0 }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
     /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
     /// and is simply stripped). `+branch` starts a worktree; `>command` narrows to extensions.
@@ -72,7 +74,7 @@ struct CommandView: View {
     /// The centered quick command is up: summoned with ⌘P, or forced when there's no session
     /// yet (creating one is the only possible action). It hides after sending a message, or
     /// with another ⌘P, or with Esc (the panel itself never closes on Esc).
-    private var showsCommandBar: Bool { showQuickCommand || sessions.isEmpty }
+    private var showsCommandBar: Bool { showQuickCommand || !hasAnySessions }
     /// The quick command currently owns the keyboard (otherwise the terminal does).
     private var typingInBar: Bool { showsCommandBar && omniboxFocused }
 
@@ -200,6 +202,10 @@ struct CommandView: View {
                 )
             }
             .onAppear { appModel.keyHandler = handleNav }
+            .sheet(item: $remoteSelection) { selection in
+                RemoteSessionDetailView(connection: selection.connection, sessionName: selection.sessionName)
+                    .frame(minWidth: 760, minHeight: 620)
+            }
             .confirmationDialog(
                 "Kill session?",
                 isPresented: Binding(get: { pendingKill != nil }, set: { if !$0 { pendingKill = nil } }),
@@ -363,7 +369,7 @@ struct CommandView: View {
             if e.command { openSelectedTerminal(); return true }
             guard typingInBar else { return false } // plain ⏎ goes into the terminal
             if query.hasPrefix("+") { createWorktreeFromInput() } // confirms + closes (errors reopen)
-            else if !sessions.isEmpty { hideQuickCommand() } // empty ⏎ → back to the terminal
+            else if hasAnySessions { hideQuickCommand() } // empty ⏎ → back to the session list
             return true
         case .delete:
             // ⌘⌫ → confirm killing the selected session.
@@ -374,7 +380,7 @@ struct CommandView: View {
         case .escape:
             if pendingKill != nil { pendingKill = nil; return true }
             if typingInBar {
-                if !sessions.isEmpty { hideQuickCommand() } // Esc closes the ⌘P bar
+                if hasAnySessions { hideQuickCommand() } // Esc closes the ⌘P bar
                 return true
             }
             // The terminal owns Esc (interrupting the agent). Use the selected global shortcut.
@@ -535,7 +541,7 @@ struct CommandView: View {
             // Dim the home behind; click outside dismisses (unless it's the only UI).
             Color.black.opacity(0.22)
                 .contentShape(Rectangle())
-                .onTapGesture { if !sessions.isEmpty { hideQuickCommand() } }
+                .onTapGesture { if hasAnySessions { hideQuickCommand() } }
             commandBar
                 .frame(width: min(540, maxWidth - 48))
                 .shadow(color: .black.opacity(0.35), radius: 28, y: 10)
@@ -690,7 +696,7 @@ struct CommandView: View {
         if appModel.sessions?.tmuxMissing == true {
             message("exclamationmark.triangle", "tmux not found",
                     "Install tmux (brew install tmux) and reopen pass.")
-        } else if orderedSessions.isEmpty {
+        } else if orderedSessions.isEmpty && appModel.remoteControllers.sessionCount == 0 {
             message("bubble.left.and.bubble.right", "No sessions yet",
                     "@ to start one, or use New session… from the menu bar.")
         } else if homeMode != .stack {
@@ -700,6 +706,9 @@ struct CommandView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
+                        if !appModel.remoteControllers.connections.isEmpty, !orderedSessions.isEmpty {
+                            SessionMachineHeader.local
+                        }
                         ForEach(orderedSessions) { s in
                             CompactSessionCard(session: s, selected: s.name == selectedSession?.name,
                                                onSelect: { selectedSessionName = s.name },
@@ -709,6 +718,7 @@ struct CommandView: View {
                                                browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
                                 .transition(rowTransition)
                         }
+                        remoteSessionRows
                     }
                     .padding(8)
                     .animation(.spring(response: 0.34, dampingFraction: 0.82), value: orderedSessions.map(\.id))
@@ -725,6 +735,9 @@ struct CommandView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
+                        if !appModel.remoteControllers.connections.isEmpty, !orderedSessions.isEmpty {
+                            SessionMachineHeader.local
+                        }
                         ForEach(orderedSessions) { s in
                             Group {
                                 if s.name == selectedSession?.name {
@@ -744,6 +757,7 @@ struct CommandView: View {
                             }
                             .transition(rowTransition)
                         }
+                        remoteSessionRows
                     }
                     .padding(8)
                     .animation(.spring(response: 0.34, dampingFraction: 0.82), value: orderedSessions.map(\.id))
@@ -751,6 +765,24 @@ struct CommandView: View {
                 .onChange(of: selectedSessionName) { _, name in
                     guard let name else { return }
                     withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(name, anchor: .center) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var remoteSessionRows: some View {
+        ForEach(appModel.remoteControllers.connections) { connection in
+            SessionMachineHeader.remote(connection)
+                .padding(.top, 6)
+            if connection.sessions.isEmpty {
+                RemoteMachineEmptyRow(connection: connection)
+            } else {
+                ForEach(connection.sessions, id: \.name) { session in
+                    RemoteSessionCard(connection: connection, session: session) {
+                        remoteSelection = .init(connection: connection, sessionName: session.name)
+                    }
+                    .transition(rowTransition)
                 }
             }
         }
@@ -1500,6 +1532,272 @@ struct CompactSessionCard: View {
         if mins > 10 { return .red }
         if mins > 2 { return .orange }
         return .secondary
+    }
+}
+
+private struct RemoteSessionSelection: Identifiable {
+    let connection: RemoteControllerConnection
+    let sessionName: String
+    let desktopID: String
+
+    @MainActor
+    init(connection: RemoteControllerConnection, sessionName: String) {
+        self.connection = connection
+        self.sessionName = sessionName
+        desktopID = connection.profile.desktopID
+    }
+
+    var id: String { "\(desktopID):\(sessionName)" }
+}
+
+/// The persistent machine plate is the visual safety rail for a mixed local/remote session list.
+/// It deliberately resembles a small equipment label rather than another app-level navigation tab.
+private struct SessionMachineHeader: View {
+    let name: String
+    let role: String
+    let status: Color
+    let detail: String
+
+    static var local: SessionMachineHeader {
+        .init(
+            name: Host.current().localizedName ?? "This Mac",
+            role: "LOCAL",
+            status: .green,
+            detail: "direct tmux"
+        )
+    }
+
+    static func remote(_ connection: RemoteControllerConnection) -> SessionMachineHeader {
+        .init(
+            name: connection.profile.desktopName,
+            role: "REMOTE",
+            status: connection.state.indicatorColor,
+            detail: connection.state.shortLabel
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(status).frame(width: 6, height: 6)
+                .shadow(color: status.opacity(0.4), radius: 3)
+            Text(name.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .lineLimit(1)
+            Text(role)
+                .font(.system(size: 8, weight: .black, design: .monospaced))
+                .padding(.horizontal, 5).padding(.vertical, 2)
+                .background(role == "REMOTE" ? Color.orange.opacity(0.15) : Color.secondary.opacity(0.12))
+                .foregroundStyle(role == "REMOTE" ? .orange : .secondary)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+            Spacer()
+            Text(detail.uppercased())
+                .font(.system(size: 8, weight: .medium, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct RemoteMachineEmptyRow: View {
+    let connection: RemoteControllerConnection
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: connection.state == .hostOffline ? "desktopcomputer.trianglebadge.exclamationmark" : "arrow.triangle.2.circlepath")
+            Text(connection.state == .hostOffline ? "Machine offline" : "Waiting for session inventory…")
+            Spacer()
+        }
+        .font(.system(size: 10, design: .monospaced))
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+    }
+}
+
+private struct RemoteSessionCard: View {
+    let connection: RemoteControllerConnection
+    let session: RemoteSessionDTO
+    let onSelect: () -> Void
+
+    private var needsUser: Bool {
+        session.attention.status == .decision || session.attention.status == .input || session.unacknowledged
+    }
+
+    private var preview: String {
+        let value = session.attention.preview ?? session.liveMessage ?? session.lastMessage ?? "waiting for input"
+        return value.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                Image(systemName: "network")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(session.displayName)
+                            .font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        Text(connection.profile.desktopName.uppercased())
+                            .font(.system(size: 7, weight: .black, design: .monospaced))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 4).padding(.vertical, 2)
+                            .overlay(RoundedRectangle(cornerRadius: 2).stroke(.orange.opacity(0.45)))
+                    }
+                    Text(preview)
+                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    HStack(spacing: 6) {
+                        AgentTag(agent: session.agent.localKind)
+                        Text("REMOTE")
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Spacer()
+                if needsUser {
+                    Image(systemName: session.attention.status == .decision ? "bolt.fill" : "pencil.line")
+                        .font(.system(size: 10)).foregroundStyle(.orange)
+                }
+                Text(RelativeTime.short(session.attention.receivedAt ?? session.lastActivity))
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(Color.primary.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(needsUser ? Color.orange : Color.orange.opacity(0.18), lineWidth: needsUser ? 1.5 : 1)
+        )
+        .help("Open on \(connection.profile.desktopName)")
+    }
+}
+
+private struct RemoteSessionDetailView: View {
+    let connection: RemoteControllerConnection
+    let sessionName: String
+    @State private var message = ""
+    @State private var result: String?
+
+    private var session: RemoteSessionDTO? {
+        connection.sessions.first { $0.name == sessionName }
+    }
+
+    private var terminalContent: String {
+        connection.terminalSnapshots[sessionName]?.content ?? "Waiting for terminal snapshot…"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if let session, session.attention.status == .decision {
+                decisionBar(session)
+                Divider()
+            }
+            ScrollView([.horizontal, .vertical]) {
+                Text(AnsiRenderer.attributed(
+                    terminalContent,
+                    font: .system(size: 11, design: .monospaced)
+                ))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(14)
+            }
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.75))
+            Divider()
+            composer
+        }
+        .background(.regularMaterial)
+        .task(id: sessionName) {
+            connection.openTerminal(session: sessionName)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(9))
+                guard !Task.isCancelled else { break }
+                connection.openTerminal(session: sessionName)
+            }
+        }
+        .onDisappear { connection.closeTerminal(session: sessionName) }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                SessionMachineHeader.remote(connection)
+                    .padding(.horizontal, -8)
+                Text(session?.displayName ?? sessionName)
+                    .font(.system(size: 18, weight: .semibold))
+                Text("\(session?.agent.rawValue.uppercased() ?? "AGENT") · \(session?.cwd ?? "")")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Button { connection.openTerminal(session: sessionName); connection.refresh() } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+            .controlSize(.small)
+        }
+        .padding(14)
+    }
+
+    private func decisionBar(_ session: RemoteSessionDTO) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bolt.fill").foregroundStyle(.orange)
+            Text(session.attention.preview ?? "This session needs a decision.")
+                .font(.system(size: 11)).lineLimit(2)
+            Spacer()
+            Button("Once") { connection.answerDecision(session: sessionName, decision: .allowOnce) }
+            Button("Always") { connection.answerDecision(session: sessionName, decision: .allowAll) }
+            Button("Deny", role: .destructive) { connection.answerDecision(session: sessionName, decision: .deny) }
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(Color.orange.opacity(0.08))
+    }
+
+    private var composer: some View {
+        HStack(spacing: 8) {
+            TextField("Send a message to this remote session", text: $message, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...4)
+                .onSubmit { submit() }
+            Button("Send") { submit() }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if let result { Text(result).font(.system(size: 9)).foregroundStyle(.secondary) }
+        }
+        .padding(12)
+    }
+
+    private func submit() {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        connection.sendMessage(session: sessionName, text: text)
+        message = ""
+        result = "Sent to \(connection.profile.desktopName)"
+    }
+}
+
+private extension RemoteControllerConnectionState {
+    var shortLabel: String {
+        switch self {
+        case .connecting: return "connecting"
+        case .online: return "online"
+        case .hostOffline: return "offline"
+        case .error: return "link error"
+        }
+    }
+
+    var indicatorColor: Color {
+        switch self {
+        case .online: return .green
+        case .hostOffline: return .orange
+        case .connecting: return .secondary
+        case .error: return .red
+        }
     }
 }
 
