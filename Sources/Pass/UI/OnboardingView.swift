@@ -60,9 +60,9 @@ struct OnboardingView: View {
             }
             .padding(.bottom, 48)
 
-            ForEach(0..<4, id: \.self) { index in
+            ForEach(0..<5, id: \.self) { index in
                 railItem(index)
-                if index < 3 {
+                if index < 4 {
                     Rectangle()
                         .fill(index < model.step ? lavender.opacity(0.8) : Color.white.opacity(0.13))
                         .frame(width: 1, height: 38)
@@ -80,7 +80,13 @@ struct OnboardingView: View {
     }
 
     private func railItem(_ index: Int) -> some View {
-        let labels = ["Welcome", "Pre-flight check", "Choose projects", "Connect agents"]
+        let labels = [
+            "Welcome",
+            "Pre-flight check",
+            "Choose projects",
+            "Connect agents",
+            "Choose app mode",
+        ]
         let active = index == model.step
         let complete = index < model.step
         return HStack(spacing: 12) {
@@ -111,7 +117,8 @@ struct OnboardingView: View {
             case 0: welcome
             case 1: systemCheck
             case 2: projectSelection
-            default: integrations
+            case 3: integrations
+            default: appMode
             }
         }
         .padding(.horizontal, 48)
@@ -386,8 +393,133 @@ struct OnboardingView: View {
                         .font(.custom("Menlo", size: 9))
                         .foregroundStyle(.tertiary)
                 }
+                primaryButton("Continue", icon: "arrow.right") { model.step = 4 }
+            }
+        }
+    }
+
+    private var appMode: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            eyebrow("APP MODE  /  CHOOSE YOUR SIGNAL")
+            Text("How should Pass appear?")
+                .font(.custom("Avenir Next", size: 28).weight(.heavy))
+                .foregroundStyle(paper)
+                .padding(.top, 8)
+            Text("Choose whether Pass stays tucked away or behaves like a regular Mac app. Both modes keep the menu bar controls and your sessions running.")
+                .font(.custom("Avenir Next", size: 13))
+                .foregroundStyle(.secondary)
+                .lineSpacing(3)
+                .frame(maxWidth: 500, alignment: .leading)
+                .padding(.top, 7)
+
+            HStack(spacing: 12) {
+                appModeCard(
+                    .menuBar,
+                    icon: "menubar.rectangle",
+                    title: "Menu bar only",
+                    detail: "Stay out of the Dock and app switcher. Open Pass with ⌥ Space or the menu bar icon.",
+                    callout: "QUIET DEFAULT"
+                )
+                appModeCard(
+                    .dock,
+                    icon: "dock.rectangle",
+                    title: "Dock & menu bar",
+                    detail: "Show Pass in the Dock and ⌘ Tab. Click its Dock icon whenever you want to open Pass.",
+                    callout: "EASY TO FIND"
+                )
+            }
+            .padding(.top, 28)
+
+            Label(
+                "You can change this later by running onboarding again from Settings.",
+                systemImage: "arrow.triangle.2.circlepath"
+            )
+            .font(.custom("Avenir Next", size: 11))
+            .foregroundStyle(.tertiary)
+            .padding(.top, 16)
+
+            Spacer()
+            HStack {
+                Button("Back") { model.step = 3 }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                Spacer()
                 primaryButton("Open Pass", icon: "arrow.up.right") { model.finish() }
             }
+        }
+    }
+
+    private func appModeCard(
+        _ presence: AppPresence,
+        icon: String,
+        title: String,
+        detail: String,
+        callout: String
+    ) -> some View {
+        let selected = model.appPresence == presence
+        return Button { model.appPresence = presence } label: {
+            appModeCardContent(
+                icon: icon,
+                title: title,
+                detail: detail,
+                callout: callout,
+                selected: selected
+            )
+            .padding(17)
+            .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
+            .background(
+                selected ? violet.opacity(0.16) : Color.white.opacity(0.035),
+                in: RoundedRectangle(cornerRadius: 12)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(selected ? signal.opacity(0.78) : Color.white.opacity(0.10), lineWidth: selected ? 1.5 : 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title). \(detail)")
+        .accessibilityValue(selected ? "Selected" : "Not selected")
+    }
+
+    private func appModeCardContent(
+        icon: String,
+        title: String,
+        detail: String,
+        callout: String,
+        selected: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(selected ? signal : Color.white.opacity(0.07))
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(selected ? ink : paper)
+                }
+                .frame(width: 42, height: 42)
+                Spacer()
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(selected ? signal : Color.white.opacity(0.28))
+            }
+
+            Text(callout)
+                .font(.custom("Menlo", size: 8).weight(.bold))
+                .tracking(1.2)
+                .foregroundStyle(selected ? signal : paper.opacity(0.38))
+                .padding(.top, 20)
+            Text(title)
+                .font(.custom("Avenir Next", size: 16).weight(.bold))
+                .foregroundStyle(paper)
+                .padding(.top, 6)
+            Text(detail)
+                .font(.custom("Avenir Next", size: 11))
+                .foregroundStyle(.secondary)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 8)
         }
     }
 
