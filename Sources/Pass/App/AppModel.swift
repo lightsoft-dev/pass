@@ -775,6 +775,36 @@ final class AppModel {
         }
     }
 
+    /// Clone a GitHub repository from the ⌘N palette, register it, and launch its first agent
+    /// session. Git uses the user's existing credential helper for private repository access.
+    func cloneProject(from repositoryURL: String, agent: AgentKind) async -> String? {
+        var parent = UserDefaults.standard.string(
+            forKey: ProjectCreationService.defaultParentDirectoryKey
+        ) ?? ""
+        if parent.isEmpty {
+            guard let picked = ProjectPicker.pickOne(
+                prompt: "Use for imported projects",
+                message: "Choose where Pass should clone GitHub project folders"
+            ) else {
+                return "Choose a new-projects location in Settings › Projects."
+            }
+            setNewProjectParentDirectory(picked)
+            parent = picked
+        }
+
+        do {
+            let root = try await Task.detached { [parent, repositoryURL] in
+                try ProjectCreationService.cloneProject(from: repositoryURL, in: parent)
+            }.value
+            projects?.rememberDirectory(path: parent)
+            projects?.remember(rootPath: root)
+            _ = await sessions?.createSession(projectDir: root, agent: agent)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     struct ProjectDirectoryScan: Sendable {
         var discovered: Set<String>
         var availableDirectories: [String]

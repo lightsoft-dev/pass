@@ -17,6 +17,7 @@ struct CommandView: View {
     @State private var confirmHookDismissal = false   // acknowledge degraded core functionality
     @State private var showQuickCommand = false       // ⌘P quick command (hidden by default)
     @State private var newSessionMode = false         // ⌘N: results are PROJECTS, ⏎ starts a session
+    @State private var isCloningRepository = false    // keep the palette stable while git clone runs
     @State private var terminal: TerminalController?  // live client attached to the selected session
     @State private var terminalTarget: String?        // which session the home terminal shows
     @State private var pool = TerminalPool()          // recent clients stay attached → instant switching
@@ -104,6 +105,12 @@ struct CommandView: View {
         let needle = jumpToken.trimmingCharacters(in: .whitespaces)
         // ⌘N mode: the list is PROJECTS to start a session in (all of them until you type).
         if newSessionMode {
+            let parent = UserDefaults.standard.string(
+                forKey: ProjectCreationService.defaultParentDirectoryKey
+            )
+            if let repository = ProjectCreationService.githubRepository(from: needle) {
+                return [.githubRepository(repository, parentDirectory: parent)]
+            }
             var items: [PaletteItem] = projects
                 .filter { needle.isEmpty || Fuzzy.matches(needle, $0.name) }
                 .map { .project($0) }
@@ -111,9 +118,6 @@ struct CommandView: View {
                 $0.name.compare(needle, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
             }
             if !needle.isEmpty, !exactMatch, ProjectCreationService.isValidName(needle) {
-                let parent = UserDefaults.standard.string(
-                    forKey: ProjectCreationService.defaultParentDirectoryKey
-                )
                 items.append(.newProject(name: needle, parentDirectory: parent))
             }
             return items
@@ -332,12 +336,15 @@ struct CommandView: View {
                 return true
             }
             if newSessionMode {
+                guard !isCloningRepository else { return true }
                 switch jumpSelectedItem {
                 case .project(let p):
                     appModel.createSession(projectDir: p.rootPath, agent: newSessionAgent)
                     hideQuickCommand()
                 case .newProject(let name, _):
                     createProjectFromInput(name)
+                case .githubRepository(let repository, _):
+                    cloneRepositoryFromInput(repository)
                 default:
                     break
                 }
@@ -361,6 +368,8 @@ struct CommandView: View {
                     hideQuickCommand() // action done — watch the new session arrive
                 case .newProject(let name, _):
                     createProjectFromInput(name)
+                case .githubRepository(let repository, _):
+                    cloneRepositoryFromInput(repository)
                 case .command(let c):
                     runExtensionCommand(c)
                 }
@@ -378,6 +387,7 @@ struct CommandView: View {
         case .markChecked:
             return true // handled before the route guard
         case .escape:
+            if isCloningRepository { return true }
             if pendingKill != nil { pendingKill = nil; return true }
             if typingInBar {
                 if hasAnySessions { hideQuickCommand() } // Esc closes the ⌘P bar
@@ -541,7 +551,9 @@ struct CommandView: View {
             // Dim the home behind; click outside dismisses (unless it's the only UI).
             Color.black.opacity(0.22)
                 .contentShape(Rectangle())
-                .onTapGesture { if hasAnySessions { hideQuickCommand() } }
+                .onTapGesture {
+                    if hasAnySessions, !isCloningRepository { hideQuickCommand() }
+                }
             commandBar
                 .frame(width: min(540, maxWidth - 48))
                 .shadow(color: .black.opacity(0.35), radius: 28, y: 10)
@@ -561,6 +573,7 @@ struct CommandView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 17))
                     .focused($omniboxFocused)
+                    .disabled(isCloningRepository)
                     .onChange(of: query) { old, new in handleQueryChange(old: old, new: new) }
                     // Tab completes the @-token here — the field editor eats Tab before
                     // performKeyEquivalent sees it, so intercept it at the SwiftUI layer.
@@ -569,14 +582,25 @@ struct CommandView: View {
                         return .ignored
                     }
                     .onAppear { refocusField() } // grab focus the instant this field mounts
-                if newSessionMode { newSessionAgentPicker }
+                if newSessionMode {
+                    if isCloningRepository {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        githubImportButton
+                        newSessionAgentPicker
+                    }
+                }
             }
             .padding(.horizontal, 16).padding(.vertical, 13)
 
             Divider()
             Group {
                 if let status {
-                    Text(status).foregroundStyle(.orange)
+                    if isCloningRepository {
+                        Text(status).foregroundStyle(.secondary)
+                    } else {
+                        Text(status).foregroundStyle(.orange)
+                    }
                 } else {
                     Text(hint).foregroundStyle(.tertiary)
                 }
@@ -624,13 +648,33 @@ struct CommandView: View {
         .fixedSize()
     }
 
+    /// A compact, explicit affordance makes repository import discoverable without turning the
+    /// keyboard-first palette into a multi-step wizard. Clicking it seeds the URL prefix; pasting
+    /// a full URL works directly without using the button.
+    private var githubImportButton: some View {
+        Button {
+            query = "https://github.com/"
+            jumpSelection = 0
+            refocusField()
+            FieldEditorFix.cursorToEnd()
+        } label: {
+            HStack(spacing: 4) {
+                Text("GitHub").font(.system(size: 11, weight: .semibold))
+                Image(systemName: "arrow.down").font(.system(size: 8, weight: .bold))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(.secondary.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Clone a GitHub repository")
+        .fixedSize()
+    }
+
     @ViewBuilder
     private var jumpResults: some View {
         if jumpItems.isEmpty {
-            Text(isCommandMode
-                 ? "No extension commands — install & enable extensions in Settings."
-                 : selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
-                 ?? "No matches — try a different name.")
+            Text(emptyResultsMessage)
                 .font(.system(size: 12)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16).padding(.vertical, 10)
@@ -657,14 +701,30 @@ struct CommandView: View {
     }
 
     private var placeholder: String {
-        newSessionMode ? "new session — project name" : "search — session name, then your message"
+        newSessionMode ? "project name or GitHub URL" : "search — session name, then your message"
+    }
+
+    private var emptyResultsMessage: String {
+        if isCommandMode {
+            return "No extension commands — install & enable extensions in Settings."
+        }
+        if newSessionMode {
+            return ProjectCreationService.looksLikeGitHubRepositoryInput(query)
+                ? "Use a repository URL like https://github.com/owner/repository."
+                : "No matching projects — type a project name or paste a GitHub URL."
+        }
+        return selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
+            ?? "No matches — try a different name."
     }
 
     private var hint: String {
         if newSessionMode {
             if case .project(let p)? = jumpSelectedItem { return "⏎ new \(newSessionAgent.rawValue) session in \(p.name)" }
             if case .newProject(let name, _)? = jumpSelectedItem { return "⏎ create “\(name)” + start \(newSessionAgent.rawValue)" }
-            return "type a project name · select an existing project or create a new one · Esc close"
+            if case .githubRepository(let repository, _)? = jumpSelectedItem {
+                return "⏎ clone \(repository.displayName) + start \(newSessionAgent.rawValue)"
+            }
+            return "select a project · create by name · or paste a GitHub URL · Esc close"
         }
         if query.hasPrefix("+") {
             let branch = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
@@ -994,6 +1054,7 @@ struct CommandView: View {
 
     /// ⌘P — show/hide the quick command. Hiding it hands the keyboard back to the terminal.
     private func toggleQuickCommand() {
+        guard !isCloningRepository else { return }
         if showQuickCommand { hideQuickCommand() }
         else { status = nil; showQuickCommand = true; refocusField() }
     }
@@ -1027,6 +1088,7 @@ struct CommandView: View {
         case .session(let s): token = jumpCompletionToken(s)
         case .project(let p): token = Slug.make(p.name)
         case .newProject(let name, _): token = name
+        case .githubRepository(let repository, _): token = repository.cloneURL
         case .command(let c): token = c.token
         }
         let msg = jumpMessage ?? ""
@@ -1124,6 +1186,28 @@ struct CommandView: View {
         }
     }
 
+    private func cloneRepositoryFromInput(_ repository: ProjectCreationService.GitHubRepository) {
+        guard !isCloningRepository else { return }
+        isCloningRepository = true
+        status = "Cloning \(repository.displayName)…"
+        Task {
+            let error = await appModel.cloneProject(
+                from: repository.cloneURL,
+                agent: newSessionAgent
+            )
+            isCloningRepository = false
+            if let error {
+                status = "⚠ GitHub: \(error)"
+                newSessionMode = true
+                showQuickCommand = true
+                query = repository.cloneURL
+                refocusField()
+            } else {
+                hideQuickCommand()
+            }
+        }
+    }
+
     private func activate(_ item: PaletteItem) {
         switch item {
         case .session(let s):
@@ -1134,6 +1218,8 @@ struct CommandView: View {
             query = ""
         case .newProject(let name, _):
             createProjectFromInput(name)
+        case .githubRepository(let repository, _):
+            cloneRepositoryFromInput(repository)
         case .command(let c):
             runExtensionCommand(c)
         }
@@ -1834,6 +1920,7 @@ enum PaletteItem: Identifiable {
     case session(Session)
     case project(Project)
     case newProject(name: String, parentDirectory: String?)
+    case githubRepository(ProjectCreationService.GitHubRepository, parentDirectory: String?)
     case command(ExtensionStore.PaletteCommand)
 
     var id: String {
@@ -1841,6 +1928,7 @@ enum PaletteItem: Identifiable {
         case .session(let s): return "s:" + s.name
         case .project(let p): return "p:" + p.rootPath
         case .newProject(let name, _): return "n:" + name
+        case .githubRepository(let repository, _): return "g:" + repository.cloneURL
         case .command(let c): return "c:" + c.id
         }
     }
@@ -1856,6 +1944,8 @@ struct PaletteRow: View {
             case .session(let s): sessionRow(s)
             case .project(let p): projectRow(p)
             case .newProject(let name, let parent): newProjectRow(name, parent: parent)
+            case .githubRepository(let repository, let parent):
+                githubRepositoryRow(repository, parent: parent)
             case .command(let c): commandRow(c)
             }
         }
@@ -1947,6 +2037,32 @@ struct PaletteRow: View {
             Spacer()
             Text("new project")
                 .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+
+    private func githubRepositoryRow(
+        _ repository: ProjectCreationService.GitHubRepository,
+        parent: String?
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Clone \(repository.displayName)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Text(parentPreview(repository.name, parent: parent))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer()
+            Text("GitHub ↓")
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
         }
     }
