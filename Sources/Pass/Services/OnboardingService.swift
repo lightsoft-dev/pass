@@ -4,6 +4,36 @@ import Observation
 
 enum OnboardingPreference {
     static let completedKey = "onboarding.completed.v1"
+    static let appPresenceKey = "onboarding.appPresence.v1"
+
+    static func appPresence(in defaults: UserDefaults = .standard) -> AppPresence {
+        guard let rawValue = defaults.string(forKey: appPresenceKey),
+              let presence = AppPresence(rawValue: rawValue) else {
+            return .menuBar
+        }
+        return presence
+    }
+
+    static func setAppPresence(
+        _ presence: AppPresence,
+        in defaults: UserDefaults = .standard
+    ) {
+        defaults.set(presence.rawValue, forKey: appPresenceKey)
+    }
+}
+
+enum AppPresence: String, CaseIterable, Identifiable, Sendable {
+    case menuBar
+    case dock
+
+    var id: Self { self }
+
+    var activationPolicy: NSApplication.ActivationPolicy {
+        switch self {
+        case .menuBar: .accessory
+        case .dock: .regular
+        }
+    }
 }
 
 struct OnboardingDependency: Identifiable, Equatable, Sendable {
@@ -87,6 +117,7 @@ final class OnboardingModel {
     var integrationError: String?
     var cliLinked = false
     var homebrewPath: String?
+    var appPresence = OnboardingPreference.appPresence()
 
     private let appModel: AppModel
     private let close: () -> Void
@@ -135,6 +166,7 @@ final class OnboardingModel {
     func restart() {
         step = 0
         installState = .idle
+        appPresence = OnboardingPreference.appPresence()
         scan()
     }
 
@@ -204,6 +236,8 @@ final class OnboardingModel {
     }
 
     func finish() {
+        OnboardingPreference.setAppPresence(appPresence)
+        NSApp.setActivationPolicy(appPresence.activationPolicy)
         UserDefaults.standard.set(true, forKey: OnboardingPreference.completedKey)
         close()
         // Summon on the next runloop turn, after the walkthrough window has actually left the

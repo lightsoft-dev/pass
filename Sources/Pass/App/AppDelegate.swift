@@ -46,10 +46,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        MainActor.assumeIsolated {
+            if onboardingController?.window?.isVisible == true {
+                onboardingController?.show()
+            } else {
+                panelController?.show(preselecting: nil)
+            }
+        }
+        return true
+    }
+
     @MainActor
     private func launch() {
-        // Accessory app: no Dock icon, no app-switcher entry. (LSUIElement also sets this.)
-        NSApp.setActivationPolicy(.accessory)
+        // LSUIElement prevents a launch-time Dock flash. The user's onboarding choice then
+        // decides whether Pass remains an accessory or joins the Dock and app switcher.
+        let appPresence = OnboardingPreference.appPresence()
+        NSApp.setActivationPolicy(appPresence.activationPolicy)
 
         // A minimal main menu so standard editing shortcuts (⌘X/C/V/A/Z) work inside the
         // panel's text fields even though we have no visible menu bar (FINDINGS/plan R5).
@@ -154,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if !completedOnboarding || Shell.resolveViaLoginShell("tmux") == nil {
             DispatchQueue.main.async { onboardingController.show() }
         }
-        Log.app.info("pass launched (accessory, hook port \(PassConfig.hookPort))")
+        Log.app.info("pass launched (\(appPresence.rawValue, privacy: .public), hook port \(PassConfig.hookPort))")
     }
 
     @MainActor
