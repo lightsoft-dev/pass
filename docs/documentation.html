@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pass Documentation — Desktop, browser, CLI, and extensions</title>
+<meta name="description" content="Complete documentation for Pass: session supervision, browser automation, passcli commands, extensions, device mirroring, and remote clients.">
+<meta name="theme-color" content="#0e0c14">
+<meta property="og:title" content="Pass Documentation">
+<meta property="og:description" content="The field manual for Pass and passcli.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="app-icon.svg">
+<link rel="icon" href="app-icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&amp;family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,700;1,400&amp;display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0e0c14;--raised:#14101f;--panel:#191329;--line:#2b223b;--edge:#443465;
+  --ink:#f2f0e7;--dim:#aaa4b8;--faint:#746d82;--amber:#f3ef63;--amber-hot:#fff878;
+  --amber-dim:rgba(243,239,99,.12);--violet:#6546ea;--violet-soft:#c1b9e9;
+  --violet-dim:rgba(101,70,234,.16);--green:#9ce88a;--red:#ff6b63;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --display:"Archivo Black","Arial Black",sans-serif;--bar:44px
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-padding-top:78px;overflow-x:clip}
+@media(prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+body{background:var(--bg);color:var(--ink);font:14px/1.7 var(--mono);-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;background:radial-gradient(circle at 92% 3%,rgba(101,70,234,.24),transparent 31%),radial-gradient(rgba(242,240,231,.045) 1px,transparent 1px);background-size:auto,26px 26px}
+::selection{background:var(--amber);color:var(--bg)}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--amber);outline-offset:3px;border-radius:2px}
+code,kbd,pre{font-family:var(--mono)}
+code{color:var(--violet-soft);background:var(--violet-dim);border-radius:3px;padding:.1em .35em;font-size:.93em}
+.wrap{width:min(1380px,100%);margin:auto;padding-inline:clamp(18px,4vw,52px)}
+.topbar{position:fixed;inset:0 0 auto;z-index:80;height:var(--bar);display:flex;align-items:center;gap:20px;padding:0 clamp(14px,2.5vw,28px);border-bottom:1px solid var(--line);background:rgba(14,12,20,.9);backdrop-filter:blur(14px);font-size:12px;letter-spacing:.03em;white-space:nowrap}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;text-decoration:none}
+.brand img{width:26px;height:26px;border-radius:6px;box-shadow:0 0 0 1px rgba(243,239,99,.2)}
+.topbar nav,.topbar .right{display:flex;gap:15px}
+.topbar nav a,.topbar .right a{color:var(--faint);text-decoration:none}
+.topbar nav a:hover,.topbar .right a:hover{color:var(--amber)}
+.topbar nav a.cur{color:var(--amber)}.topbar nav a.cur::after{content:"*"}
+.topbar .right{margin-left:auto;align-items:center;color:var(--faint)}
+.hero{padding-top:calc(var(--bar) + clamp(58px,9vw,116px));padding-bottom:clamp(54px,8vw,104px);border-bottom:1px solid var(--line);position:relative;overflow:hidden}
+.hero::before{content:"CLI";position:absolute;right:-.03em;bottom:-.24em;color:transparent;-webkit-text-stroke:1px rgba(143,123,234,.16);font:clamp(150px,27vw,390px)/1 var(--display);letter-spacing:-.08em}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,.75fr);gap:clamp(34px,7vw,100px);position:relative;z-index:1;align-items:end}
+.eyebrow,.section-mark{display:flex;align-items:center;gap:12px;color:var(--amber);font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase}
+.eyebrow{margin-bottom:24px}.eyebrow::before{content:"";width:36px;height:1px;background:var(--amber)}
+h1{font:400 clamp(44px,7.6vw,104px)/.9 var(--display);letter-spacing:-.025em;text-transform:uppercase;max-width:9ch}h1 span{color:var(--amber)}
+.hero-copy{max-width:62ch;margin-top:30px;color:var(--dim);font-size:clamp(14px,1.5vw,17px)}.hero-copy b,.lede b,.card p b,.callout b{color:var(--ink);font-weight:500}
+.actions,.meta,.links{display:flex;gap:9px;flex-wrap:wrap}.actions{margin-top:30px}
+.btn{padding:13px 18px;border:1px solid var(--edge);border-radius:4px;text-decoration:none;text-transform:uppercase;font-size:12px;font-weight:700;letter-spacing:.08em;background:rgba(20,16,31,.75);transition:.15s}
+.btn:hover{border-color:var(--amber);transform:translateY(-1px)}.btn.primary{background:var(--amber);color:var(--bg);border-color:var(--amber)}
+.status{background:linear-gradient(145deg,rgba(29,23,43,.96),rgba(12,10,18,.96));border:1px solid var(--edge);border-radius:10px;overflow:hidden;box-shadow:0 26px 70px -40px #000}
+.status-head{display:flex;align-items:center;gap:7px;padding:10px 13px;border-bottom:1px solid var(--line);color:var(--faint);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.lamp{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green)}
+.status-body{padding:20px}.status pre{padding:13px;border:1px solid var(--line);border-radius:5px;background:#09070e;color:var(--dim);font-size:11px;overflow:auto}.prompt{color:var(--amber)}.ok{color:var(--green)}
+.status-grid{display:grid;grid-template-columns:1fr 1fr;margin-top:18px;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.status-grid div{padding:10px 11px;border:solid var(--line);border-width:1px 0 0 1px;margin:-1px 0 0 -1px;color:var(--faint);font-size:9px;text-transform:uppercase;letter-spacing:.08em}
+.status-grid b{display:block;color:var(--ink);font-size:11px;margin-top:3px;text-transform:none;letter-spacing:0}
+.manual{display:grid;grid-template-columns:225px minmax(0,1fr);gap:clamp(30px,5vw,78px);align-items:start;padding-top:52px;padding-bottom:110px}
+.rail{position:sticky;top:calc(var(--bar) + 24px);border-left:1px solid var(--line);padding-left:16px}
+.rail-label{display:block;color:var(--faint);font-size:10px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;margin-bottom:12px}
+.rail nav{display:flex;flex-direction:column;gap:2px}.rail nav a{position:relative;padding:6px 8px;color:var(--faint);font-size:11.5px;text-decoration:none;border-radius:3px}
+.rail nav a:hover{color:var(--ink);background:rgba(255,255,255,.025)}.rail nav a.active{color:var(--amber);background:var(--amber-dim)}
+.rail nav a.active::before{content:"";position:absolute;left:-17px;top:9px;width:1px;height:17px;background:var(--amber)}
+.rail-note{margin-top:24px;padding-top:18px;border-top:1px solid var(--line);color:var(--faint);font-size:10px}.rail-note b{display:block;color:var(--violet-soft);margin-bottom:4px}
+.rail-toggle{display:none;width:100%;padding:11px;border:1px solid var(--edge);border-radius:4px;background:var(--panel);color:var(--ink);font:700 11px var(--mono);text-align:left}
+.doc-section{padding:24px 0 76px;border-bottom:1px solid var(--line);scroll-margin-top:86px}.doc-section:last-child{border:0}
+.section-mark{margin-bottom:11px}.section-mark::after{content:"";height:1px;width:70px;background:var(--amber);opacity:.45}
+h2{font:400 clamp(28px,4.2vw,52px)/1 var(--display);text-transform:uppercase;letter-spacing:-.015em}
+h3{font:400 18px/1.25 var(--display);text-transform:uppercase;letter-spacing:.01em}
+.lede{max-width:74ch;color:var(--dim);font-size:14px;margin-top:18px}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;margin-top:28px}
+.card{grid-column:span 6;padding:21px;border:1px solid var(--line);border-radius:7px;background:rgba(20,16,31,.66);transition:.15s}.card:hover{border-color:var(--edge);background:rgba(29,23,43,.72)}
+.card.wide{grid-column:span 12}.card.third{grid-column:span 4}.card-top{display:flex;align-items:start;gap:13px}
+.card-no{display:grid;place-items:center;flex:none;width:32px;height:32px;border:1px solid var(--edge);border-radius:4px;color:var(--amber);font-size:10px;font-weight:700;background:var(--amber-dim)}
+.card p{margin-top:11px;color:var(--dim);font-size:12.5px}.meta{margin-top:15px}
+.pill{padding:3px 8px;border:1px solid var(--line);border-radius:100px;color:var(--faint);font-size:9px;letter-spacing:.06em;text-transform:uppercase}.pill.now{color:var(--green);border-color:rgba(156,232,138,.28)}.pill.preview{color:var(--amber);border-color:rgba(243,239,99,.3)}
+.steps{counter-reset:steps;display:grid;margin-top:28px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.step{counter-increment:steps;display:grid;grid-template-columns:58px minmax(0,1fr);background:rgba(20,16,31,.58);border-top:1px solid var(--line);margin-top:-1px}
+.step::before{content:"0" counter(steps);display:grid;place-items:center;color:var(--amber);font-weight:700;border-right:1px solid var(--line);background:var(--amber-dim)}
+.step div{padding:16px 19px}.step b{display:block;margin-bottom:3px}.step p{color:var(--dim);font-size:12px}
+.terminal{margin-top:25px;border:1px solid var(--edge);border-radius:8px;overflow:hidden;background:#09070e}
+.term-head{display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line);color:var(--faint);font-size:9.5px}.term-head i{width:8px;height:8px;border-radius:50%;background:#332942}.term-head span{margin-left:5px}
+.copy{margin-left:auto;padding:3px 8px;border:1px solid var(--line);border-radius:3px;background:transparent;color:var(--faint);font:9px var(--mono);cursor:pointer}.copy:hover{color:var(--amber);border-color:var(--amber)}
+.terminal pre{padding:17px;overflow:auto;color:var(--dim);font-size:11.5px;line-height:1.85}.comment{color:var(--violet-soft)}
+.keys{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin-top:25px;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.key{display:grid;grid-template-columns:130px minmax(0,1fr);gap:12px;align-items:center;padding:12px 14px;border:solid var(--line);border-width:1px 0 0 1px;margin:-1px 0 0 -1px;color:var(--dim);font-size:11.5px}.key b{color:var(--ink);font-weight:500}
+kbd{display:inline-block;min-width:25px;padding:2px 6px;text-align:center;border:1px solid var(--edge);border-bottom-width:2px;border-radius:4px;background:#21182f;color:var(--ink);font-size:9.5px}
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin-top:26px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--line)}
+.flow div{position:relative;padding:17px;background:var(--raised);min-height:130px}.flow div:not(:last-child)::after{content:"→";position:absolute;right:-9px;top:50%;z-index:2;color:var(--amber);background:var(--line);width:18px;height:18px;display:grid;place-items:center;border-radius:50%;font-size:9px}
+.flow small{color:var(--amber);font-weight:700;letter-spacing:.1em}.flow b{display:block;margin:7px 0 5px}.flow p{color:var(--dim);font-size:10.5px}
+.callout{position:relative;margin-top:25px;padding:18px 20px 18px 49px;border:1px solid rgba(243,239,99,.28);border-radius:7px;background:var(--amber-dim);color:var(--dim);font-size:12px}.callout::before{content:"!";position:absolute;left:19px;color:var(--amber);font-weight:700}.callout.info{border-color:rgba(143,123,234,.32);background:var(--violet-dim)}.callout.info::before{content:"i";color:var(--violet-soft)}
+.filter{display:flex;align-items:center;gap:10px;margin-top:28px;padding:11px 13px;border:1px solid var(--edge);border-radius:6px;background:#09070e}.filter label{color:var(--amber);font-weight:700}.filter input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:var(--ink);font:12px var(--mono)}.filter input::placeholder{color:var(--faint)}.count{color:var(--faint);font-size:9px;white-space:nowrap}
+.command-list{display:grid;gap:8px;margin-top:14px}.command{border:1px solid var(--line);border-radius:6px;background:rgba(20,16,31,.58);overflow:hidden}.command[hidden]{display:none}
+.command summary{list-style:none;display:grid;grid-template-columns:minmax(220px,.9fr) minmax(0,1.2fr) auto;gap:16px;align-items:center;padding:13px 15px;cursor:pointer}.command summary::-webkit-details-marker{display:none}.command summary::after{content:"+";color:var(--amber);font-weight:700}.command[open] summary::after{content:"−"}.command summary:hover{background:rgba(101,70,234,.07)}
+.command-name{color:var(--amber);font-weight:700;font-size:11.5px}.command-desc{color:var(--dim);font-size:11px}.command-body{padding:0 15px 15px;border-top:1px solid var(--line)}
+.syntax{margin-top:13px;padding:10px 12px;background:#09070e;border-radius:4px;color:var(--violet-soft);font-size:10.5px;overflow:auto;white-space:pre}
+.option{display:grid;grid-template-columns:185px minmax(0,1fr);gap:14px;padding:8px 0;border-bottom:1px dotted var(--line);color:var(--dim);font-size:10.5px}.option:last-child{border:0}.option code{background:none;padding:0;color:var(--ink)}
+.permissions{display:grid;grid-template-columns:repeat(2,1fr);margin-top:23px;border:1px solid var(--line);border-radius:7px;overflow:hidden}.permission{display:grid;grid-template-columns:140px 1fr;gap:9px;padding:10px 12px;border:solid var(--line);border-width:1px 0 0 1px;margin:-1px 0 0 -1px;font-size:10.5px;color:var(--dim)}.permission code{background:none;padding:0;color:var(--amber)}
+table{width:100%;border-collapse:collapse;margin-top:24px;border:1px solid var(--line);font-size:11px}th,td{text-align:left;vertical-align:top;padding:10px 12px;border-bottom:1px solid var(--line)}th{color:var(--faint);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:var(--raised)}td:first-child{color:var(--amber);font-weight:700;white-space:nowrap}td:last-child{color:var(--dim)}
+.links{margin-top:24px}.links a{padding:8px 11px;border:1px solid var(--line);border-radius:4px;color:var(--dim);font-size:10px;text-decoration:none}.links a:hover{color:var(--amber);border-color:var(--amber)}
+footer{border-top:1px solid var(--line);background:#09070e}.footer{min-height:58px;display:flex;align-items:center;gap:18px;color:var(--faint);font-size:10px}.footer .right{margin-left:auto;display:flex;gap:15px}.footer a{text-decoration:none}.footer a:hover{color:var(--amber)}
+@media(max-width:940px){.hero-grid{grid-template-columns:1fr}.status{max-width:600px}.manual{grid-template-columns:1fr;padding-top:28px}.rail{position:sticky;top:var(--bar);z-index:60;background:var(--bg);border:0;padding:9px 0}.rail-toggle{display:block}.rail nav,.rail-label,.rail-note{display:none}.rail.open nav{display:grid;grid-template-columns:repeat(2,1fr);padding:8px;border:1px solid var(--line);border-top:0;background:var(--raised)}.rail.open nav a.active::before{display:none}}
+@media(max-width:760px){.topbar nav,.topbar .hint{display:none}.card,.card.third{grid-column:span 12}.keys,.permissions{grid-template-columns:1fr}.flow{grid-template-columns:1fr}.flow div:not(:last-child)::after{content:"↓";right:calc(50% - 9px);top:auto;bottom:-9px}.command summary{grid-template-columns:1fr auto}.command-desc{grid-column:1/-1;grid-row:2}.option{grid-template-columns:1fr;gap:2px}}
+@media(max-width:560px){.key{grid-template-columns:105px minmax(0,1fr)}.permission{grid-template-columns:125px 1fr}.footer{flex-wrap:wrap;padding-block:14px}.footer .right{width:100%;margin:0}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html"><img src="app-icon.svg" alt="">pass</a>
+  <nav aria-label="Documentation sections">
+    <a href="#start" data-spy="start">0:start</a><a href="#desktop" data-spy="desktop">1:desktop</a>
+    <a href="#browser" data-spy="browser">2:browser</a><a href="#cli" data-spy="cli">3:cli</a>
+    <a href="#extensions" data-spy="extensions">4:extend</a>
+  </nav>
+  <div class="right"><span class="hint">field-manual</span><a href="index.html">overview</a><a href="https://github.com/lightsoft-dev/pass" rel="noopener">github ↗</a><span id="clock">--:--</span></div>
+</header>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Documentation · v0.1.9</p>
+      <h1>Field <span>manual</span></h1>
+      <p class="hero-copy">Everything Pass can do, from supervising ten local agents to giving one of them a safe, observable browser control plane. Built for <b>operators, extension authors, and coding agents</b>.</p>
+      <div class="actions"><a class="btn primary" href="#start">Start here ↓</a><a class="btn" href="#cli">passcli reference</a><a class="btn" href="https://github.com/lightsoft-dev/pass/releases/latest" rel="noopener">Download ↗</a></div>
+    </div>
+    <aside class="status" aria-label="Pass runtime summary">
+      <div class="status-head"><i class="lamp"></i> control plane online</div>
+      <div class="status-body">
+        <pre><span class="prompt">$</span> passcli status
+<span class="ok">pass is running</span> on 127.0.0.1:49817</pre>
+        <div class="status-grid"><div>Platform<b>macOS 14+</b></div><div>Session layer<b>tmux</b></div><div>CLI output<b>human / JSON</b></div><div>Browser model<b>snapshot / refs</b></div></div>
+      </div>
+    </aside>
+  </div>
+</header>
+
+<div class="wrap manual">
+  <aside class="rail" id="rail">
+    <button class="rail-toggle" id="rail-toggle" aria-expanded="false">☰ Documentation index</button>
+    <span class="rail-label">Manual index</span>
+    <nav aria-label="Page sections">
+      <a href="#start" data-rail="start">00 / Start</a><a href="#desktop" data-rail="desktop">01 / Desktop</a>
+      <a href="#sessions" data-rail="sessions">02 / Sessions</a><a href="#browser" data-rail="browser">03 / Browser</a>
+      <a href="#cli" data-rail="cli">04 / CLI</a><a href="#extensions" data-rail="extensions">05 / Extensions</a>
+      <a href="#features" data-rail="features">06 / Feature docs</a><a href="#devices" data-rail="devices">07 / Devices</a>
+      <a href="#reference" data-rail="reference">08 / Reference</a>
+    </nav>
+    <p class="rail-note"><b>Local-first by design</b>Agent hooks and CLI traffic stay on 127.0.0.1. Your sessions remain ordinary tmux sessions.</p>
+  </aside>
+
+  <main>
+    <section class="doc-section" id="start">
+      <p class="section-mark">00 · Bootstrap</p><h2>Start in three minutes</h2>
+      <p class="lede">Install Pass, complete the one-time runtime check, and let the app connect its local hooks and CLI. Pass never needs to own your sessions: <b>tmux remains the source of truth</b>.</p>
+      <div class="steps">
+        <div class="step"><div><b>Install and launch</b><p>Open the notarized DMG, drag Pass to Applications, then launch it. Pass v0.1.9 supports Apple Silicon and Intel Macs running macOS 14 or later.</p></div></div>
+        <div class="step"><div><b>Complete onboarding</b><p>Confirm tmux and Git, detect your coding agents, choose menu-bar-only or Dock + menu bar, then install integrations. Existing Claude hooks are merged and backed up.</p></div></div>
+        <div class="step"><div><b>Summon the control panel</b><p>Use your chosen global shortcut—⌘⌘ or ⌥Space—then create a session, register an existing repository, or clone a GitHub repository.</p></div></div>
+      </div>
+      <div class="terminal"><div class="term-head"><i></i><i></i><i></i><span>build from source</span><button class="copy" data-copy="brew install xcodegen tmux&#10;git clone https://github.com/lightsoft-dev/pass.git &amp;&amp; cd pass&#10;make open">copy</button></div>
+        <pre><span class="prompt">$</span> brew install xcodegen tmux
+<span class="prompt">$</span> git clone https://github.com/lightsoft-dev/pass.git <span class="comment">&amp;&amp;</span> cd pass
+<span class="prompt">$</span> make open
+<span class="ok">✓</span> Debug app installed at /Applications/Pass.app</pre>
+      </div>
+      <div class="grid">
+        <article class="card third"><div class="card-top"><span class="card-no">R</span><h3>Runtime</h3></div><p><b>tmux is required</b>; Git is recommended. Pass can install tmux through Homebrew during onboarding.</p><div class="meta"><span class="pill now">available</span></div></article>
+        <article class="card third"><div class="card-top"><span class="card-no">A</span><h3>Agents</h3></div><p>Detect Claude Code, Codex, and pi independently. You only need one agent installed to begin.</p><div class="meta"><span class="pill now">multi-agent UI</span></div></article>
+        <article class="card third"><div class="card-top"><span class="card-no">U</span><h3>Updates</h3></div><p>Signed Sparkle updates use the public GitHub release feed. Automatic checks never silently install an update.</p><div class="meta"><span class="pill now">signed feed</span></div></article>
+      </div>
+    </section>
+
+    <section class="doc-section" id="desktop">
+      <p class="section-mark">01 · Desktop control plane</p><h2>One surface for every agent</h2>
+      <p class="lede">Pass compresses session supervision into a keyboard-driven feed. Attention rises; quiet work stays quiet. Every view remains a projection of live tmux and Git state.</p>
+      <div class="grid">
+        <article class="card"><div class="card-top"><span class="card-no">01</span><h3>Global summon</h3></div><p>Raise Pass over any app and Space. Use it as an always-on-top floating panel or a normal window beside your editor. Position and size are remembered.</p><div class="meta"><span class="pill">⌘⌘ / ⌥Space</span><span class="pill">⌘⇧F mode</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">02</span><h3>Chat home</h3></div><p>Read every session’s latest response in one feed. Type to the selected session, use <b>@</b> to jump, or answer a pending permission with <b>y/n</b>.</p><div class="meta"><span class="pill now">live feed</span><span class="pill">safe injection</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">03</span><h3>Interactive terminal</h3></div><p>Open a card into a full-color terminal attached to tmux. Arrow keys, permission menus, interactive programs, resizing, and direct typing continue to work.</p><div class="meta"><span class="pill">⌘[ back</span><span class="pill">⌘⏎ Ghostty</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">04</span><h3>Attention routing</h3></div><p>Agent hooks normalize decisions, questions, prompts, and completions. Waiting sessions surface with branch, worktree badge, agent glyph, preview, and elapsed wait.</p><div class="meta"><span class="pill now">event-driven</span><span class="pill">no polling</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">05</span><h3>Projects and repositories</h3></div><p>Register one repo, several folders, or a parent directory. Create an empty Git repo or paste an HTTPS/SSH GitHub URL to clone with your existing credentials.</p><div class="meta"><span class="pill now">GitHub import</span><span class="pill">folder scan</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">06</span><h3>Ambient control</h3></div><p>Permission, input, and finished notifications appear natively. The menu-bar badge remains available if notifications are disabled; Settings holds launch and integration controls.</p><div class="meta"><span class="pill">menu bar</span><span class="pill">notifications</span></div></article>
+        <article class="card wide"><div class="card-top"><span class="card-no">07</span><h3>Share into a session</h3></div><p>From the macOS share sheet, send a URL, text, note, image, or file into a running agent session—or start a new session in a saved project with the payload as its first prompt.</p><div class="meta"><span class="pill now">PassShare</span><span class="pill">existing / new session</span></div></article>
+      </div>
+      <div class="keys" aria-label="Desktop keyboard shortcuts">
+        <div class="key"><span><kbd>⌘⌘</kbd> / <kbd>⌥ Space</kbd></span><b>Summon or dismiss</b></div><div class="key"><span><kbd>@</kbd></span><b>Jump to project or session</b></div>
+        <div class="key"><span><kbd>Y</kbd> <kbd>N</kbd></span><b>Answer a permission</b></div><div class="key"><span><kbd>⌘ ↑</kbd> <kbd>⌘ ↓</kbd></span><b>Move between sessions</b></div>
+        <div class="key"><span><kbd>⏎</kbd></span><b>Send reply or open terminal</b></div><div class="key"><span><kbd>⌘ ⏎</kbd></span><b>Open session in Ghostty</b></div>
+        <div class="key"><span><kbd>⌘ [</kbd></span><b>Return to home feed</b></div><div class="key"><span><kbd>⌘ ⇧ F</kbd></span><b>Float or dock panel</b></div>
+        <div class="key"><span><kbd>⌘ P</kbd></span><b>Open quick commands</b></div><div class="key"><span><kbd>⌘ ⌫</kbd></span><b>Kill with confirmation</b></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="sessions">
+      <p class="section-mark">02 · Persistence model</p><h2>tmux is the database</h2>
+      <p class="lede">Pass creates or adopts ordinary <code>pass-*</code> tmux sessions. It derives cwd, repository, branch, worktree, activity, and agent identity live—so closing Pass never closes the work.</p>
+      <div class="flow">
+        <div><small>01 / CREATE</small><b>Start or adopt</b><p>Create from Pass, clone GitHub, or discover an existing pass-* session.</p></div>
+        <div><small>02 / OBSERVE</small><b>Read live state</b><p>Hooks report attention while tmux and Git provide identity and activity.</p></div>
+        <div><small>03 / DECIDE</small><b>Reply safely</b><p>Bracketed paste sends replies; bare shell prompts reject chat injection.</p></div>
+        <div><small>04 / HAND OFF</small><b>Attach anywhere</b><p>Use the embedded terminal or attach from another terminal.</p></div>
+      </div>
+      <div class="terminal"><div class="term-head"><i></i><i></i><i></i><span>session handoff</span><button class="copy" data-copy="tmux list-sessions&#10;tmux attach -t pass-my-project">copy</button></div><pre><span class="prompt">$</span> tmux list-sessions
+<span class="ok">pass-my-project</span>: 1 windows
+<span class="prompt">$</span> tmux attach -t pass-my-project</pre></div>
+      <div class="callout info"><b>Worktrees stay legible.</b> Linked worktree sessions group beneath their main repository and carry a ⧉ badge while retaining their branch and cwd.</div>
+    </section>
+
+    <section class="doc-section" id="browser">
+      <p class="section-mark">03 · Embedded browser</p><h2>See it. Then operate it.</h2>
+      <p class="lede">Each session can keep a persistent WKWebView beside its terminal. The same page is visible to the person and controllable through <code>passcli</code>, creating a reviewable automation loop without arbitrary JavaScript execution.</p>
+      <div class="keys">
+        <div class="key"><span><kbd>⌘ B</kbd></span><b>Show or hide browser</b></div><div class="key"><span><kbd>⌘ L</kbd></span><b>Focus URL field</b></div>
+        <div class="key"><span><kbd>⌘ ⇧ B</kbd></span><b>Toggle browser full width</b></div><div class="key"><span><kbd>⌘ +</kbd> <kbd>⌘ −</kbd> <kbd>⌘ 0</kbd></span><b>Zoom / reset</b></div>
+      </div>
+      <div class="flow">
+        <div><small>01 / OPEN</small><b>Navigate</b><p>Open HTTP(S), localhost shorthand, a bare port, or a local file.</p></div>
+        <div><small>02 / SNAPSHOT</small><b>Observe</b><p>Receive a revision plus stable refs for interactive elements.</p></div>
+        <div><small>03 / ACT</small><b>Interact</b><p>Click, fill, type, select, press, or scroll using current refs.</p></div>
+        <div><small>04 / VERIFY</small><b>Read or capture</b><p>Read text/HTML, snapshot again, or inspect a viewport PNG.</p></div>
+      </div>
+      <div class="terminal"><div class="term-head"><i></i><i></i><i></i><span>agent browser loop</span><button class="copy" data-copy="passcli browser open localhost:5173&#10;passcli browser snapshot --json&#10;passcli browser click '@e1' --revision 12&#10;passcli browser screenshot --out /tmp/result.png">copy</button></div><pre><span class="prompt">$</span> passcli browser open localhost:5173
+<span class="prompt">$</span> passcli browser snapshot --json
+<span class="comment">{ "revision": 12, "elements": [{ "ref": "@e1", "role": "button", "name": "Save" }] }</span>
+<span class="prompt">$</span> passcli browser click '@e1' --revision 12
+<span class="prompt">$</span> passcli browser screenshot --out /tmp/result.png</pre></div>
+      <div class="grid">
+        <article class="card"><div class="card-top"><span class="card-no">S</span><h3>Stable actions</h3></div><p>Supplying a snapshot revision makes Pass reject stale refs after navigation or DOM changes.</p></article>
+        <article class="card"><div class="card-top"><span class="card-no">V</span><h3>Visible state</h3></div><p>Automation operates the same persistent page the user sees. Background open can load quietly.</p></article>
+        <article class="card"><div class="card-top"><span class="card-no">L</span><h3>Limited surface</h3></div><p>Only <b>http, https, and file</b> are accepted. There is no raw JavaScript, selector, cookie, or credential command.</p></article>
+        <article class="card"><div class="card-top"><span class="card-no">T</span><h3>Private text</h3></div><p>Values passed to fill, type, and select are never echoed in human-readable output.</p></article>
+      </div>
+    </section>
+
+    <section class="doc-section" id="cli">
+      <p class="section-mark">04 · passcli</p><h2>Complete command reference</h2>
+      <p class="lede"><code>passcli</code> is the local control plane for the running Pass app. Onboarding links it at <code>~/.pass/bin/passcli</code>, and Pass sessions receive <code>$PASS_CLI</code> automatically.</p>
+      <div class="grid">
+        <article class="card third"><div class="card-top"><span class="card-no">1</span><h3>Binary</h3></div><p>Prefer <code>$PASS_CLI</code>, then <code>~/.pass/bin/passcli</code>, then PATH.</p></article>
+        <article class="card third"><div class="card-top"><span class="card-no">2</span><h3>Session</h3></div><p><code>--session</code> wins, then <code>$PASS_SESSION</code>, then enclosing tmux.</p></article>
+        <article class="card third"><div class="card-top"><span class="card-no">3</span><h3>Server</h3></div><p>Use <code>$PASS_PORT</code> when set; otherwise connect to loopback port 49817.</p></article>
+      </div>
+      <div class="callout"><b>Start with status.</b> Most commands require Pass to be running. Check reachability before session selection or browser state.</div>
+      <div class="filter"><label for="command-filter">/</label><input id="command-filter" type="search" placeholder="Filter commands — snapshot, screenshot, config…" autocomplete="off"><span class="count" id="result-count">16 entries</span></div>
+      <div class="command-list" id="command-list">
+        <details class="command" data-command="status running health json"><summary><span class="command-name">passcli status</span><span class="command-desc">Check whether the Pass loopback server is reachable.</span></summary><div class="command-body"><pre class="syntax">passcli status [--json]</pre></div></details>
+        <details class="command" data-command="browser open url file localhost background json session"><summary><span class="command-name">browser open</span><span class="command-desc">Open or reuse the browser beside a session terminal.</span></summary><div class="command-body"><pre class="syntax">passcli browser open &lt;url&gt; [--session &lt;name&gt;] [--background] [--json]</pre><div class="option"><code>&lt;url&gt;</code><span>HTTP(S), localhost:5173, :5173, 5173, foo.com/path, or ./dist/index.html.</span></div><div class="option"><code>--background</code><span>Load quietly and add a browser badge to the session.</span></div></div></details>
+        <details class="command" data-command="browser close pane json session"><summary><span class="command-name">browser close</span><span class="command-desc">Close the target session’s browser pane.</span></summary><div class="command-body"><pre class="syntax">passcli browser close [--session &lt;name&gt;] [--json]</pre></div></details>
+        <details class="command" data-command="browser tabs list pages sessions json"><summary><span class="command-name">browser tabs</span><span class="command-desc">List open pages across all sessions.</span></summary><div class="command-body"><pre class="syntax">passcli browser tabs [--json]</pre></div></details>
+        <details class="command" data-command="browser snapshot elements refs revision all json session observe"><summary><span class="command-name">browser snapshot</span><span class="command-desc">List interactive elements, stable refs, and revision.</span></summary><div class="command-body"><pre class="syntax">passcli browser snapshot [--all] [--session &lt;name&gt;] [--json]</pre><div class="option"><code>--all</code><span>Include interactive elements outside the viewport.</span></div></div></details>
+        <details class="command" data-command="browser click ref revision json session action"><summary><span class="command-name">browser click</span><span class="command-desc">Click a ref from the latest snapshot.</span></summary><div class="command-body"><pre class="syntax">passcli browser click &lt;ref&gt; [--revision &lt;n&gt;] [--session &lt;name&gt;] [--json]</pre></div></details>
+        <details class="command" data-command="browser fill replace editable text ref revision json session"><summary><span class="command-name">browser fill</span><span class="command-desc">Replace an editable element’s value.</span></summary><div class="command-body"><pre class="syntax">passcli browser fill &lt;ref&gt; &lt;text&gt; [--revision &lt;n&gt;] [--session &lt;name&gt;] [--json]</pre></div></details>
+        <details class="command" data-command="browser type append editable text ref revision json session"><summary><span class="command-name">browser type</span><span class="command-desc">Type without clearing the current value.</span></summary><div class="command-body"><pre class="syntax">passcli browser type &lt;ref&gt; &lt;text&gt; [--revision &lt;n&gt;] [--session &lt;name&gt;] [--json]</pre></div></details>
+        <details class="command" data-command="browser select option value ref revision json session"><summary><span class="command-name">browser select</span><span class="command-desc">Select an option by value.</span></summary><div class="command-body"><pre class="syntax">passcli browser select &lt;ref&gt; &lt;value&gt; [--revision &lt;n&gt;] [--session &lt;name&gt;] [--json]</pre></div></details>
+        <details class="command" data-command="browser press key enter space tab escape ref revision json session"><summary><span class="command-name">browser press</span><span class="command-desc">Press Enter, Space, Tab, Escape, or one character.</span></summary><div class="command-body"><pre class="syntax">passcli browser press &lt;key&gt; [--ref &lt;ref&gt;] [--revision &lt;n&gt;] [--session &lt;name&gt;] [--json]</pre><div class="option"><code>--ref</code><span>Optional; defaults to the focused element or page.</span></div></div></details>
+        <details class="command" data-command="browser scroll up down left right amount pixels revision json session"><summary><span class="command-name">browser scroll</span><span class="command-desc">Scroll by CSS pixels in one direction.</span></summary><div class="command-body"><pre class="syntax">passcli browser scroll &lt;up|down|left|right&gt; [&lt;amount&gt;] [--revision &lt;n&gt;] [--session &lt;name&gt;] [--json]</pre><div class="option"><code>&lt;amount&gt;</code><span>Defaults to 600; range 1–10000 CSS pixels.</span></div></div></details>
+        <details class="command" data-command="browser screenshot png capture viewport out json session visual"><summary><span class="command-name">browser screenshot</span><span class="command-desc">Capture the visible viewport as a PNG.</span></summary><div class="command-body"><pre class="syntax">passcli browser screenshot [--out &lt;path&gt;] [--session &lt;name&gt;] [--json]</pre><div class="option"><code>-o, --out</code><span>Defaults beneath ~/.pass/screenshots.</span></div></div></details>
+        <details class="command" data-command="browser read content text html json session observe"><summary><span class="command-name">browser read</span><span class="command-desc">Print visible page text or outer HTML.</span></summary><div class="command-body"><pre class="syntax">passcli browser read [--format &lt;text|html&gt;] [--session &lt;name&gt;] [--json]</pre></div></details>
+        <details class="command" data-command="config url add pass-config label project localhost file json session"><summary><span class="command-name">config url add</span><span class="command-desc">Save a URL to pass-config.json and refresh Pass.</span></summary><div class="command-body"><pre class="syntax">passcli config url add &lt;url&gt; [--label &lt;label&gt;] [--session &lt;name&gt;] [--json]</pre></div></details>
+        <details class="command" data-command="extension validate manifest schema permissions path json author"><summary><span class="command-name">extension validate</span><span class="command-desc">Validate with the running app’s exact schema.</span></summary><div class="command-body"><pre class="syntax">passcli extension validate [&lt;path&gt;] [--json]</pre><div class="option"><code>&lt;path&gt;</code><span>Defaults to the current directory. Validation is read-only.</span></div></div></details>
+        <details class="command" data-command="common flags session json revision version help"><summary><span class="command-name">common options</span><span class="command-desc">Flags shared across command families.</span></summary><div class="command-body"><div class="option"><code>--session &lt;name&gt;</code><span>Target a Pass session explicitly.</span></div><div class="option"><code>--json</code><span>Machine-readable output.</span></div><div class="option"><code>--revision &lt;n&gt;</code><span>Reject stale browser actions.</span></div><div class="option"><code>--version / --help</code><span>Print installed version or authoritative help.</span></div></div></details>
+      </div>
+      <table aria-label="passcli exit codes"><thead><tr><th>Exit</th><th>Meaning</th><th>Next move</th></tr></thead><tbody>
+        <tr><td>0</td><td>Success.</td><td>Observe the result before the next browser action.</td></tr>
+        <tr><td>1</td><td>Pass rejected the request.</td><td>Read stderr and correct input or page state.</td></tr>
+        <tr><td>2</td><td>No target session.</td><td>Supply <code>--session</code> or run inside a Pass session.</td></tr>
+        <tr><td>3</td><td>Pass is unreachable.</td><td>Start Pass and check <code>$PASS_PORT</code> plus status.</td></tr>
+        <tr><td>64</td><td>Malformed command.</td><td>Run the command with <code>--help</code>.</td></tr>
+      </tbody></table>
+    </section>
+
+    <section class="doc-section" id="extensions">
+      <p class="section-mark">05 · Extension system</p><h2>Make Pass yours</h2>
+      <p class="lede">Extensions live at <code>~/.pass/extensions/&lt;id&gt;</code>. They contribute quick commands, event rules, scripts, notifications, session actions, URLs, and constrained Web UI windows. Installed or generated code stays disabled until reviewed.</p>
+      <div class="grid">
+        <article class="card"><div class="card-top"><span class="card-no">M</span><h3>Extension Market</h3></div><p>Browse public listings or paste a Git repo. Pass checks repository limits and manifest identity, then keeps the copy disabled.</p><div class="meta"><span class="pill now">browse / install</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">&gt;</span><h3>Quick commands</h3></div><p>Enabled commands appear as <code>&gt;command-id</code> in ⌘P. Context may be global, session, or project.</p><div class="meta"><span class="pill">apiVersion 1+</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">E</span><h3>Event rules</h3></div><p>Observe attention pending/resolved and session created/ended events, filter them, then run one declared effect.</p><div class="meta"><span class="pill">observation only</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">W</span><h3>Web UI windows</h3></div><p>apiVersion 2 can open isolated local HTML windows with getSnapshot, on, runAction, and closeWindow.</p><div class="meta"><span class="pill">strict CSP</span></div></article>
+        <article class="card wide"><div class="card-top"><span class="card-no">AI</span><h3>AI Extension Builder</h3></div><p>Describe a workflow. Pass starts a visible local agent session, then shows every generated file, permission, validation result, and summary. Approval records the content fingerprint; a changed file disables the extension on reload.</p><div class="meta"><span class="pill now">human approval</span><span class="pill">fingerprint</span></div></article>
+      </div>
+      <h3 style="margin-top:34px">Permission catalog</h3>
+      <div class="permissions">
+        <div class="permission"><code>run:script</code><span>Run a bundled script.</span></div><div class="permission"><code>session:send</code><span>Send text to a session.</span></div>
+        <div class="permission"><code>session:create</code><span>Create a visible terminal session.</span></div><div class="permission"><code>session:read</code><span>Read a session snapshot in Web UI.</span></div>
+        <div class="permission"><code>notify</code><span>Post a macOS notification.</span></div><div class="permission"><code>open:url</code><span>Open a URL in its handler.</span></div>
+        <div class="permission"><code>ui:window</code><span>Open extension HTML.</span></div><div class="permission"><code>network:pass-api</code><span>Call the narrow Pass API allowlist.</span></div>
+        <div class="permission"><code>events:attention</code><span>Subscribe to attention.*.</span></div><div class="permission"><code>events:session</code><span>Subscribe to session.*.</span></div>
+      </div>
+      <div class="terminal"><div class="term-head"><i></i><i></i><i></i><span>extension authoring</span><button class="copy" data-copy="$PASS_CLI extension validate .">copy</button></div><pre><span class="prompt">$</span> "$PASS_CLI" extension validate .
+<span class="ok">valid</span> extension.json · resources contained · permissions satisfied</pre></div>
+      <div class="callout"><b>Extensions are user-account code.</b> Pass validates schema and path containment, but scripts run with the user’s account and must be reviewed before enablement.</div>
+    </section>
+
+    <section class="doc-section" id="features">
+      <p class="section-mark">06 · Experimental workflow</p><h2>Executable feature documents</h2>
+      <p class="lede">Feature contracts can live with code in <code>.pass/features/*.json</code>, connecting requirements, an implementation agent, preview commands, evidence, and human review in a commit-friendly document.</p>
+      <div class="callout"><b>Experimental status.</b> The implementation exists, but Feature Documents are disabled in standard builds while the workflow is stabilized.</div>
+      <div class="flow">
+        <div><small>01 / DEFINE</small><b>Write contract</b><p>Requirements, acceptance criteria, local command/URL, and test guide.</p></div>
+        <div><small>02 / DELEGATE</small><b>Implement or verify</b><p>An agent records summary, files, checks, and lifecycle status.</p></div>
+        <div><small>03 / TRY</small><b>Start preview</b><p>Run the explicit dev command, open its URL, and follow the guide.</p></div>
+        <div><small>04 / REVIEW</small><b>Return feedback</b><p>Record rework notes. Only a person can mark verified.</p></div>
+      </div>
+    </section>
+
+    <section class="doc-section" id="devices">
+      <p class="section-mark">07 · Device and remote surfaces</p><h2>Leave the desktop, keep control</h2>
+      <p class="lede">Pass can place a physical device beside the terminal and has developer-preview clients for remote session control. The Mac remains authoritative for repositories, tmux, and agents.</p>
+      <div class="grid">
+        <article class="card"><div class="card-top"><span class="card-no">A</span><h3>Android pane</h3></div><p>Mirror a device or emulator with basic pointer control over USB/Wi-Fi. Optional runtime: <code>brew install scrcpy ffmpeg</code>.</p><div class="meta"><span class="pill now">video + pointer</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">i</span><h3>iPhone and iPad</h3></div><p>Use native trusted-USB capture. Unlock, trust the Mac, and allow camera access. Mirroring is view-only.</p><div class="meta"><span class="pill now">native capture</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">M</span><h3>Mobile remote</h3></div><p>The Expo preview lists and creates sessions, sends messages, and answers decisions through an outbound-only gateway and relay.</p><div class="meta"><span class="pill preview">developer preview</span></div></article>
+        <article class="card"><div class="card-top"><span class="card-no">D</span><h3>Steam Deck client</h3></div><p>A controller-first SteamOS client supports discovery, creation, terminal input, messages, and permission answers.</p><div class="meta"><span class="pill preview">developer client</span></div></article>
+      </div>
+      <div class="callout info"><b>Remote boundary.</b> The desktop dials out over TLS; the local hook/CLI server is never exposed. Current shared-token pairing is development-only.</div>
+    </section>
+
+    <section class="doc-section" id="reference">
+      <p class="section-mark">08 · Reference</p><h2>Diagnose by boundary</h2>
+      <p class="lede">Most failures belong to one of four boundaries: app reachability, session targeting, browser state, or extension validity. Check them in that order.</p>
+      <table aria-label="Troubleshooting reference"><thead><tr><th>Symptom</th><th>Check</th><th>Resolution</th></tr></thead><tbody>
+        <tr><td>CLI unreachable</td><td>Status exits 3.</td><td>Launch Pass, confirm <code>PASS_PORT</code>, and verify 127.0.0.1:49817.</td></tr>
+        <tr><td>No session</td><td>No explicit, environment, or tmux target.</td><td>Use <code>browser tabs</code>, then supply <code>--session</code>.</td></tr>
+        <tr><td>Stale ref</td><td>Page changed after snapshot.</td><td>Snapshot again and use only the new revision.</td></tr>
+        <tr><td>No open page</td><td>Observation/action precedes open.</td><td>Open a URL for the same session first.</td></tr>
+        <tr><td>CLI/app mismatch</td><td>Linked CLI is from another build.</td><td>Rebuild or relaunch so the symlink points into the current bundle.</td></tr>
+        <tr><td>Extension disabled</td><td>Validation failed or reviewed file changed.</td><td>Validate, review all files/permissions, and approve the fingerprint.</td></tr>
+      </tbody></table>
+      <div class="links">
+        <a href="https://github.com/lightsoft-dev/pass/blob/main/BUILD.md" rel="noopener">Build guide ↗</a>
+        <a href="https://github.com/lightsoft-dev/pass/blob/main/docs/BROWSER.md" rel="noopener">Browser architecture ↗</a>
+        <a href="https://github.com/lightsoft-dev/pass/blob/main/docs/EXTENSIONS.md" rel="noopener">Extension design ↗</a>
+        <a href="https://github.com/lightsoft-dev/pass/blob/main/Resources/EXTENSION_API.md" rel="noopener">Extension API ↗</a>
+        <a href="https://github.com/lightsoft-dev/pass/blob/main/docs/mobile-remote-architecture.md" rel="noopener">Remote architecture ↗</a>
+        <a href="https://github.com/lightsoft-dev/pass/issues" rel="noopener">Report an issue ↗</a>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer><div class="wrap footer"><span class="brand"><img src="app-icon.svg" alt="">pass docs</span><span>dev.lightsoft.pass</span><span class="right"><a href="index.html">overview</a><a href="https://github.com/lightsoft-dev/pass" rel="noopener">source ↗</a><span>© 2026 Lightsoft</span></span></div></footer>
+
+<script>
+(function(){var el=document.getElementById("clock");function tick(){var d=new Date();el.textContent=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")}tick();setInterval(tick,15000)})();
+(function(){var links=[].slice.call(document.querySelectorAll("[data-rail], [data-spy]"));var sections=[].slice.call(document.querySelectorAll(".doc-section"));function update(){var y=window.scrollY+130,current="start";sections.forEach(function(section){if(section.offsetTop<=y)current=section.id});links.forEach(function(link){var id=link.getAttribute("data-rail")||link.getAttribute("data-spy");link.classList.toggle("active",id===current);if(link.hasAttribute("data-spy"))link.classList.toggle("cur",id===current)})}window.addEventListener("scroll",update,{passive:true});update()})();
+(function(){var rail=document.getElementById("rail"),button=document.getElementById("rail-toggle");button.addEventListener("click",function(){var open=rail.classList.toggle("open");button.setAttribute("aria-expanded",String(open))});rail.querySelectorAll("a").forEach(function(link){link.addEventListener("click",function(){rail.classList.remove("open");button.setAttribute("aria-expanded","false")})})})();
+(function(){var input=document.getElementById("command-filter"),items=[].slice.call(document.querySelectorAll(".command")),count=document.getElementById("result-count");input.addEventListener("input",function(){var q=input.value.trim().toLowerCase(),shown=0;items.forEach(function(item){var match=!q||(item.getAttribute("data-command")+" "+item.textContent).toLowerCase().indexOf(q)>-1;item.hidden=!match;if(match)shown++});count.textContent=shown+" entr"+(shown===1?"y":"ies")})})();
+document.querySelectorAll("[data-copy]").forEach(function(button){button.addEventListener("click",function(){var value=button.getAttribute("data-copy"),old=button.textContent;navigator.clipboard.writeText(value).then(function(){button.textContent="copied";setTimeout(function(){button.textContent=old},1400)})})});
+</script>
+</body>
+</html>
