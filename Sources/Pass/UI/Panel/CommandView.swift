@@ -17,9 +17,11 @@ struct CommandView: View {
     @State private var confirmHookDismissal = false   // acknowledge degraded core functionality
     @State private var showQuickCommand = false       // ⌘P quick command (hidden by default)
     @State private var newSessionMode = false         // ⌘N: results are PROJECTS, ⏎ starts a session
+    @State private var isCloningRepository = false    // keep the palette stable while git clone runs
     @State private var terminal: TerminalController?  // live client attached to the selected session
     @State private var terminalTarget: String?        // which session the home terminal shows
     @State private var pool = TerminalPool()          // recent clients stay attached → instant switching
+    @State private var remoteSelection: RemoteSessionSelection?
     @FocusState private var omniboxFocused: Bool
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
@@ -41,6 +43,7 @@ struct CommandView: View {
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
     private var newSessionAgent: AgentKind { AgentKind(rawValue: newSessionAgentRaw) ?? .claude }
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
+    private var hasAnySessions: Bool { !sessions.isEmpty || appModel.remoteControllers.sessionCount > 0 }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
     /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
     /// and is simply stripped). `+branch` starts a worktree; `>command` narrows to extensions.
@@ -72,7 +75,7 @@ struct CommandView: View {
     /// The centered quick command is up: summoned with ⌘P, or forced when there's no session
     /// yet (creating one is the only possible action). It hides after sending a message, or
     /// with another ⌘P, or with Esc (the panel itself never closes on Esc).
-    private var showsCommandBar: Bool { showQuickCommand || sessions.isEmpty }
+    private var showsCommandBar: Bool { showQuickCommand || !hasAnySessions }
     /// The quick command currently owns the keyboard (otherwise the terminal does).
     private var typingInBar: Bool { showsCommandBar && omniboxFocused }
 
@@ -102,6 +105,12 @@ struct CommandView: View {
         let needle = jumpToken.trimmingCharacters(in: .whitespaces)
         // ⌘N mode: the list is PROJECTS to start a session in (all of them until you type).
         if newSessionMode {
+            let parent = UserDefaults.standard.string(
+                forKey: ProjectCreationService.defaultParentDirectoryKey
+            )
+            if let repository = ProjectCreationService.githubRepository(from: needle) {
+                return [.githubRepository(repository, parentDirectory: parent)]
+            }
             var items: [PaletteItem] = projects
                 .filter { needle.isEmpty || Fuzzy.matches(needle, $0.name) }
                 .map { .project($0) }
@@ -109,9 +118,6 @@ struct CommandView: View {
                 $0.name.compare(needle, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
             }
             if !needle.isEmpty, !exactMatch, ProjectCreationService.isValidName(needle) {
-                let parent = UserDefaults.standard.string(
-                    forKey: ProjectCreationService.defaultParentDirectoryKey
-                )
                 items.append(.newProject(name: needle, parentDirectory: parent))
             }
             return items
@@ -200,6 +206,10 @@ struct CommandView: View {
                 )
             }
             .onAppear { appModel.keyHandler = handleNav }
+            .sheet(item: $remoteSelection) { selection in
+                RemoteSessionDetailView(connection: selection.connection, sessionName: selection.sessionName)
+                    .frame(minWidth: 760, minHeight: 620)
+            }
             .confirmationDialog(
                 "Kill session?",
                 isPresented: Binding(get: { pendingKill != nil }, set: { if !$0 { pendingKill = nil } }),
@@ -326,12 +336,15 @@ struct CommandView: View {
                 return true
             }
             if newSessionMode {
+                guard !isCloningRepository else { return true }
                 switch jumpSelectedItem {
                 case .project(let p):
                     appModel.createSession(projectDir: p.rootPath, agent: newSessionAgent)
                     hideQuickCommand()
                 case .newProject(let name, _):
                     createProjectFromInput(name)
+                case .githubRepository(let repository, _):
+                    cloneRepositoryFromInput(repository)
                 default:
                     break
                 }
@@ -355,6 +368,8 @@ struct CommandView: View {
                     hideQuickCommand() // action done — watch the new session arrive
                 case .newProject(let name, _):
                     createProjectFromInput(name)
+                case .githubRepository(let repository, _):
+                    cloneRepositoryFromInput(repository)
                 case .command(let c):
                     runExtensionCommand(c)
                 }
@@ -363,7 +378,7 @@ struct CommandView: View {
             if e.command { openSelectedTerminal(); return true }
             guard typingInBar else { return false } // plain ⏎ goes into the terminal
             if query.hasPrefix("+") { createWorktreeFromInput() } // confirms + closes (errors reopen)
-            else if !sessions.isEmpty { hideQuickCommand() } // empty ⏎ → back to the terminal
+            else if hasAnySessions { hideQuickCommand() } // empty ⏎ → back to the session list
             return true
         case .delete:
             // ⌘⌫ → confirm killing the selected session.
@@ -372,9 +387,10 @@ struct CommandView: View {
         case .markChecked:
             return true // handled before the route guard
         case .escape:
+            if isCloningRepository { return true }
             if pendingKill != nil { pendingKill = nil; return true }
             if typingInBar {
-                if !sessions.isEmpty { hideQuickCommand() } // Esc closes the ⌘P bar
+                if hasAnySessions { hideQuickCommand() } // Esc closes the ⌘P bar
                 return true
             }
             // The terminal owns Esc (interrupting the agent). Use the selected global shortcut.
@@ -535,7 +551,9 @@ struct CommandView: View {
             // Dim the home behind; click outside dismisses (unless it's the only UI).
             Color.black.opacity(0.22)
                 .contentShape(Rectangle())
-                .onTapGesture { if !sessions.isEmpty { hideQuickCommand() } }
+                .onTapGesture {
+                    if hasAnySessions, !isCloningRepository { hideQuickCommand() }
+                }
             commandBar
                 .frame(width: min(540, maxWidth - 48))
                 .shadow(color: .black.opacity(0.35), radius: 28, y: 10)
@@ -555,6 +573,7 @@ struct CommandView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 17))
                     .focused($omniboxFocused)
+                    .disabled(isCloningRepository)
                     .onChange(of: query) { old, new in handleQueryChange(old: old, new: new) }
                     // Tab completes the @-token here — the field editor eats Tab before
                     // performKeyEquivalent sees it, so intercept it at the SwiftUI layer.
@@ -563,14 +582,25 @@ struct CommandView: View {
                         return .ignored
                     }
                     .onAppear { refocusField() } // grab focus the instant this field mounts
-                if newSessionMode { newSessionAgentPicker }
+                if newSessionMode {
+                    if isCloningRepository {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        githubImportButton
+                        newSessionAgentPicker
+                    }
+                }
             }
             .padding(.horizontal, 16).padding(.vertical, 13)
 
             Divider()
             Group {
                 if let status {
-                    Text(status).foregroundStyle(.orange)
+                    if isCloningRepository {
+                        Text(status).foregroundStyle(.secondary)
+                    } else {
+                        Text(status).foregroundStyle(.orange)
+                    }
                 } else {
                     Text(hint).foregroundStyle(.tertiary)
                 }
@@ -618,13 +648,33 @@ struct CommandView: View {
         .fixedSize()
     }
 
+    /// A compact, explicit affordance makes repository import discoverable without turning the
+    /// keyboard-first palette into a multi-step wizard. Clicking it seeds the URL prefix; pasting
+    /// a full URL works directly without using the button.
+    private var githubImportButton: some View {
+        Button {
+            query = "https://github.com/"
+            jumpSelection = 0
+            refocusField()
+            FieldEditorFix.cursorToEnd()
+        } label: {
+            HStack(spacing: 4) {
+                Text("GitHub").font(.system(size: 11, weight: .semibold))
+                Image(systemName: "arrow.down").font(.system(size: 8, weight: .bold))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(.secondary.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Clone a GitHub repository")
+        .fixedSize()
+    }
+
     @ViewBuilder
     private var jumpResults: some View {
         if jumpItems.isEmpty {
-            Text(isCommandMode
-                 ? "No extension commands — install & enable extensions in Settings."
-                 : selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
-                 ?? "No matches — try a different name.")
+            Text(emptyResultsMessage)
                 .font(.system(size: 12)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16).padding(.vertical, 10)
@@ -651,14 +701,30 @@ struct CommandView: View {
     }
 
     private var placeholder: String {
-        newSessionMode ? "new session — project name" : "search — session name, then your message"
+        newSessionMode ? "project name or GitHub URL" : "search — session name, then your message"
+    }
+
+    private var emptyResultsMessage: String {
+        if isCommandMode {
+            return "No extension commands — install & enable extensions in Settings."
+        }
+        if newSessionMode {
+            return ProjectCreationService.looksLikeGitHubRepositoryInput(query)
+                ? "Use a repository URL like https://github.com/owner/repository."
+                : "No matching projects — type a project name or paste a GitHub URL."
+        }
+        return selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
+            ?? "No matches — try a different name."
     }
 
     private var hint: String {
         if newSessionMode {
             if case .project(let p)? = jumpSelectedItem { return "⏎ new \(newSessionAgent.rawValue) session in \(p.name)" }
             if case .newProject(let name, _)? = jumpSelectedItem { return "⏎ create “\(name)” + start \(newSessionAgent.rawValue)" }
-            return "type a project name · select an existing project or create a new one · Esc close"
+            if case .githubRepository(let repository, _)? = jumpSelectedItem {
+                return "⏎ clone \(repository.displayName) + start \(newSessionAgent.rawValue)"
+            }
+            return "select a project · create by name · or paste a GitHub URL · Esc close"
         }
         if query.hasPrefix("+") {
             let branch = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
@@ -690,7 +756,7 @@ struct CommandView: View {
         if appModel.sessions?.tmuxMissing == true {
             message("exclamationmark.triangle", "tmux not found",
                     "Install tmux (brew install tmux) and reopen pass.")
-        } else if orderedSessions.isEmpty {
+        } else if orderedSessions.isEmpty && appModel.remoteControllers.sessionCount == 0 {
             message("bubble.left.and.bubble.right", "No sessions yet",
                     "@ to start one, or use New session… from the menu bar.")
         } else if homeMode != .stack {
@@ -700,6 +766,9 @@ struct CommandView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
+                        if !appModel.remoteControllers.connections.isEmpty, !orderedSessions.isEmpty {
+                            SessionMachineHeader.local
+                        }
                         ForEach(orderedSessions) { s in
                             CompactSessionCard(session: s, selected: s.name == selectedSession?.name,
                                                onSelect: { selectedSessionName = s.name },
@@ -709,6 +778,7 @@ struct CommandView: View {
                                                browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
                                 .transition(rowTransition)
                         }
+                        remoteSessionRows
                     }
                     .padding(8)
                     .animation(.spring(response: 0.34, dampingFraction: 0.82), value: orderedSessions.map(\.id))
@@ -725,6 +795,9 @@ struct CommandView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
+                        if !appModel.remoteControllers.connections.isEmpty, !orderedSessions.isEmpty {
+                            SessionMachineHeader.local
+                        }
                         ForEach(orderedSessions) { s in
                             Group {
                                 if s.name == selectedSession?.name {
@@ -744,6 +817,7 @@ struct CommandView: View {
                             }
                             .transition(rowTransition)
                         }
+                        remoteSessionRows
                     }
                     .padding(8)
                     .animation(.spring(response: 0.34, dampingFraction: 0.82), value: orderedSessions.map(\.id))
@@ -751,6 +825,24 @@ struct CommandView: View {
                 .onChange(of: selectedSessionName) { _, name in
                     guard let name else { return }
                     withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(name, anchor: .center) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var remoteSessionRows: some View {
+        ForEach(appModel.remoteControllers.connections) { connection in
+            SessionMachineHeader.remote(connection)
+                .padding(.top, 6)
+            if connection.sessions.isEmpty {
+                RemoteMachineEmptyRow(connection: connection)
+            } else {
+                ForEach(connection.sessions, id: \.name) { session in
+                    RemoteSessionCard(connection: connection, session: session) {
+                        remoteSelection = .init(connection: connection, sessionName: session.name)
+                    }
+                    .transition(rowTransition)
                 }
             }
         }
@@ -962,6 +1054,7 @@ struct CommandView: View {
 
     /// ⌘P — show/hide the quick command. Hiding it hands the keyboard back to the terminal.
     private func toggleQuickCommand() {
+        guard !isCloningRepository else { return }
         if showQuickCommand { hideQuickCommand() }
         else { status = nil; showQuickCommand = true; refocusField() }
     }
@@ -995,6 +1088,7 @@ struct CommandView: View {
         case .session(let s): token = jumpCompletionToken(s)
         case .project(let p): token = Slug.make(p.name)
         case .newProject(let name, _): token = name
+        case .githubRepository(let repository, _): token = repository.cloneURL
         case .command(let c): token = c.token
         }
         let msg = jumpMessage ?? ""
@@ -1092,6 +1186,28 @@ struct CommandView: View {
         }
     }
 
+    private func cloneRepositoryFromInput(_ repository: ProjectCreationService.GitHubRepository) {
+        guard !isCloningRepository else { return }
+        isCloningRepository = true
+        status = "Cloning \(repository.displayName)…"
+        Task {
+            let error = await appModel.cloneProject(
+                from: repository.cloneURL,
+                agent: newSessionAgent
+            )
+            isCloningRepository = false
+            if let error {
+                status = "⚠ GitHub: \(error)"
+                newSessionMode = true
+                showQuickCommand = true
+                query = repository.cloneURL
+                refocusField()
+            } else {
+                hideQuickCommand()
+            }
+        }
+    }
+
     private func activate(_ item: PaletteItem) {
         switch item {
         case .session(let s):
@@ -1102,6 +1218,8 @@ struct CommandView: View {
             query = ""
         case .newProject(let name, _):
             createProjectFromInput(name)
+        case .githubRepository(let repository, _):
+            cloneRepositoryFromInput(repository)
         case .command(let c):
             runExtensionCommand(c)
         }
@@ -1503,6 +1621,272 @@ struct CompactSessionCard: View {
     }
 }
 
+private struct RemoteSessionSelection: Identifiable {
+    let connection: RemoteControllerConnection
+    let sessionName: String
+    let desktopID: String
+
+    @MainActor
+    init(connection: RemoteControllerConnection, sessionName: String) {
+        self.connection = connection
+        self.sessionName = sessionName
+        desktopID = connection.profile.desktopID
+    }
+
+    var id: String { "\(desktopID):\(sessionName)" }
+}
+
+/// The persistent machine plate is the visual safety rail for a mixed local/remote session list.
+/// It deliberately resembles a small equipment label rather than another app-level navigation tab.
+private struct SessionMachineHeader: View {
+    let name: String
+    let role: String
+    let status: Color
+    let detail: String
+
+    static var local: SessionMachineHeader {
+        .init(
+            name: Host.current().localizedName ?? "This Mac",
+            role: "LOCAL",
+            status: .green,
+            detail: "direct tmux"
+        )
+    }
+
+    static func remote(_ connection: RemoteControllerConnection) -> SessionMachineHeader {
+        .init(
+            name: connection.profile.desktopName,
+            role: "REMOTE",
+            status: connection.state.indicatorColor,
+            detail: connection.state.shortLabel
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(status).frame(width: 6, height: 6)
+                .shadow(color: status.opacity(0.4), radius: 3)
+            Text(name.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .lineLimit(1)
+            Text(role)
+                .font(.system(size: 8, weight: .black, design: .monospaced))
+                .padding(.horizontal, 5).padding(.vertical, 2)
+                .background(role == "REMOTE" ? Color.orange.opacity(0.15) : Color.secondary.opacity(0.12))
+                .foregroundStyle(role == "REMOTE" ? .orange : .secondary)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+            Spacer()
+            Text(detail.uppercased())
+                .font(.system(size: 8, weight: .medium, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct RemoteMachineEmptyRow: View {
+    let connection: RemoteControllerConnection
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: connection.state == .hostOffline ? "desktopcomputer.trianglebadge.exclamationmark" : "arrow.triangle.2.circlepath")
+            Text(connection.state == .hostOffline ? "Machine offline" : "Waiting for session inventory…")
+            Spacer()
+        }
+        .font(.system(size: 10, design: .monospaced))
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+    }
+}
+
+private struct RemoteSessionCard: View {
+    let connection: RemoteControllerConnection
+    let session: RemoteSessionDTO
+    let onSelect: () -> Void
+
+    private var needsUser: Bool {
+        session.attention.status == .decision || session.attention.status == .input || session.unacknowledged
+    }
+
+    private var preview: String {
+        let value = session.attention.preview ?? session.liveMessage ?? session.lastMessage ?? "waiting for input"
+        return value.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                Image(systemName: "network")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(session.displayName)
+                            .font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        Text(connection.profile.desktopName.uppercased())
+                            .font(.system(size: 7, weight: .black, design: .monospaced))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 4).padding(.vertical, 2)
+                            .overlay(RoundedRectangle(cornerRadius: 2).stroke(.orange.opacity(0.45)))
+                    }
+                    Text(preview)
+                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    HStack(spacing: 6) {
+                        AgentTag(agent: session.agent.localKind)
+                        Text("REMOTE")
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Spacer()
+                if needsUser {
+                    Image(systemName: session.attention.status == .decision ? "bolt.fill" : "pencil.line")
+                        .font(.system(size: 10)).foregroundStyle(.orange)
+                }
+                Text(RelativeTime.short(session.attention.receivedAt ?? session.lastActivity))
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(Color.primary.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(needsUser ? Color.orange : Color.orange.opacity(0.18), lineWidth: needsUser ? 1.5 : 1)
+        )
+        .help("Open on \(connection.profile.desktopName)")
+    }
+}
+
+private struct RemoteSessionDetailView: View {
+    let connection: RemoteControllerConnection
+    let sessionName: String
+    @State private var message = ""
+    @State private var result: String?
+
+    private var session: RemoteSessionDTO? {
+        connection.sessions.first { $0.name == sessionName }
+    }
+
+    private var terminalContent: String {
+        connection.terminalSnapshots[sessionName]?.content ?? "Waiting for terminal snapshot…"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if let session, session.attention.status == .decision {
+                decisionBar(session)
+                Divider()
+            }
+            ScrollView([.horizontal, .vertical]) {
+                Text(AnsiRenderer.attributed(
+                    terminalContent,
+                    font: .system(size: 11, design: .monospaced)
+                ))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(14)
+            }
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.75))
+            Divider()
+            composer
+        }
+        .background(.regularMaterial)
+        .task(id: sessionName) {
+            connection.openTerminal(session: sessionName)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(9))
+                guard !Task.isCancelled else { break }
+                connection.openTerminal(session: sessionName)
+            }
+        }
+        .onDisappear { connection.closeTerminal(session: sessionName) }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                SessionMachineHeader.remote(connection)
+                    .padding(.horizontal, -8)
+                Text(session?.displayName ?? sessionName)
+                    .font(.system(size: 18, weight: .semibold))
+                Text("\(session?.agent.rawValue.uppercased() ?? "AGENT") · \(session?.cwd ?? "")")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Button { connection.openTerminal(session: sessionName); connection.refresh() } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+            .controlSize(.small)
+        }
+        .padding(14)
+    }
+
+    private func decisionBar(_ session: RemoteSessionDTO) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bolt.fill").foregroundStyle(.orange)
+            Text(session.attention.preview ?? "This session needs a decision.")
+                .font(.system(size: 11)).lineLimit(2)
+            Spacer()
+            Button("Once") { connection.answerDecision(session: sessionName, decision: .allowOnce) }
+            Button("Always") { connection.answerDecision(session: sessionName, decision: .allowAll) }
+            Button("Deny", role: .destructive) { connection.answerDecision(session: sessionName, decision: .deny) }
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(Color.orange.opacity(0.08))
+    }
+
+    private var composer: some View {
+        HStack(spacing: 8) {
+            TextField("Send a message to this remote session", text: $message, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...4)
+                .onSubmit { submit() }
+            Button("Send") { submit() }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if let result { Text(result).font(.system(size: 9)).foregroundStyle(.secondary) }
+        }
+        .padding(12)
+    }
+
+    private func submit() {
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        connection.sendMessage(session: sessionName, text: text)
+        message = ""
+        result = "Sent to \(connection.profile.desktopName)"
+    }
+}
+
+private extension RemoteControllerConnectionState {
+    var shortLabel: String {
+        switch self {
+        case .connecting: return "connecting"
+        case .online: return "online"
+        case .hostOffline: return "offline"
+        case .error: return "link error"
+        }
+    }
+
+    var indicatorColor: Color {
+        switch self {
+        case .online: return .green
+        case .hostOffline: return .orange
+        case .connecting: return .secondary
+        case .error: return .red
+        }
+    }
+}
+
 private struct ConfigURLContextMenu: View {
     let session: Session
     @Environment(AppModel.self) private var appModel
@@ -1536,6 +1920,7 @@ enum PaletteItem: Identifiable {
     case session(Session)
     case project(Project)
     case newProject(name: String, parentDirectory: String?)
+    case githubRepository(ProjectCreationService.GitHubRepository, parentDirectory: String?)
     case command(ExtensionStore.PaletteCommand)
 
     var id: String {
@@ -1543,6 +1928,7 @@ enum PaletteItem: Identifiable {
         case .session(let s): return "s:" + s.name
         case .project(let p): return "p:" + p.rootPath
         case .newProject(let name, _): return "n:" + name
+        case .githubRepository(let repository, _): return "g:" + repository.cloneURL
         case .command(let c): return "c:" + c.id
         }
     }
@@ -1558,6 +1944,8 @@ struct PaletteRow: View {
             case .session(let s): sessionRow(s)
             case .project(let p): projectRow(p)
             case .newProject(let name, let parent): newProjectRow(name, parent: parent)
+            case .githubRepository(let repository, let parent):
+                githubRepositoryRow(repository, parent: parent)
             case .command(let c): commandRow(c)
             }
         }
@@ -1649,6 +2037,32 @@ struct PaletteRow: View {
             Spacer()
             Text("new project")
                 .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+
+    private func githubRepositoryRow(
+        _ repository: ProjectCreationService.GitHubRepository,
+        parent: String?
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Clone \(repository.displayName)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Text(parentPreview(repository.name, parent: parent))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer()
+            Text("GitHub ↓")
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
         }
     }
