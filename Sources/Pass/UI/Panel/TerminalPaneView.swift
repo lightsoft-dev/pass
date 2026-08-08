@@ -209,6 +209,15 @@ final class IMETerminalView: LocalProcessTerminalView {
                     if cmd { return nil }
                     return gestureUsedTmux ? eventForTmux(event) : event
                 }
+                // A normal drag leaves a persistent SwiftTerm selection. Surface a small
+                // action menu only after SwiftTerm has received mouse-up and finalized it.
+                // Option-drag belongs to tmux copy-mode and must remain untouched.
+                if moved, !gestureUsedTmux, let dragTerm {
+                    let menuPoint = dragTerm.convert(event.locationInWindow, from: nil)
+                    DispatchQueue.main.async { [weak dragTerm] in
+                        dragTerm?.showSelectionActions(at: menuPoint)
+                    }
+                }
                 return gestureUsedTmux ? eventForTmux(event) : event
             default: break
             }
@@ -552,6 +561,57 @@ final class IMETerminalView: LocalProcessTerminalView {
     /// window-activation click and never reaches mouseDown — scroll is exempt from that rule,
     /// which is why scrolling worked while selection and clicks didn't.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    // MARK: Selected text actions
+
+    /// SwiftTerm exposes a local selection through `copy(_:)`, but does not publish the
+    /// selection string. Read it through that supported path and restore every pasteboard item
+    /// immediately, so opening the action menu never replaces the user's clipboard.
+    func selectedTextForMenu() -> String {
+        let pasteboard = NSPasteboard.general
+        let savedItems = pasteboard.pasteboardItems?.map { item -> NSPasteboardItem in
+            let saved = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { saved.setData(data, forType: type) }
+            }
+            return saved
+        }
+
+        super.copy(self)
+        let selectedText = pasteboard.string(forType: .string) ?? ""
+        pasteboard.clearContents()
+        if let savedItems, !savedItems.isEmpty { pasteboard.writeObjects(savedItems) }
+        return selectedText
+    }
+
+    private func showSelectionActions(at point: NSPoint) {
+        let selectedText = selectedTextForMenu()
+        guard !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let menu = NSMenu(title: "Selected Text")
+        let send = NSMenuItem(
+            title: "Send to Terminal",
+            action: #selector(sendSelectedTextToTerminal(_:)),
+            keyEquivalent: ""
+        )
+        send.target = self
+        send.representedObject = selectedText
+        menu.addItem(send)
+        menu.addItem(NSMenuItem.separator())
+
+        let copy = NSMenuItem(title: "Copy", action: #selector(copy(_:)), keyEquivalent: "c")
+        copy.keyEquivalentModifierMask = [.command]
+        copy.target = self
+        menu.addItem(copy)
+        menu.popUp(positioning: send, at: point, in: self)
+    }
+
+    /// Insert the selected output at the current terminal prompt without submitting it. This
+    /// mirrors paste, avoids executing text in a shell, and lets the user edit before Return.
+    @objc private func sendSelectedTextToTerminal(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String, !text.isEmpty else { return }
+        send(source: self, data: ArraySlice(Array(text.utf8)))
+    }
 
     /// SwiftUI parks representable views at ~zero size for a beat while (un)mounting during a
     /// session switch. Letting that through resizes the PTY to 2×1 and back — tmux reflows the
