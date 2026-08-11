@@ -43,6 +43,19 @@ final class RemoteAccountServiceTests: XCTestCase {
         XCTAssertEqual(relayURL.absoluteString, "https://relay.example.com/")
     }
 
+    func testPublicSignInConfigurationRequiresEveryOIDCValue() {
+        let configuration = RemotePublicConfiguration.load(
+            environment: [
+                "PASS_PUBLIC_RELAY_URL": "https://relay.example.com/",
+                "PASS_OIDC_ISSUER": "https://identity.example.com/",
+                "PASS_OIDC_CLIENT_ID": "native-client",
+            ],
+            bundleValues: [:]
+        )
+
+        XCTAssertNil(configuration)
+    }
+
     func testSecureDesktopRegistrationDefinesGatewayIdentity() throws {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

@@ -69,12 +69,15 @@ struct MarketplaceExtensionDraft: Encodable, Sendable {
 }
 
 enum ExtensionMarketplaceError: Error, LocalizedError, Equatable {
+    case configurationUnavailable
     case signInRequired
     case invalidResponse
     case server(status: Int, message: String)
 
     var errorDescription: String? {
         switch self {
+        case .configurationUnavailable:
+            return "The extension marketplace is not configured in this build."
         case .signInRequired:
             return "Sign in to Pass before using the extension marketplace."
         case .invalidResponse:
@@ -124,10 +127,7 @@ final class ExtensionMarketplaceService {
                 return (registration.relayURL, registration.credentials.accessToken)
             } catch {
                 guard let relayURL = RemotePublicConfiguration.loadRelayURL() else {
-                    if error is RemoteAccountError {
-                        throw ExtensionMarketplaceError.signInRequired
-                    }
-                    throw error
+                    throw ExtensionMarketplaceError.configurationUnavailable
                 }
                 return (relayURL, nil)
             }

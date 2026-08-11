@@ -83,6 +83,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass
         MARKETING_VERSION: "0.1.9"
         CURRENT_PROJECT_VERSION: "10"
+        # Public, non-secret endpoint used for signed-out marketplace discovery and installs.
+        # Release builds validate that this value is present before compiling.
+        PASS_PUBLIC_RELAY_URL: "https://pass-mobile-relay.zimin-byun.workers.dev/"
         # Stable signing via the free Apple Development cert. Ad-hoc ("-") builds, but its
         # cdhash changes every build and macOS then refuses notifications ("not allowed").
         # A real Development identity gives a stable code identity so notifications work.
@@ -94,6 +97,11 @@ targets:
         ENABLE_APP_SANDBOX: "NO"
         ENABLE_HARDENED_RUNTIME: "NO"
         SWIFT_VERSION: "5.0"
+    preBuildScripts:
+      - name: Validate public service configuration
+        script: |
+          "${SRCROOT}/Scripts/validate-public-service-configuration.sh"
+        basedOnDependencyAnalysis: false
     # passcli rides inside the app at Contents/MacOS/passcli (already signed by its own
     # target; script phases run before the app's code-sign step, so the seal covers it).
     # S6.3 validates this embed+signing combo on-device.
