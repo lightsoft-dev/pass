@@ -15,6 +15,14 @@
 
 The built app lands at `.build/Build/Products/Debug/Pass.app`.
 
+## Public extension marketplace
+
+`project.yml` contains the public, non-secret production relay URL used for anonymous extension
+discovery and Git installs. Release builds fail when `PASS_PUBLIC_RELAY_URL` is empty. Account
+features remain disabled until all three OIDC values (`PASS_OIDC_ISSUER`, `PASS_OIDC_CLIENT_ID`,
+and `PASS_OIDC_AUDIENCE`) are supplied together; partial OIDC configuration also fails the build.
+Never place an OIDC client secret or `RELAY_AUTH_TOKEN` in the app build.
+
 ## In-app updates
 
 The macOS app uses Sparkle 2. It checks the stable GitHub Release feed URL every six hours
