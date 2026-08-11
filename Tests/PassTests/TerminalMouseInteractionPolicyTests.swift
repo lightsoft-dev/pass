@@ -201,8 +201,15 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
         let hit = try XCTUnwrap(terminal.urlHit(at: point))
         XCTAssertEqual(hit.url.absoluteString, url)
         XCTAssertGreaterThanOrEqual(hit.rects.count, 2)
-        XCTAssertEqual(hit.rects[0].minX, 0, accuracy: 0.001)
-        XCTAssertEqual(hit.rects[1].minX, 0, accuracy: 0.001)
+        // Link underlines are visually inset by one device pixel while their hit ranges still
+        // cover the complete cells. Every soft-wrapped segment starts at column zero before
+        // that presentation-only inset is applied.
+        let scale = terminal.window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 1
+        let visualInset = 1 / max(scale, 1)
+        XCTAssertEqual(hit.rects[0].minX, visualInset, accuracy: 0.001)
+        XCTAssertEqual(hit.rects[1].minX, visualInset, accuracy: 0.001)
     }
 
     func testPlainDragUsesPersistentLocalSelection() {

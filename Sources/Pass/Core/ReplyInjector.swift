@@ -4,8 +4,7 @@ protocol ReplyInjectorTmux: Sendable {
     func paneState(_ name: String) async -> (inMode: Bool, command: String)
     func capturePane(_ name: String, colors: Bool) async -> String
     func cancelMode(_ name: String) async
-    func setBuffer(_ text: String) async -> Bool
-    func pasteBuffer(into name: String) async -> Bool
+    func paste(_ text: String, into name: String) async -> TmuxPasteResult
     func sendKeys(_ name: String, _ keys: [String]) async -> Bool
 }
 
@@ -83,10 +82,12 @@ actor ReplyInjector {
         default:
             break
         }
-        guard await tmux.setBuffer(text) else {
+        switch await tmux.paste(text, into: session) {
+        case .pasted:
+            break
+        case .stagingFailed:
             return .error("tmux could not stage the message")
-        }
-        guard await tmux.pasteBuffer(into: session) else {
+        case .pasteFailed:
             return .error("tmux could not paste the message into the session")
         }
         try? await Task.sleep(nanoseconds: profile.pasteToEnterDelayMs * 1_000_000)
