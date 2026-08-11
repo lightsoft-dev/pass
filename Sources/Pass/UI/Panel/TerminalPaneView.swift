@@ -43,6 +43,9 @@ enum TerminalChoiceInteraction {
 /// text to the session.
 final class IMETerminalView: LocalProcessTerminalView {
     private var markedText = ""
+    /// Supplied by the owning workspace so selected output can be executed in that project's
+    /// independent shell instead of being sent back into the agent's tmux session.
+    var runSelectionInTerminal: ((String) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -584,33 +587,80 @@ final class IMETerminalView: LocalProcessTerminalView {
         return selectedText
     }
 
-    private func showSelectionActions(at point: NSPoint) {
-        let selectedText = selectedTextForMenu()
-        guard !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    /// Build the compact action menu shown after a local terminal selection. Kept separate
+    /// from presentation so its contents can be regression-tested without tracking an NSMenu.
+    func selectionActionMenu(for rawSelection: String) -> NSMenu? {
+        let text = rawSelection.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
 
         let menu = NSMenu(title: "Selected Text")
-        let send = NSMenuItem(
-            title: "Send to Terminal",
-            action: #selector(sendSelectedTextToTerminal(_:)),
-            keyEquivalent: ""
+        menu.autoenablesItems = false
+        menu.addItem(selectionMenuItem(
+            title: "Copy",
+            action: #selector(copySelectionFromMenu(_:))
+        ))
+        let runItem = selectionMenuItem(
+            title: "Run in Terminal",
+            action: #selector(runSelectionFromMenu(_:))
         )
-        send.target = self
-        send.representedObject = selectedText
-        menu.addItem(send)
-        menu.addItem(NSMenuItem.separator())
-
-        let copy = NSMenuItem(title: "Copy", action: #selector(copy(_:)), keyEquivalent: "c")
-        copy.keyEquivalentModifierMask = [.command]
-        copy.target = self
-        menu.addItem(copy)
-        menu.popUp(positioning: send, at: point, in: self)
+        runItem.representedObject = text
+        menu.addItem(runItem)
+        menu.addItem(selectionMenuItem(
+            title: "Find in Terminal",
+            action: #selector(findSelectionFromMenu(_:))
+        ))
+        if let url = Self.explicitWebURL(in: text) {
+            menu.addItem(.separator())
+            let openItem = selectionMenuItem(
+                title: "Open Link",
+                action: #selector(openSelectionLink(_:))
+            )
+            openItem.representedObject = url
+            menu.addItem(openItem)
+        }
+        return menu
     }
 
-    /// Insert the selected output at the current terminal prompt without submitting it. This
-    /// mirrors paste, avoids executing text in a shell, and lets the user edit before Return.
-    @objc private func sendSelectedTextToTerminal(_ sender: NSMenuItem) {
-        guard let text = sender.representedObject as? String, !text.isEmpty else { return }
-        send(source: self, data: ArraySlice(Array(text.utf8)))
+    private func showSelectionActions(at point: NSPoint) {
+        guard let menu = selectionActionMenu(for: selectedTextForMenu()) else { return }
+        menu.popUp(positioning: menu.item(withTitle: "Run in Terminal"), at: point, in: self)
+    }
+
+    private func selectionMenuItem(title: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.isEnabled = true
+        return item
+    }
+
+    private static func explicitWebURL(in text: String) -> URL? {
+        guard !text.contains(where: \Character.isWhitespace),
+              let url = URL(string: text),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              url.host != nil
+        else { return nil }
+        return url
+    }
+
+    @objc private func copySelectionFromMenu(_ sender: Any) {
+        copy(sender)
+    }
+
+    @objc private func runSelectionFromMenu(_ sender: Any) {
+        guard let command = (sender as? NSMenuItem)?.representedObject as? String else { return }
+        runSelectionInTerminal?(command)
+    }
+
+    @objc private func findSelectionFromMenu(_ sender: Any) {
+        let item = NSMenuItem()
+        item.tag = NSTextFinder.Action.setSearchString.rawValue
+        performTextFinderAction(item)
+    }
+
+    @objc private func openSelectionLink(_ sender: Any) {
+        guard let url = (sender as? NSMenuItem)?.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// SwiftUI parks representable views at ~zero size for a beat while (un)mounting during a
@@ -839,10 +889,23 @@ final class TerminalPool {
 /// recreate it in `updateNSView`.
 struct TerminalPaneView: NSViewRepresentable {
     let controller: TerminalController
+    let runSelectionInTerminal: ((String) -> Void)?
 
-    func makeNSView(context: Context) -> LocalProcessTerminalView {
-        controller.terminalView
+    init(
+        controller: TerminalController,
+        runSelectionInTerminal: ((String) -> Void)? = nil
+    ) {
+        self.controller = controller
+        self.runSelectionInTerminal = runSelectionInTerminal
     }
 
-    func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {}
+    func makeNSView(context: Context) -> LocalProcessTerminalView {
+        (controller.terminalView as? IMETerminalView)?.runSelectionInTerminal =
+            runSelectionInTerminal
+        return controller.terminalView
+    }
+
+    func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
+        (nsView as? IMETerminalView)?.runSelectionInTerminal = runSelectionInTerminal
+    }
 }

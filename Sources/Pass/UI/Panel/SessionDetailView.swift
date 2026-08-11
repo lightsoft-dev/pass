@@ -96,7 +96,9 @@ struct SessionDetailView: View {
                     if readableMode {
                         ConversationPaneView(session: session)
                     } else {
-                        TerminalPaneView(controller: terminal)
+                        TerminalPaneView(controller: terminal) { command in
+                            appModel.miniTerminals.run(command, for: session)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

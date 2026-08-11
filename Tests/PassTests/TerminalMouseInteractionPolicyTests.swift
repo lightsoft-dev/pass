@@ -4,6 +4,55 @@ import XCTest
 
 final class TerminalMouseInteractionPolicyTests: XCTestCase {
     @MainActor
+    func testSelectionMenuOffersCopyAndFind() throws {
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+
+        let menu = try XCTUnwrap(terminal.selectionActionMenu(for: "selected output"))
+
+        XCTAssertEqual(
+            menu.items.map(\.title),
+            ["Copy", "Run in Terminal", "Find in Terminal"]
+        )
+        XCTAssertTrue(menu.items.allSatisfy(\.isEnabled))
+        XCTAssertNil(terminal.selectionActionMenu(for: "  \n  "))
+    }
+
+    @MainActor
+    func testRunInTerminalMenuExecutesTrimmedSelection() throws {
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        var executedCommand: String?
+        terminal.runSelectionInTerminal = { executedCommand = $0 }
+        let menu = try XCTUnwrap(terminal.selectionActionMenu(for: "  echo pass  \n"))
+
+        let runItem = try XCTUnwrap(menu.item(withTitle: "Run in Terminal"))
+        let action = try XCTUnwrap(runItem.action)
+        XCTAssertTrue(NSApp.sendAction(action, to: runItem.target, from: runItem))
+
+        XCTAssertEqual(executedCommand, "echo pass")
+    }
+
+    @MainActor
+    func testSelectionMenuOffersOpenForExplicitWebURLOnly() throws {
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+
+        let urlMenu = try XCTUnwrap(
+            terminal.selectionActionMenu(for: " https://example.com/docs?q=pass ")
+        )
+        let proseMenu = try XCTUnwrap(
+            terminal.selectionActionMenu(for: "open https://example.com")
+        )
+
+        XCTAssertEqual(
+            urlMenu.items.filter { !$0.isSeparatorItem }.map(\.title),
+            ["Copy", "Run in Terminal", "Find in Terminal", "Open Link"]
+        )
+        XCTAssertEqual(
+            proseMenu.items.map(\.title),
+            ["Copy", "Run in Terminal", "Find in Terminal"]
+        )
+    }
+
+    @MainActor
     func testTerminalDefaultsToPersistentLocalSelectionMode() {
         let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
 
