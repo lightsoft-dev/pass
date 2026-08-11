@@ -37,6 +37,10 @@ struct SessionWorkspaceView<Terminal: View>: View {
     @AppStorage("browser.split") private var browserFraction = 0.45
     /// Device pane's share of the width, independent from the browser split.
     @AppStorage("mirror.split") private var mirrorFraction = 0.42
+    /// The persisted fraction can be outside the usable range when the panel is narrow.
+    /// Keep each drag anchored to the displayed divider so it never jumps on first movement.
+    @State private var browserDragStart: CGFloat?
+    @State private var mirrorDragStart: CGFloat?
 
     init(session: Session, @ViewBuilder terminal: () -> Terminal) {
         self.session = session
@@ -62,12 +66,11 @@ struct SessionWorkspaceView<Terminal: View>: View {
         GeometryReader { geo in
             HStack(spacing: 0) {
                 terminal
-                    .frame(width: mirrorTerminalWidth(total: geo.size.width))
+                    .frame(width: terminalWidth(total: geo.size.width, fraction: mirrorFraction))
                 mirrorDivider(total: geo.size.width)
                 MirrorView(engine: mirror)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .coordinateSpace(name: "mirror-workspace")
         }
     }
 
@@ -75,22 +78,17 @@ struct SessionWorkspaceView<Terminal: View>: View {
         GeometryReader { geo in
             HStack(spacing: 0) {
                 terminal
-                    .frame(width: terminalWidth(total: geo.size.width))
+                    .frame(width: terminalWidth(total: geo.size.width, fraction: browserFraction))
                 divider(total: geo.size.width)
                 BrowserPaneView(tab: tab)
                     .id(tab.id) // different tab → fresh NSView (updateNSView can't swap it)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .coordinateSpace(name: "workspace")
         }
     }
 
-    private func terminalWidth(total: CGFloat) -> CGFloat {
-        max(120, total * (1 - browserFraction) - dividerWidth)
-    }
-
-    private func mirrorTerminalWidth(total: CGFloat) -> CGFloat {
-        max(120, total * (1 - mirrorFraction) - dividerWidth)
+    private func terminalWidth(total: CGFloat, fraction: CGFloat) -> CGFloat {
+        WorkspaceSplitSizing.terminalWidth(total: total, fraction: fraction, dividerWidth: dividerWidth)
     }
 
     private let dividerWidth: CGFloat = 7
@@ -106,11 +104,18 @@ struct SessionWorkspaceView<Terminal: View>: View {
             )
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .named("workspace"))
+                DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         guard total > 0 else { return }
-                        browserFraction = min(0.8, max(0.2, 1 - value.location.x / total))
+                        let start = browserDragStart
+                            ?? WorkspaceSplitSizing.clampedFraction(browserFraction, total: total, dividerWidth: dividerWidth)
+                        browserDragStart = start
+                        browserFraction = WorkspaceSplitSizing.resizedFraction(
+                            from: start, translation: value.translation.width,
+                            total: total, dividerWidth: dividerWidth
+                        )
                     }
+                    .onEnded { _ in browserDragStart = nil }
             )
             .onHover { inside in
                 if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
@@ -128,11 +133,18 @@ struct SessionWorkspaceView<Terminal: View>: View {
             )
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .named("mirror-workspace"))
+                DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         guard total > 0 else { return }
-                        mirrorFraction = min(0.8, max(0.2, 1 - value.location.x / total))
+                        let start = mirrorDragStart
+                            ?? WorkspaceSplitSizing.clampedFraction(mirrorFraction, total: total, dividerWidth: dividerWidth)
+                        mirrorDragStart = start
+                        mirrorFraction = WorkspaceSplitSizing.resizedFraction(
+                            from: start, translation: value.translation.width,
+                            total: total, dividerWidth: dividerWidth
+                        )
                     }
+                    .onEnded { _ in mirrorDragStart = nil }
             )
             .onHover { inside in
                 if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
