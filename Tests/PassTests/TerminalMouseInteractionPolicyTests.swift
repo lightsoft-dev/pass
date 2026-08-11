@@ -80,6 +80,29 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectionActionReadsTextWithoutReplacingClipboard() throws {
+        let pasteboard = NSPasteboard.general
+        let originalClipboard = pasteboard.string(forType: .string)
+        defer {
+            pasteboard.clearContents()
+            if let originalClipboard { pasteboard.setString(originalClipboard, forType: .string) }
+        }
+        pasteboard.clearContents()
+        pasteboard.setString("keep clipboard", forType: .string)
+
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        terminal.getTerminal().feed(text: "send this selection")
+        let y = terminal.bounds.height - 8
+        terminal.mouseDown(with: try mouseEvent(type: .leftMouseDown, x: 2, y: y))
+        terminal.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, x: 2, y: y))
+        terminal.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, x: 130, y: y))
+        terminal.mouseUp(with: try mouseEvent(type: .leftMouseUp, x: 130, y: y))
+
+        XCTAssertTrue(terminal.selectedTextForMenu().hasPrefix("send this"))
+        XCTAssertEqual(pasteboard.string(forType: .string), "keep clipboard")
+    }
+
+    @MainActor
     func testPlainTextURLHitUsesExactCellsWithKoreanAroundIt() throws {
         let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 960, height: 240))
         let url = "https://print-so.lightsoft.dev/admin/printer"
