@@ -2,11 +2,37 @@ import AppKit
 import SwiftTerm
 import SwiftUI
 
+@MainActor
+protocol MiniTerminalWindowControlling: AnyObject {
+    func show()
+    func showForActiveSession()
+    func hideForInactiveSession()
+    func run(_ command: String)
+    func close()
+}
+
 /// Owns one persistent mini shell per working directory. Reopening the same project raises its
 /// existing shell, preserving command history, environment changes, and running processes.
 @MainActor
 final class MiniTerminalManager {
-    private var controllers: [String: MiniTerminalWindowController] = [:]
+    typealias ControllerFactory = (Session, @escaping () -> Void) -> any MiniTerminalWindowControlling
+
+    private var controllers: [String: any MiniTerminalWindowControlling] = [:]
+    private let makeController: ControllerFactory
+    /// The working directory whose session workspace is currently on screen in Pass.
+    /// Mini terminals stay alive when their session is left, but only this directory's window
+    /// may be visible. A nil/missing controller means the current session has no mini terminal.
+    private var activeKey: String?
+
+    init() {
+        makeController = { session, onClose in
+            MiniTerminalWindowController(session: session, onClose: onClose)
+        }
+    }
+
+    init(makeController: @escaping ControllerFactory) {
+        self.makeController = makeController
+    }
 
     func open(for session: Session) {
         let key = session.cwd
@@ -14,11 +40,33 @@ final class MiniTerminalManager {
             existing.show()
             return
         }
-        let controller = MiniTerminalWindowController(session: session) { [weak self] in
+        let controller = makeController(session) { [weak self] in
             self?.controllers.removeValue(forKey: key)
         }
         controllers[key] = controller
         controller.show()
+    }
+
+    /// Open this project's independent shell and execute the selected terminal output there.
+    func run(_ command: String, for session: Session) {
+        let key = session.cwd
+        if controllers[key] == nil {
+            open(for: session)
+        }
+        controllers[key]?.run(command)
+    }
+
+    /// Follow Pass's visible session without terminating shells or stealing keyboard focus.
+    /// Sessions in the same working directory intentionally share one project shell.
+    func activate(for session: Session?) {
+        activeKey = session?.cwd
+        for (key, controller) in controllers {
+            if key == activeKey {
+                controller.showForActiveSession()
+            } else {
+                controller.hideForInactiveSession()
+            }
+        }
     }
 
     func closeAll() {
@@ -31,7 +79,8 @@ final class MiniTerminalManager {
 /// A compact operator window: fixed project identity rail above a real local PTY.
 @MainActor
 private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
-                                                   LocalProcessTerminalViewDelegate {
+                                                   LocalProcessTerminalViewDelegate,
+                                                   MiniTerminalWindowControlling {
     private let session: Session
     private let terminalView: IMETerminalView
     private let window: MiniTerminalPanel
@@ -65,6 +114,9 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
         super.init()
 
         terminalView.processDelegate = self
+        terminalView.runSelectionInTerminal = { [weak self] command in
+            self?.run(command)
+        }
         window.delegate = self
         window.contentView = NSHostingView(rootView: MiniTerminalContent(
             session: session,
@@ -92,6 +144,27 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         focus()
+    }
+
+    /// Restore a shell hidden by a session switch while leaving focus in Pass's main panel.
+    func showForActiveSession() {
+        guard !closed, !window.isVisible, !window.isMiniaturized else { return }
+        window.orderFront(nil)
+    }
+
+    /// `orderOut` preserves the window, PTY, command history, and running child processes.
+    func hideForInactiveSession() {
+        guard !closed, window.isVisible else { return }
+        window.orderOut(nil)
+    }
+
+    func run(_ command: String) {
+        guard !closed else { return }
+        show()
+        terminalView.send(
+            source: terminalView,
+            data: ArraySlice(Array((command + "\r").utf8))
+        )
     }
 
     func close() {

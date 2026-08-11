@@ -195,6 +195,12 @@ struct CommandView: View {
                 // (onChange only fires on a value change).
                 if let s { route = .detail(s); appModel.forceOpenSession = nil }
             }
+            // A mini terminal is project/session UI, not a global floating utility. Switching
+            // workspaces hides other projects' windows; returning restores the matching shell
+            // without restarting it. A session that never opened one therefore shows none.
+            .onChange(of: miniTerminalContextKey, initial: true) { _, _ in
+                appModel.miniTerminals.activate(for: workspaceSession)
+            }
             // Selection is identity-based: reordering never transiently mounts another session's
             // focused card. Only choose a neighbor when the selected session actually vanished.
             .onChange(of: orderedSessions.map(\.id)) { old, new in
@@ -413,7 +419,7 @@ struct CommandView: View {
 
     /// Context used by a plugin launched from the top bar. Detail routes target the session
     /// actually on screen; the home targets its selected card; specs have no session context.
-    private var extensionContextSession: Session? {
+    private var workspaceSession: Session? {
         switch route {
         case .detail(let name), .specSession(let name, _), .featureSession(let name, _, _):
             return sessions.first { $0.name == name }
@@ -423,6 +429,12 @@ struct CommandView: View {
             return nil
         }
     }
+
+    /// The manager scopes project shells by working directory, so two sessions intentionally
+    /// sharing a checkout also share the same mini terminal.
+    private var miniTerminalContextKey: String? { workspaceSession?.cwd }
+
+    private var extensionContextSession: Session? { workspaceSession }
 
     @ViewBuilder
     private var content: some View {
@@ -941,7 +953,9 @@ struct CommandView: View {
                         if readableMode {
                             ConversationPaneView(session: s)
                         } else {
-                            TerminalPaneView(controller: live)
+                            TerminalPaneView(controller: live) { command in
+                                appModel.miniTerminals.run(command, for: s)
+                            }
                                 .id(live.sessionName) // new session → new NSView (updateNSView can't swap it)
                                 .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
                                 .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
@@ -1358,7 +1372,9 @@ struct FocusedSessionCard: View {
                     if readableMode {
                         ConversationPaneView(session: session)
                     } else {
-                        TerminalPaneView(controller: terminal)
+                        TerminalPaneView(controller: terminal) { command in
+                            appModel.miniTerminals.run(command, for: session)
+                        }
                             .id(terminal.sessionName) // new session → new NSView (updateNSView can't swap it)
                             .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
                             .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
