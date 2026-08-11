@@ -93,8 +93,12 @@ struct ExtensionMarketplaceView: View {
                     Label("Publish", systemImage: "plus")
                 }
                 .disabled(appModel.extensions?.loaded.isEmpty ?? true)
-            } else {
+            } else if appModel.remoteAccountSignInAvailable {
                 Button("Sign in") { appModel.signInForRemoteAccess() }
+            } else {
+                Label("Public access", systemImage: "person.crop.circle.badge.checkmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Button("Done") { dismiss() }
         }
@@ -243,19 +247,14 @@ struct ExtensionMarketplaceView: View {
                         Button { reporting = item } label: { Image(systemName: "flag") }
                             .buttonStyle(.borderless).help("Report this extension")
                     }
-                    if appModel.remoteUsesPublicCredentials {
-                        Button {
-                            Task { await install(item) }
-                        } label: {
-                            if installingID == item.id { ProgressView().controlSize(.small) }
-                            else { Label("Install", systemImage: "square.and.arrow.down") }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(installingID != nil)
-                    } else {
-                        Button("Sign in to install") { appModel.signInForRemoteAccess() }
-                            .buttonStyle(.borderedProminent)
+                    Button {
+                        Task { await install(item) }
+                    } label: {
+                        if installingID == item.id { ProgressView().controlSize(.small) }
+                        else { Label("Install", systemImage: "square.and.arrow.down") }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(installingID != nil)
                 }
 
                 // The market's visual anchor: provenance and execution risk remain adjacent,
@@ -459,9 +458,17 @@ struct ExtensionMarketplaceView: View {
         case .success(let installed):
             appModel.extensions?.prepareNewInstallation(installed.id)
             appModel.extensions?.reload()
-            try? await appModel.extensionMarketplace.recordInstall(id: item.id)
+            var reportingWarning: String?
+            if appModel.remoteUsesPublicCredentials {
+                do {
+                    try await appModel.extensionMarketplace.recordInstall(id: item.id)
+                } catch {
+                    reportingWarning = " The install count could not be updated: \(error.localizedDescription)"
+                }
+            }
             await reloadList()
-            message = "Installed \(installed.name) — review its files and permissions in Settings before enabling."
+            message = "Installed \(installed.name) — review its files and permissions in Settings "
+                + "before enabling.\(reportingWarning ?? "")"
             messageIsError = false
         case .failure(let error):
             message = error.message
