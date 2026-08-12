@@ -112,6 +112,7 @@ final class AppModel {
     private(set) var remoteDesktopID: String = ""
     private(set) var remotePublicAccessAvailable = false
     private(set) var remoteUsesPublicCredentials = false
+    private(set) var remoteAccountSignInAvailable = false
     private(set) var remoteAccountState: RemoteAccountState = .unavailable
     private(set) var remotePublicPairingPayload: String?
     @ObservationIgnored private var remoteGateway: RemoteGateway?
@@ -364,6 +365,7 @@ final class AppModel {
     private func refreshRemoteAccountState() {
         let hasConfiguration = RemotePublicConfiguration.load() != nil
         let hasCredentials = (try? RemoteCredentialStore.loadDesktopRegistration()) != nil
+        remoteAccountSignInAvailable = hasConfiguration
         remotePublicAccessAvailable = hasConfiguration || hasCredentials
         remoteUsesPublicCredentials = hasCredentials
         remoteAccountState = hasCredentials ? .registered : (hasConfiguration ? .signedOut : .unavailable)

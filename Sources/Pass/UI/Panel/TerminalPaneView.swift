@@ -43,6 +43,9 @@ enum TerminalChoiceInteraction {
 /// text to the session.
 final class IMETerminalView: LocalProcessTerminalView {
     private var markedText = ""
+    /// Supplied by the owning workspace so selected output can be executed in that project's
+    /// independent shell instead of being sent back into the agent's tmux session.
+    var runSelectionInTerminal: ((String) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -208,6 +211,15 @@ final class IMETerminalView: LocalProcessTerminalView {
                     // is consumed so SwiftTerm's OSC-8 handler doesn't double-fire.
                     if cmd { return nil }
                     return gestureUsedTmux ? eventForTmux(event) : event
+                }
+                // A normal drag leaves a persistent SwiftTerm selection. Surface a small
+                // action menu only after SwiftTerm has received mouse-up and finalized it.
+                // Option-drag belongs to tmux copy-mode and must remain untouched.
+                if moved, !gestureUsedTmux, let dragTerm {
+                    let menuPoint = dragTerm.convert(event.locationInWindow, from: nil)
+                    DispatchQueue.main.async { [weak dragTerm] in
+                        dragTerm?.showSelectionActions(at: menuPoint)
+                    }
                 }
                 return gestureUsedTmux ? eventForTmux(event) : event
             default: break
@@ -553,6 +565,104 @@ final class IMETerminalView: LocalProcessTerminalView {
     /// which is why scrolling worked while selection and clicks didn't.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // MARK: Selected text actions
+
+    /// SwiftTerm exposes a local selection through `copy(_:)`, but does not publish the
+    /// selection string. Read it through that supported path and restore every pasteboard item
+    /// immediately, so opening the action menu never replaces the user's clipboard.
+    func selectedTextForMenu() -> String {
+        let pasteboard = NSPasteboard.general
+        let savedItems = pasteboard.pasteboardItems?.map { item -> NSPasteboardItem in
+            let saved = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { saved.setData(data, forType: type) }
+            }
+            return saved
+        }
+
+        super.copy(self)
+        let selectedText = pasteboard.string(forType: .string) ?? ""
+        pasteboard.clearContents()
+        if let savedItems, !savedItems.isEmpty { pasteboard.writeObjects(savedItems) }
+        return selectedText
+    }
+
+    /// Build the compact action menu shown after a local terminal selection. Kept separate
+    /// from presentation so its contents can be regression-tested without tracking an NSMenu.
+    func selectionActionMenu(for rawSelection: String) -> NSMenu? {
+        let text = rawSelection.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+
+        let menu = NSMenu(title: "Selected Text")
+        menu.autoenablesItems = false
+        menu.addItem(selectionMenuItem(
+            title: "Copy",
+            action: #selector(copySelectionFromMenu(_:))
+        ))
+        let runItem = selectionMenuItem(
+            title: "Run in Terminal",
+            action: #selector(runSelectionFromMenu(_:))
+        )
+        runItem.representedObject = text
+        menu.addItem(runItem)
+        menu.addItem(selectionMenuItem(
+            title: "Find in Terminal",
+            action: #selector(findSelectionFromMenu(_:))
+        ))
+        if let url = Self.explicitWebURL(in: text) {
+            menu.addItem(.separator())
+            let openItem = selectionMenuItem(
+                title: "Open Link",
+                action: #selector(openSelectionLink(_:))
+            )
+            openItem.representedObject = url
+            menu.addItem(openItem)
+        }
+        return menu
+    }
+
+    private func showSelectionActions(at point: NSPoint) {
+        guard let menu = selectionActionMenu(for: selectedTextForMenu()) else { return }
+        menu.popUp(positioning: menu.item(withTitle: "Run in Terminal"), at: point, in: self)
+    }
+
+    private func selectionMenuItem(title: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.isEnabled = true
+        return item
+    }
+
+    private static func explicitWebURL(in text: String) -> URL? {
+        guard !text.contains(where: \Character.isWhitespace),
+              let url = URL(string: text),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              url.host != nil
+        else { return nil }
+        return url
+    }
+
+    @objc private func copySelectionFromMenu(_ sender: Any) {
+        copy(sender)
+    }
+
+    @objc private func runSelectionFromMenu(_ sender: Any) {
+        guard let command = (sender as? NSMenuItem)?.representedObject as? String else { return }
+        runSelectionInTerminal?(command)
+    }
+
+    @objc private func findSelectionFromMenu(_ sender: Any) {
+        let item = NSMenuItem()
+        item.tag = NSTextFinder.Action.setSearchString.rawValue
+        performTextFinderAction(item)
+    }
+
+    @objc private func openSelectionLink(_ sender: Any) {
+        guard let url = (sender as? NSMenuItem)?.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     /// SwiftUI parks representable views at ~zero size for a beat while (un)mounting during a
     /// session switch. Letting that through resizes the PTY to 2×1 and back — tmux reflows the
     /// window twice and the agent's TUI re-renders its whole transcript both times (the
@@ -779,10 +889,23 @@ final class TerminalPool {
 /// recreate it in `updateNSView`.
 struct TerminalPaneView: NSViewRepresentable {
     let controller: TerminalController
+    let runSelectionInTerminal: ((String) -> Void)?
 
-    func makeNSView(context: Context) -> LocalProcessTerminalView {
-        controller.terminalView
+    init(
+        controller: TerminalController,
+        runSelectionInTerminal: ((String) -> Void)? = nil
+    ) {
+        self.controller = controller
+        self.runSelectionInTerminal = runSelectionInTerminal
     }
 
-    func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {}
+    func makeNSView(context: Context) -> LocalProcessTerminalView {
+        (controller.terminalView as? IMETerminalView)?.runSelectionInTerminal =
+            runSelectionInTerminal
+        return controller.terminalView
+    }
+
+    func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
+        (nsView as? IMETerminalView)?.runSelectionInTerminal = runSelectionInTerminal
+    }
 }

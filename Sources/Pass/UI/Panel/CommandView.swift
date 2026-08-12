@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Root of the floating panel — a chat-style home over every session, with the SELECTED
@@ -18,6 +19,9 @@ struct CommandView: View {
     @State private var showQuickCommand = false       // ⌘P quick command (hidden by default)
     @State private var newSessionMode = false         // ⌘N: results are PROJECTS, ⏎ starts a session
     @State private var isCloningRepository = false    // keep the palette stable while git clone runs
+    @State private var githubBrowseMode = false       // connected-account repository search
+    @State private var githubBrowserState: GitHubBrowserState = .idle
+    @State private var githubRepositories: [GitHubRemoteRepository] = []
     @State private var terminal: TerminalController?  // live client attached to the selected session
     @State private var terminalTarget: String?        // which session the home terminal shows
     @State private var pool = TerminalPool()          // recent clients stay attached → instant switching
@@ -38,6 +42,16 @@ struct CommandView: View {
         case features
         case feature(projectRoot: String, id: String)
         case featureSession(name: String, projectRoot: String, id: String)
+    }
+
+    private enum GitHubBrowserState: Equatable {
+        case idle
+        case loading
+        case missingCLI
+        case signedOut
+        case connecting
+        case loaded(GitHubAccount)
+        case failed(String)
     }
 
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
@@ -110,6 +124,26 @@ struct CommandView: View {
             )
             if let repository = ProjectCreationService.githubRepository(from: needle) {
                 return [.githubRepository(repository, parentDirectory: parent)]
+            }
+            if githubBrowseMode {
+                switch githubBrowserState {
+                case .missingCLI:
+                    return [.githubAction(.installCLI)]
+                case .signedOut:
+                    return [.githubAction(.connect)]
+                case .failed:
+                    return [.githubAction(.retry)]
+                case .loaded:
+                    return githubRepositories
+                        .filter {
+                            needle.isEmpty
+                                || Fuzzy.matches(needle, $0.fullName)
+                                || ($0.description.map { Fuzzy.matches(needle, $0) } ?? false)
+                        }
+                        .map { .githubRemoteRepository($0, parentDirectory: parent) }
+                case .idle, .loading, .connecting:
+                    return []
+                }
             }
             var items: [PaletteItem] = projects
                 .filter { needle.isEmpty || Fuzzy.matches(needle, $0.name) }
@@ -194,6 +228,12 @@ struct CommandView: View {
                 // Consume the request so the SAME session can be force-opened again later
                 // (onChange only fires on a value change).
                 if let s { route = .detail(s); appModel.forceOpenSession = nil }
+            }
+            // A mini terminal is project/session UI, not a global floating utility. Switching
+            // workspaces hides other projects' windows; returning restores the matching shell
+            // without restarting it. A session that never opened one therefore shows none.
+            .onChange(of: miniTerminalContextKey, initial: true) { _, _ in
+                appModel.miniTerminals.activate(for: workspaceSession)
             }
             // Selection is identity-based: reordering never transiently mounts another session's
             // focused card. Only choose a neighbor when the selected session actually vanished.
@@ -300,6 +340,7 @@ struct CommandView: View {
             // ⌘N — pick a project, ⏎ starts a session in it.
             status = nil
             query = ""
+            githubBrowseMode = false
             newSessionMode = true
             showQuickCommand = true
             jumpSelection = 0
@@ -345,6 +386,10 @@ struct CommandView: View {
                     createProjectFromInput(name)
                 case .githubRepository(let repository, _):
                     cloneRepositoryFromInput(repository)
+                case .githubRemoteRepository(let repository, _):
+                    cloneRepositoryFromInput(repository.projectRepository)
+                case .githubAction(let action):
+                    handleGitHubAction(action)
                 default:
                     break
                 }
@@ -370,6 +415,10 @@ struct CommandView: View {
                     createProjectFromInput(name)
                 case .githubRepository(let repository, _):
                     cloneRepositoryFromInput(repository)
+                case .githubRemoteRepository(let repository, _):
+                    cloneRepositoryFromInput(repository.projectRepository)
+                case .githubAction(let action):
+                    handleGitHubAction(action)
                 case .command(let c):
                     runExtensionCommand(c)
                 }
@@ -390,6 +439,13 @@ struct CommandView: View {
             if isCloningRepository { return true }
             if pendingKill != nil { pendingKill = nil; return true }
             if typingInBar {
+                if githubBrowseMode {
+                    githubBrowseMode = false
+                    query = ""
+                    jumpSelection = 0
+                    refocusField()
+                    return true
+                }
                 if hasAnySessions { hideQuickCommand() } // Esc closes the ⌘P bar
                 return true
             }
@@ -413,7 +469,7 @@ struct CommandView: View {
 
     /// Context used by a plugin launched from the top bar. Detail routes target the session
     /// actually on screen; the home targets its selected card; specs have no session context.
-    private var extensionContextSession: Session? {
+    private var workspaceSession: Session? {
         switch route {
         case .detail(let name), .specSession(let name, _), .featureSession(let name, _, _):
             return sessions.first { $0.name == name }
@@ -423,6 +479,12 @@ struct CommandView: View {
             return nil
         }
     }
+
+    /// The manager scopes project shells by working directory, so two sessions intentionally
+    /// sharing a checkout also share the same mini terminal.
+    private var miniTerminalContextKey: String? { workspaceSession?.cwd }
+
+    private var extensionContextSession: Session? { workspaceSession }
 
     @ViewBuilder
     private var content: some View {
@@ -648,27 +710,35 @@ struct CommandView: View {
         .fixedSize()
     }
 
-    /// A compact, explicit affordance makes repository import discoverable without turning the
-    /// keyboard-first palette into a multi-step wizard. Clicking it seeds the URL prefix; pasting
-    /// a full URL works directly without using the button.
+    /// Account status and repository browsing stay in one compact control. A pasted URL still
+    /// works directly, while the capsule opens the repositories available to the connected user.
     private var githubImportButton: some View {
         Button {
-            query = "https://github.com/"
-            jumpSelection = 0
-            refocusField()
-            FieldEditorFix.cursorToEnd()
+            toggleGitHubBrowser()
         } label: {
             HStack(spacing: 4) {
-                Text("GitHub").font(.system(size: 11, weight: .semibold))
-                Image(systemName: "arrow.down").font(.system(size: 8, weight: .bold))
+                if githubBrowserState == .loading || githubBrowserState == .connecting {
+                    ProgressView().controlSize(.mini)
+                }
+                Text(githubAccountLabel).font(.system(size: 11, weight: .semibold))
+                Image(systemName: githubBrowseMode ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(githubBrowseMode ? Color.accentColor : .secondary)
             .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(.secondary.opacity(0.12), in: Capsule())
+            .background(
+                githubBrowseMode ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.12),
+                in: Capsule()
+            )
         }
         .buttonStyle(.plain)
-        .help("Clone a GitHub repository")
+        .help("Search repositories available to your GitHub account")
         .fixedSize()
+    }
+
+    private var githubAccountLabel: String {
+        if case .loaded(let account) = githubBrowserState { return "@\(account.login)" }
+        return "GitHub"
     }
 
     @ViewBuilder
@@ -701,7 +771,8 @@ struct CommandView: View {
     }
 
     private var placeholder: String {
-        newSessionMode ? "project name or GitHub URL" : "search — session name, then your message"
+        if newSessionMode, githubBrowseMode { return "search accessible GitHub repositories" }
+        return newSessionMode ? "project name or GitHub URL" : "search — session name, then your message"
     }
 
     private var emptyResultsMessage: String {
@@ -709,6 +780,20 @@ struct CommandView: View {
             return "No extension commands — install & enable extensions in Settings."
         }
         if newSessionMode {
+            if githubBrowseMode {
+                switch githubBrowserState {
+                case .idle, .loading:
+                    return "Loading repositories from GitHub…"
+                case .connecting:
+                    return "Complete GitHub sign-in in the terminal…"
+                case .loaded(let account):
+                    return query.isEmpty
+                        ? "No repositories are available to @\(account.login)."
+                        : "No repositories match “\(query)”."
+                case .missingCLI, .signedOut, .failed:
+                    break // these states present an actionable result row
+                }
+            }
             return ProjectCreationService.looksLikeGitHubRepositoryInput(query)
                 ? "Use a repository URL like https://github.com/owner/repository."
                 : "No matching projects — type a project name or paste a GitHub URL."
@@ -723,6 +808,20 @@ struct CommandView: View {
             if case .newProject(let name, _)? = jumpSelectedItem { return "⏎ create “\(name)” + start \(newSessionAgent.rawValue)" }
             if case .githubRepository(let repository, _)? = jumpSelectedItem {
                 return "⏎ clone \(repository.displayName) + start \(newSessionAgent.rawValue)"
+            }
+            if case .githubRemoteRepository(let repository, _)? = jumpSelectedItem {
+                return "⏎ clone \(repository.fullName) + start \(newSessionAgent.rawValue)"
+            }
+            if case .githubAction(let action)? = jumpSelectedItem { return action.hint }
+            if githubBrowseMode {
+                switch githubBrowserState {
+                case .loaded(let account):
+                    return "@\(account.login) · \(githubRepositories.count) accessible repositories · type to filter · Esc local projects"
+                case .connecting:
+                    return "browser sign-in continues in Terminal · Esc local projects"
+                default:
+                    return "GitHub account repositories · Esc local projects"
+                }
             }
             return "select a project · create by name · or paste a GitHub URL · Esc close"
         }
@@ -941,7 +1040,9 @@ struct CommandView: View {
                         if readableMode {
                             ConversationPaneView(session: s)
                         } else {
-                            TerminalPaneView(controller: live)
+                            TerminalPaneView(controller: live) { command in
+                                appModel.miniTerminals.run(command, for: s)
+                            }
                                 .id(live.sessionName) // new session → new NSView (updateNSView can't swap it)
                                 .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
                                 .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
@@ -1062,6 +1163,7 @@ struct CommandView: View {
     private func hideQuickCommand() {
         showQuickCommand = false
         newSessionMode = false
+        githubBrowseMode = false
         query = ""
         omniboxFocused = false
         terminal?.focus()
@@ -1089,6 +1191,8 @@ struct CommandView: View {
         case .project(let p): token = Slug.make(p.name)
         case .newProject(let name, _): token = name
         case .githubRepository(let repository, _): token = repository.cloneURL
+        case .githubRemoteRepository(let repository, _): token = repository.fullName
+        case .githubAction: return
         case .command(let c): token = c.token
         }
         let msg = jumpMessage ?? ""
@@ -1186,8 +1290,91 @@ struct CommandView: View {
         }
     }
 
+    private func toggleGitHubBrowser() {
+        githubBrowseMode.toggle()
+        query = ""
+        status = nil
+        jumpSelection = 0
+        if githubBrowseMode, case .idle = githubBrowserState {
+            loadGitHubRepositories()
+        }
+        refocusField()
+    }
+
+    private func loadGitHubRepositories() {
+        githubBrowserState = .loading
+        Task {
+            do {
+                let snapshot = try await Task.detached(priority: .userInitiated) {
+                    try GitHubRepositoryService.load()
+                }.value
+                githubRepositories = snapshot.repositories
+                githubBrowserState = .loaded(snapshot.account)
+            } catch let failure as GitHubRepositoryService.Failure {
+                switch failure {
+                case .cliUnavailable: githubBrowserState = .missingCLI
+                case .signedOut: githubBrowserState = .signedOut
+                case .api, .invalidResponse:
+                    githubBrowserState = .failed(failure.localizedDescription)
+                }
+            } catch {
+                githubBrowserState = .failed(error.localizedDescription)
+            }
+            jumpSelection = 0
+            refocusField()
+        }
+    }
+
+    private func handleGitHubAction(_ action: GitHubPaletteAction) {
+        switch action {
+        case .connect:
+            beginGitHubSignIn()
+        case .installCLI:
+            if let url = URL(string: "https://cli.github.com/") { NSWorkspace.shared.open(url) }
+        case .retry:
+            loadGitHubRepositories()
+        }
+    }
+
+    private func beginGitHubSignIn() {
+        guard let command = GitHubRepositoryService.authenticationCommand() else {
+            githubBrowserState = .missingCLI
+            return
+        }
+        githubBrowserState = .connecting
+        jumpSelection = 0
+        AttachService.openCommand(command)
+
+        Task {
+            // The browser/device flow runs in the user's terminal. Poll only for completion;
+            // GitHub CLI remains the sole owner of the credential throughout the process.
+            for _ in 0..<120 {
+                try? await Task.sleep(for: .seconds(1))
+                guard githubBrowseMode else { return }
+                do {
+                    _ = try await Task.detached(priority: .utility) {
+                        try GitHubRepositoryService.account()
+                    }.value
+                    loadGitHubRepositories()
+                    return
+                } catch GitHubRepositoryService.Failure.signedOut {
+                    continue
+                } catch GitHubRepositoryService.Failure.cliUnavailable {
+                    githubBrowserState = .missingCLI
+                    return
+                } catch {
+                    continue
+                }
+            }
+            githubBrowserState = .failed("GitHub sign-in was not completed. Try again.")
+        }
+    }
+
     private func cloneRepositoryFromInput(_ repository: ProjectCreationService.GitHubRepository) {
         guard !isCloningRepository else { return }
+        githubBrowseMode = false
+        query = repository.cloneURL
+        jumpSelection = 0
         isCloningRepository = true
         status = "Cloning \(repository.displayName)…"
         Task {
@@ -1220,6 +1407,10 @@ struct CommandView: View {
             createProjectFromInput(name)
         case .githubRepository(let repository, _):
             cloneRepositoryFromInput(repository)
+        case .githubRemoteRepository(let repository, _):
+            cloneRepositoryFromInput(repository.projectRepository)
+        case .githubAction(let action):
+            handleGitHubAction(action)
         case .command(let c):
             runExtensionCommand(c)
         }
@@ -1358,7 +1549,9 @@ struct FocusedSessionCard: View {
                     if readableMode {
                         ConversationPaneView(session: session)
                     } else {
-                        TerminalPaneView(controller: terminal)
+                        TerminalPaneView(controller: terminal) { command in
+                            appModel.miniTerminals.run(command, for: session)
+                        }
                             .id(terminal.sessionName) // new session → new NSView (updateNSView can't swap it)
                             .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 6)
                             .background(Color(nsColor: (TerminalTheme(rawValue: terminalThemeRaw) ?? .classic).nsBackground))
@@ -1916,11 +2109,43 @@ private struct ConfigURLContextMenu: View {
     }
 }
 
+enum GitHubPaletteAction: String {
+    case connect
+    case installCLI
+    case retry
+
+    var title: String {
+        switch self {
+        case .connect: return "Connect GitHub account"
+        case .installCLI: return "Install GitHub CLI"
+        case .retry: return "Retry GitHub"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .connect: return "Sign in securely in a browser, then return to Pass"
+        case .installCLI: return "Pass uses GitHub CLI's secure credential storage"
+        case .retry: return "Check the connection and load repositories again"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .connect: return "⏎ open GitHub sign-in in Terminal"
+        case .installCLI: return "⏎ open the GitHub CLI download page"
+        case .retry: return "⏎ retry loading accessible repositories"
+        }
+    }
+}
+
 enum PaletteItem: Identifiable {
     case session(Session)
     case project(Project)
     case newProject(name: String, parentDirectory: String?)
     case githubRepository(ProjectCreationService.GitHubRepository, parentDirectory: String?)
+    case githubRemoteRepository(GitHubRemoteRepository, parentDirectory: String?)
+    case githubAction(GitHubPaletteAction)
     case command(ExtensionStore.PaletteCommand)
 
     var id: String {
@@ -1929,6 +2154,8 @@ enum PaletteItem: Identifiable {
         case .project(let p): return "p:" + p.rootPath
         case .newProject(let name, _): return "n:" + name
         case .githubRepository(let repository, _): return "g:" + repository.cloneURL
+        case .githubRemoteRepository(let repository, _): return "gr:\(repository.id)"
+        case .githubAction(let action): return "ga:" + action.rawValue
         case .command(let c): return "c:" + c.id
         }
     }
@@ -1946,6 +2173,9 @@ struct PaletteRow: View {
             case .newProject(let name, let parent): newProjectRow(name, parent: parent)
             case .githubRepository(let repository, let parent):
                 githubRepositoryRow(repository, parent: parent)
+            case .githubRemoteRepository(let repository, let parent):
+                githubRemoteRepositoryRow(repository, parent: parent)
+            case .githubAction(let action): githubActionRow(action)
             case .command(let c): commandRow(c)
             }
         }
@@ -2065,6 +2295,55 @@ struct PaletteRow: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
         }
+    }
+
+    private func githubRemoteRepositoryRow(_ repository: GitHubRemoteRepository, parent: String?) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: repository.isPrivate ? "lock.fill" : "shippingbox.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(repository.isPrivate ? Color.orange : Color.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(repository.fullName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Text(repository.description ?? parentPreview(repository.name, parent: parent))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 5) {
+                if repository.isArchived { repositoryBadge("ARCHIVED", color: .secondary) }
+                if repository.isPrivate { repositoryBadge("PRIVATE", color: .orange) }
+                repositoryBadge(repository.permission.uppercased(), color: Color.accentColor)
+            }
+        }
+    }
+
+    private func githubActionRow(_ action: GitHubPaletteAction) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: action == .installCLI ? "arrow.down.app.fill" : "person.crop.circle.badge.plus")
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(action.title).font(.system(size: 13, weight: .semibold))
+                Text(action.subtitle).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Text("ENTER")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+
+    private func repositoryBadge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 8, weight: .bold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 3))
     }
 
     private func parentPreview(_ name: String, parent: String?) -> String {

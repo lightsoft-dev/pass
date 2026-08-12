@@ -4,6 +4,55 @@ import XCTest
 
 final class TerminalMouseInteractionPolicyTests: XCTestCase {
     @MainActor
+    func testSelectionMenuOffersCopyAndFind() throws {
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+
+        let menu = try XCTUnwrap(terminal.selectionActionMenu(for: "selected output"))
+
+        XCTAssertEqual(
+            menu.items.map(\.title),
+            ["Copy", "Run in Terminal", "Find in Terminal"]
+        )
+        XCTAssertTrue(menu.items.allSatisfy(\.isEnabled))
+        XCTAssertNil(terminal.selectionActionMenu(for: "  \n  "))
+    }
+
+    @MainActor
+    func testRunInTerminalMenuExecutesTrimmedSelection() throws {
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        var executedCommand: String?
+        terminal.runSelectionInTerminal = { executedCommand = $0 }
+        let menu = try XCTUnwrap(terminal.selectionActionMenu(for: "  echo pass  \n"))
+
+        let runItem = try XCTUnwrap(menu.item(withTitle: "Run in Terminal"))
+        let action = try XCTUnwrap(runItem.action)
+        XCTAssertTrue(NSApp.sendAction(action, to: runItem.target, from: runItem))
+
+        XCTAssertEqual(executedCommand, "echo pass")
+    }
+
+    @MainActor
+    func testSelectionMenuOffersOpenForExplicitWebURLOnly() throws {
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+
+        let urlMenu = try XCTUnwrap(
+            terminal.selectionActionMenu(for: " https://example.com/docs?q=pass ")
+        )
+        let proseMenu = try XCTUnwrap(
+            terminal.selectionActionMenu(for: "open https://example.com")
+        )
+
+        XCTAssertEqual(
+            urlMenu.items.filter { !$0.isSeparatorItem }.map(\.title),
+            ["Copy", "Run in Terminal", "Find in Terminal", "Open Link"]
+        )
+        XCTAssertEqual(
+            proseMenu.items.map(\.title),
+            ["Copy", "Run in Terminal", "Find in Terminal"]
+        )
+    }
+
+    @MainActor
     func testTerminalDefaultsToPersistentLocalSelectionMode() {
         let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
 
@@ -80,6 +129,29 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectionActionReadsTextWithoutReplacingClipboard() throws {
+        let pasteboard = NSPasteboard.general
+        let originalClipboard = pasteboard.string(forType: .string)
+        defer {
+            pasteboard.clearContents()
+            if let originalClipboard { pasteboard.setString(originalClipboard, forType: .string) }
+        }
+        pasteboard.clearContents()
+        pasteboard.setString("keep clipboard", forType: .string)
+
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        terminal.getTerminal().feed(text: "send this selection")
+        let y = terminal.bounds.height - 8
+        terminal.mouseDown(with: try mouseEvent(type: .leftMouseDown, x: 2, y: y))
+        terminal.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, x: 2, y: y))
+        terminal.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, x: 130, y: y))
+        terminal.mouseUp(with: try mouseEvent(type: .leftMouseUp, x: 130, y: y))
+
+        XCTAssertTrue(terminal.selectedTextForMenu().hasPrefix("send this"))
+        XCTAssertEqual(pasteboard.string(forType: .string), "keep clipboard")
+    }
+
+    @MainActor
     func testPlainTextURLHitUsesExactCellsWithKoreanAroundIt() throws {
         let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 960, height: 240))
         let url = "https://print-so.lightsoft.dev/admin/printer"
@@ -129,8 +201,15 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
         let hit = try XCTUnwrap(terminal.urlHit(at: point))
         XCTAssertEqual(hit.url.absoluteString, url)
         XCTAssertGreaterThanOrEqual(hit.rects.count, 2)
-        XCTAssertEqual(hit.rects[0].minX, 0, accuracy: 0.001)
-        XCTAssertEqual(hit.rects[1].minX, 0, accuracy: 0.001)
+        // Link underlines are visually inset by one device pixel while their hit ranges still
+        // cover the complete cells. Every soft-wrapped segment starts at column zero before
+        // that presentation-only inset is applied.
+        let scale = terminal.window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 1
+        let visualInset = 1 / max(scale, 1)
+        XCTAssertEqual(hit.rects[0].minX, visualInset, accuracy: 0.001)
+        XCTAssertEqual(hit.rects[1].minX, visualInset, accuracy: 0.001)
     }
 
     func testPlainDragUsesPersistentLocalSelection() {

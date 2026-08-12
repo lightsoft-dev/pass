@@ -33,6 +33,12 @@ protocol TerminalPaneAccess: Sendable {
     func sendTerminalInput(_ input: String, to name: String) async -> Bool
 }
 
+enum TmuxPasteResult: Sendable, Equatable {
+    case pasted
+    case stagingFailed
+    case pasteFailed
+}
+
 /// The ONLY thing that spawns tmux. Resolves the binary once; every call uses the absolute
 /// path. Uses the default socket so `tmux attach` from any terminal just works.
 actor TmuxClient: TerminalPaneAccess {
@@ -321,18 +327,23 @@ actor TmuxClient: TerminalPaneAccess {
 
     // MARK: send-keys / buffer primitives (ReplyInjector)
 
-    /// Load arbitrary text into the tmux paste buffer. Passed as a single Process argument,
-    /// so newlines/quotes/specials need no escaping (no shell involved).
-    @discardableResult
-    func setBuffer(_ text: String) async -> Bool {
-        await run(["set-buffer", "--", text]).ok
-    }
+    /// Stage arbitrary text in a uniquely named tmux buffer and bracket-paste it into a pane.
+    /// The unnamed buffer is shared by the entire tmux server, so separate Pass processes or a
+    /// user's copy operation could overwrite it between `set-buffer` and `paste-buffer`.
+    func paste(_ text: String, into name: String) async -> TmuxPasteResult {
+        let bufferName = "pass-paste-\(UUID().uuidString)"
+        let staged = await run(["set-buffer", "-b", bufferName, "--", text])
+        guard staged.ok else { return .stagingFailed }
 
-    /// Paste the buffer into a pane using bracketed paste (`-p`), deleting the buffer (`-d`).
-    /// Bracketed paste lets Ink receive multi-line text without submitting (FINDINGS §2).
-    @discardableResult
-    func pasteBuffer(into name: String) async -> Bool {
-        await run(["paste-buffer", "-t", name, "-p", "-d"]).ok
+        let pasted = await run([
+            "paste-buffer", "-b", bufferName, "-t", name, "-p", "-d",
+        ])
+        guard pasted.ok else {
+            // `-d` removes the buffer after a successful paste only.
+            await run(["delete-buffer", "-b", bufferName])
+            return .pasteFailed
+        }
+        return .pasted
     }
 
     /// Send literal key names (e.g. ["Enter"], ["1"], ["y"]) to a pane.
