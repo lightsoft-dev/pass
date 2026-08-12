@@ -81,8 +81,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass
-        MARKETING_VERSION: "0.1.9"
-        CURRENT_PROJECT_VERSION: "10"
+        MARKETING_VERSION: "0.1.10"
+        CURRENT_PROJECT_VERSION: "11"
         # Public, non-secret endpoint used for signed-out marketplace discovery and installs.
         # Release builds validate that this value is present before compiling.
         PASS_PUBLIC_RELAY_URL: "https://pass-mobile-relay.zimin-byun.workers.dev/"
@@ -157,8 +157,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.lightsoft.pass.share
-        MARKETING_VERSION: "0.1.9"
-        CURRENT_PROJECT_VERSION: "10"
+        MARKETING_VERSION: "0.1.10"
+        CURRENT_PROJECT_VERSION: "11"
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: H66C2M66DC
