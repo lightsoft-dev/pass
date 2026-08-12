@@ -11,6 +11,20 @@ final class EndToEndSmokeTests: XCTestCase {
     /// Scratch port — never 49817, a live pass app may own that.
     private let port: UInt16 = 49907
 
+    private func waitForPane(
+        _ client: TmuxClient,
+        session: String,
+        until condition: (String) -> Bool
+    ) async -> String {
+        var captured = ""
+        for _ in 0..<50 {
+            captured = await client.capturePane(session, colors: false)
+            if condition(captured) { return captured }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return captured
+    }
+
     func testHookServerBindsAndRoutesAHook() async throws {
         let server = HookServer()
         await server.start(port: port)
@@ -65,12 +79,17 @@ final class EndToEndSmokeTests: XCTestCase {
             let retagged = await client.listSessions().first { $0.name == name }
             XCTAssertEqual(retagged?.agentOption, AgentKind.codex.rawValue)
 
-            // The FINDINGS §2 injection primitive: set-buffer → bracketed paste → capture.
+            // This test verifies tmux's transport primitive, not the user's interactive shell
+            // setup. A detached login shell can legitimately wait for a terminal response in
+            // user rc files, so replace it with a deterministic echoing process.
+            let pane = await client.run(["respawn-pane", "-k", "-t", name, "/bin/cat"])
+            XCTAssertTrue(pane.ok, "could not start deterministic pane: \(pane.stderr)")
+
+            // The FINDINGS §2 injection primitive: named buffer → bracketed paste → capture.
             let marker = "portspike-marker-\(name.suffix(4))"
-            await client.setBuffer("echo \(marker)")
-            await client.pasteBuffer(into: name)
-            try await Task.sleep(for: .milliseconds(500))
-            let captured = await client.capturePane(name, colors: false)
+            let pasteResult = await client.paste(marker, into: name)
+            XCTAssertEqual(pasteResult, .pasted)
+            let captured = await waitForPane(client, session: name) { $0.contains(marker) }
             XCTAssertTrue(captured.contains(marker),
                           "pasted text not visible in pane; captured:\n\(captured)")
         }

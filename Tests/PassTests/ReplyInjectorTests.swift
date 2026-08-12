@@ -145,11 +145,10 @@ private actor FakeReplyInjectorTmux: ReplyInjectorTmux {
         cancelCount += 1
     }
 
-    func setBuffer(_ text: String) -> Bool { setBufferSucceeds }
-
-    func pasteBuffer(into name: String) -> Bool {
+    func paste(_ text: String, into name: String) -> TmuxPasteResult {
+        guard setBufferSucceeds else { return .stagingFailed }
         pasteCount += 1
-        return pasteBufferSucceeds
+        return pasteBufferSucceeds ? .pasted : .pasteFailed
     }
 
     func sendKeys(_ name: String, _ keys: [String]) -> Bool {

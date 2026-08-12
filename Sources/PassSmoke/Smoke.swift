@@ -98,11 +98,20 @@ struct Smoke {
               "@pass_project_root/@pass_agent options round-trip",
               mine.map { "root=\($0.projectRootOption ?? "nil") agent=\($0.agentOption ?? "nil")" } ?? "session missing")
 
+        // Isolate the transport check from user shell startup files. Detached interactive shells
+        // may wait for a terminal response before accepting input; cat deterministically echoes it.
+        let pane = await client.run(["respawn-pane", "-k", "-t", name, "/bin/cat"])
+        check(pane.ok, "deterministic tmux pane", pane.stderr)
+
         let marker = "portspike-marker-\(name.suffix(4))"
-        await client.setBuffer("echo \(marker)")
-        await client.pasteBuffer(into: name)
-        try? await Task.sleep(for: .milliseconds(500))
-        let captured = await client.capturePane(name, colors: false)
+        let pasteResult = await client.paste(marker, into: name)
+        check(pasteResult == .pasted, "tmux named-buffer paste", "result=\(pasteResult)")
+        var captured = ""
+        for _ in 0..<50 {
+            captured = await client.capturePane(name, colors: false)
+            if captured.contains(marker) { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         check(captured.contains(marker), "bracketed-paste injection visible in capture-pane (FINDINGS §2)")
 
         await client.killSession(name)
