@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "main": "expo-router/entry",
+  "expo": {
+    "autolinking": {
+      "ios": {
+        "buildFromSource": [
+          "react-native-reanimated",
+          "react-native-worklets"
+        ]
+      }
+    }
+  },
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
