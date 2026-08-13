@@ -1,6 +1,6 @@
 {
   "name": "pass-mobile",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "main": "expo-router/entry",
@@ -8,6 +8,8 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
+    "check:icon": "node scripts/verify-app-icon.mjs",
+    "eas-build-pre-install": "npm run check:icon",
     "postinstall": "node scripts/patch-expo-modules-jsi.mjs && node scripts/build-terminal-document.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test src/conversation/richText.test.ts src/conversation/terminalConversation.test.ts src/protocol/protocol.test.ts src/services/deviceCredentialService.test.ts src/services/remoteClient.test.ts src/state/reducer.test.ts"
