@@ -74,6 +74,23 @@ export async function persistFreshAppleSessionAfterRegistrationAttempt(
   return null;
 }
 
+/**
+ * A verified native Apple identity token establishes the signed-in session. The authorization
+ * code only supplies a revocation token for automatic account deletion, so that optional server
+ * exchange must not block sign-in.
+ */
+export async function persistAppleSignInBeforeBackgroundRegistration(
+  authorization: AppleAuthorization,
+  persist: (session: UserSession) => Promise<void>,
+  register: () => Promise<void>,
+): Promise<void> {
+  await persist(authorization.session);
+  void register().catch(() => {
+    // Account deletion offers a user-approved manual Apple revocation fallback if the server did
+    // not store a refresh token. The one-time code and nonce are never persisted.
+  });
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Apple authorization failed.";
 }

@@ -7,6 +7,7 @@ import {
   fallbackForApplePreparationFailure,
   isAppleRevocationFallbackRequiredError,
   manualDeletionSessionStrategy,
+  persistAppleSignInBeforeBackgroundRegistration,
   persistFreshAppleSessionAfterRegistrationAttempt,
 } from "./appleDeletionFallback.ts";
 
@@ -94,4 +95,36 @@ test("preserves only the fresh Apple session when registration fails", async () 
   );
   assert.deepEqual(persisted, session);
   assert.doesNotMatch(JSON.stringify(persisted), /one-time-code|request-nonce/);
+});
+
+test("does not block Apple sign-in on background registration failure", async () => {
+  const session = {
+    issuer: "https://appleid.apple.com",
+    clientId: "dev.lightsoft.passmobile",
+    accessToken: "fresh-identity-token",
+    accessExpiresAt: "2026-08-12T00:05:00.000Z",
+    identityProvider: "apple" as const,
+    providerUserId: "apple-user",
+  };
+  const events: string[] = [];
+  let rejectRegistration: ((error: Error) => void) | undefined;
+  const registration = new Promise<void>((_resolve, reject) => {
+    rejectRegistration = reject;
+  });
+
+  await persistAppleSignInBeforeBackgroundRegistration(
+    { session, authorizationCode: "one-time-code", nonce: "request-nonce" },
+    async (value) => {
+      assert.equal(value, session);
+      events.push("persisted");
+    },
+    async () => {
+      events.push("registration-started");
+      return registration;
+    },
+  );
+
+  assert.deepEqual(events, ["persisted", "registration-started"]);
+  rejectRegistration?.(new Error("Apple server authorization was rejected."));
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });

@@ -41,6 +41,7 @@ import {
   fallbackForAppleDeletionResponse,
   fallbackForApplePreparationFailure,
   manualDeletionSessionStrategy,
+  persistAppleSignInBeforeBackgroundRegistration,
   persistFreshAppleSessionAfterRegistrationAttempt,
 } from "../services/appleDeletionFallback";
 import {
@@ -372,10 +373,14 @@ export function RemoteProvider({ children }: PropsWithChildren) {
     const relayUrl = resolveAccountRelayURL(
       process.env.EXPO_PUBLIC_PASS_RELAY_URL,
     );
-    // Registration exchanges the one-time code before only the persistable session is stored.
-    await registerAppleAuthorization(relayUrl, authorization);
-    await saveUserSession(authorization.session);
-    setUserSession(authorization.session);
+    await persistAppleSignInBeforeBackgroundRegistration(
+      authorization,
+      async (session) => {
+        await saveUserSession(session);
+        setUserSession(session);
+      },
+      () => registerAppleAuthorization(relayUrl, authorization),
+    );
   }, []);
 
   const revokeCurrentPairing = useCallback(async () => {
