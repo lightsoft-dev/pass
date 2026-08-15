@@ -26,6 +26,18 @@ DEVICE_CREDENTIAL_PEPPER=<another-independent-random-value>
 OIDC_ISSUER=https://identity.example.com
 OIDC_AUDIENCE=pass-public-api
 OIDC_JWKS_URL=https://identity.example.com/.well-known/jwks.json
+APPLE_OIDC_ISSUER=https://appleid.apple.com
+APPLE_OIDC_AUDIENCE=dev.lightsoft.passmobile
+APPLE_OIDC_JWKS_URL=https://appleid.apple.com/auth/keys
+APPLE_TEAM_ID=H66C2M66DC
+APPLE_CLIENT_ID=dev.lightsoft.passmobile
+APPLE_KEY_ID=<10-character-Apple-key-id>
+APPLE_PRIVATE_KEY=<contents-of-the-Apple-p8-private-key>
+# Exactly 32 random bytes encoded as unpadded base64url (43 characters).
+APPLE_TOKEN_ENCRYPTION_KEY=<independent-32-byte-base64url-key>
+# Required only when serving the included browser console.
+GOOGLE_CLIENT_ID=<google-oauth-web-client-id>
+# Optional. Feedback is accepted into D1 even when Notion forwarding is disabled.
 NOTION_API_TOKEN=<notion-internal-integration-token>
 NOTION_FEEDBACK_DATA_SOURCE_ID=<feedback-data-source-id>
 # Optional comma-separated D1 account ids allowed to hide marketplace listings.
@@ -44,30 +56,109 @@ npm test
 npm run check
 ```
 
-When an actual Cloudflare Worker is ready to be configured, use Workers Secrets rather than adding
-a value to `wrangler.jsonc` or source code:
+When an actual Cloudflare Worker is ready to be configured, use Workers Secrets for private
+credentials rather than adding them to `wrangler.jsonc` or source code:
 
 ```sh
 npx wrangler secret put RELAY_AUTH_TOKEN
 npx wrangler secret put DEVICE_CREDENTIAL_PEPPER
+npx wrangler secret put APPLE_PRIVATE_KEY
+npx wrangler secret put APPLE_TOKEN_ENCRYPTION_KEY
+# Optional feedback forwarding; set or remove these as a pair.
 npx wrangler secret put NOTION_API_TOKEN
 npx wrangler secret put NOTION_FEEDBACK_DATA_SOURCE_ID
 npx wrangler secret put MARKETPLACE_ADMIN_ACCOUNT_IDS
 ```
 
-Configure `OIDC_ISSUER`, `OIDC_AUDIENCE`, and `OIDC_JWKS_URL` as deployment environment values or
-secrets. `OIDC_ISSUER` must exactly match the token's `iss` claim, including a trailing slash when
-the provider includes one. `MARKETPLACE_ADMIN_ACCOUNT_IDS` is optional and accepts comma-separated
-`acct_...` ids. Apply D1 migrations before deploying the Worker, including the marketplace schema:
+Configure public OIDC metadata, OAuth client ids, `APPLE_TEAM_ID`, and `APPLE_KEY_ID` as deployment
+environment values. The production `APPLE_TEAM_ID` and `APPLE_CLIENT_ID` are pinned in
+`wrangler.jsonc`, along with the public 10-character `APPLE_KEY_ID`; the `.p8` private key remains a
+Worker secret. Apple code exchange fails closed with `503 apple_service_unavailable` if either key
+value is absent or invalid.
+`OIDC_ISSUER` must exactly match the token's `iss` claim, including a trailing slash when the
+provider includes one. `MARKETPLACE_ADMIN_ACCOUNT_IDS` is optional and accepts comma-separated
+`acct_...` ids. Apply D1 migrations before deploying the Worker. In particular, identity migration
+`0005` must precede Apple token-metadata migration `0006`, and `0007` must be applied before
+deploying the D1-backed feedback handler:
 
 ```sh
 npx wrangler d1 migrations apply pass-mobile-control-dev --remote
+npx wrangler d1 migrations apply pass-mobile-control-prod --remote --env production
 npx wrangler deploy
 ```
+
+Back up the production D1 database before applying migrations, and deploy the Worker only after
+`0005_account_identities.sql`, `0006_apple_token_metadata.sql`, and
+`0007_feedback_reports.sql` report as applied.
+
+## Browser remote console with Google
+
+The Worker ships the browser console from the same origin at `/`. It uses Google Identity Services
+to obtain a Google OpenID Connect ID token, then uses the existing account API to issue a
+desktop-scoped controller credential. The access and rotating refresh credentials live in page
+memory only; closing the tab or signing out drops them. They are automatically rotated before the
+15-minute access expiry and are never put into a URL, local storage, cookies, or browser history.
+
+Create a **Web application** OAuth client in Google Cloud, add the deployed Worker origin to
+**Authorized JavaScript origins**, and configure these Worker values:
+
+```text
+GOOGLE_CLIENT_ID=<the Web application client ID>
+OIDC_ISSUER=https://accounts.google.com
+OIDC_AUDIENCE=<the Web application client ID>
+OIDC_JWKS_URL=https://www.googleapis.com/oauth2/v3/certs
+```
+
+The `OIDC_AUDIENCE` value accepts a comma-separated allow-list during migration, but native Google
+SDK clients should request an ID token for the shared Web client id so production needs one
+audience. `GOOGLE_CLIENT_ID` is intentionally returned by `GET /v2/web/config`: client ids are
+public identifiers, not secrets. The production values are committed as `vars` in `wrangler.jsonc`;
+keep `DEVICE_CREDENTIAL_PEPPER` and every issued credential secret. For production also set
+`ALLOW_DEVELOPMENT_AUTH=false` and do not configure or use `RELAY_AUTH_TOKEN` clients.
+
+Browser WebSockets carry their temporary device access credential in a `pass.auth.<token>`
+`Sec-WebSocket-Protocol` value because browsers cannot set `Authorization` on a WebSocket
+handshake. The relay accepts only issued `pass_at_…` credentials through that path; legacy shared
+development credentials are never accepted there.
+
+Native iOS Sign in with Apple uses the same account API contract: send the Apple identity token as
+`Authorization: Bearer <identity-token>` to `GET /v2/me` and subsequent account endpoints. The
+relay uses the unverified issuer only to select a provider verifier, then accepts Apple claims only
+after validating the Apple signature, `https://appleid.apple.com` issuer, the
+`dev.lightsoft.passmobile` audience, expiry, and RS256 algorithm against Apple's published JWKS.
+
+Immediately after a successful native Apple authorization, register its server authorization with
+the relay. The authorization code is single-use. `nonce` must exactly equal the nonce claim in the
+Bearer identity token (when the native request uses a hashed nonce, send that hashed value):
+
+```http
+POST /v2/apple/authorization
+Authorization: Bearer <apple-identity-token>
+Content-Type: application/json
+
+{"authorizationCode":"<single-use-code>","nonce":"<identity-token-nonce>"}
+```
+
+A successful request returns `200` with
+`{"authorized":true,"account":{"id":"acct_..."}}`. The relay exchanges the code at Apple,
+strictly verifies the returned identity token and subject, and stores only an AES-256-GCM encrypted
+refresh token bound to the Apple issuer and subject. Never reuse the authorization code after an
+`apple_authorization_uncertain` response; start Sign in with Apple again. Error responses include an
+`action` of either `retry` or `reauthorize_with_apple` and a matching `retryable` boolean.
+
+Accounts can hold one Google identity and one Apple identity. On the first iOS QR claim, possession
+of the valid, unexpired, unused pairing secret authorizes the relay to attach an otherwise empty
+Apple account to the Google account that owns the desktop. The temporary Apple account is then
+removed and later Apple requests resolve to the same account id. The relay never links by email and
+refuses automatic merging when the Apple account already owns any desktop, device, credential,
+pairing, marketplace, usage, or audit data; that conflict returns `409 account_link_conflict`.
 
 ## Public account API
 
 - `GET /v2/me` creates or returns the OIDC-backed account.
+- `POST /v2/apple/authorization` records revocable Apple server authorization after native sign-in.
+- `DELETE /v2/account` revokes linked Apple authorization before deleting D1 and Durable Object
+  relay data. This also applies when the caller authenticates with its linked Google identity.
 - `GET|POST /v2/desktops` lists or registers desktop instances.
 - `DELETE /v2/desktops/:id` revokes a desktop and its credentials.
 - `POST /v2/pairings` creates a five-minute, one-time code using a desktop access credential.
@@ -85,12 +176,20 @@ contains the approval secret but never the private polling secret or a usable re
 The Worker Rate Limiting API limits pairing routes to 20 requests per minute and other authenticated
 API/WebSocket handshakes to 120 per minute for each hashed credential key in a Cloudflare location.
 
-## Feedback API and Notion setup
+## Feedback API and optional Notion forwarding
 
-`POST /v2/feedback` accepts an in-app request, feedback note, or bug report and creates one page in
-the configured Notion data source. The route is intentionally narrow: request bodies are size
-limited and validated, Notion errors are not returned to clients, and anonymous submissions are
-limited to 10 per minute per source IP in a Cloudflare location.
+`POST /v2/feedback` accepts an in-app request, feedback note, or bug report. A validated report is
+first stored in the `feedback_reports` D1 table, so support reports remain durable when Notion is
+disabled or unavailable. The route is intentionally narrow: request bodies are size limited and
+validated, upstream errors are not returned to clients, and anonymous submissions are limited to
+10 per minute per source IP in a Cloudflare location.
+
+The response contains a non-secret `reportId` that can be used for a targeted support or deletion
+request. A `201` response means D1 accepted the report; `delivery: "delivered"` means optional
+Notion forwarding also completed, while `delivery: "queued"` means D1 is the durable copy. If a
+configured Notion delivery attempt fails, the Worker returns truthful `202` plus
+`delivery: "queued"` instead of asking the client to submit a duplicate. There is no automatic
+retry worker; operators must review queued rows or forward them manually.
 
 To configure it:
 
@@ -98,13 +197,33 @@ To configure it:
 2. Create or choose the feedback database, connect the integration to it, and copy its data source
    id. The handler discovers the data source's title property name, so it does not have to be
    called `Name`.
-3. Store the integration token and data source id using the two Wrangler secrets above.
+3. Store the integration token and data source id using the two optional Wrangler secrets above.
 4. Build Pass with `PASS_FEEDBACK_URL=https://<worker-host>` (or
    `PASS_PUBLIC_RELAY_URL=https://<worker-host>`). The app always appends `/v2/feedback` and rejects
    non-HTTPS production endpoints.
 
 The Notion token is used only by the Worker and must never be added to the app, `project.yml`, or
-source control.
+source control. Configure both Notion values or neither; a partial configuration leaves reports
+queued in D1 and makes no Notion request.
+
+### Feedback operations and retention
+
+Do not add an unauthenticated feedback-export route. From a trusted administrator workstation,
+check only queue metadata with Wrangler so report bodies and email addresses are not copied into
+ordinary terminal logs:
+
+```sh
+npx wrangler d1 execute CONTROL_DB --env production --remote --command \
+  "SELECT forward_status, COUNT(*) AS report_count, MIN(created_at) AS oldest_created_at FROM feedback_reports GROUP BY forward_status"
+```
+
+Inspect report content only in an access-controlled Cloudflare account when it is required to
+resolve a report. Use the exact returned `reportId` for deletion requests, and never paste report
+bodies, emails, credentials, QR data, authorization codes, or terminal content into deployment
+logs. Queued and delivered D1 copies, and any forwarded Notion copy, are reviewed and removed when
+they are no longer needed to investigate or resolve the report. This is currently an operator-run
+retention process rather than an automatic expiry; include the D1 table in the regular privacy
+retention review.
 
 ## In-app extension marketplace API
 
@@ -268,7 +387,21 @@ or device revokes its credentials and closes matching sockets. Durable Object al
 when their attached access credential expires.
 
 `RELAY_AUTH_TOKEN` remains unsafe for public use because its holder can choose a role and desktop.
-Set `ALLOW_DEVELOPMENT_AUTH` to `false` for production. Before unrestricted public launch, add
-provider-side account deletion/revocation, abuse alerts, retention controls, and a
-separate production D1 database and Worker environment. TURN/SFU credentials must also be
-short-lived and scoped when voice ships.
+Set `ALLOW_DEVELOPMENT_AUTH` to `false` for production. Account deletion first revokes a linked
+Apple refresh token, then revokes relay credentials, removes account audit rows, purges each desktop
+Durable Object, and closes active sockets. Apple outages fail closed without deleting local data. A
+missing or rejected Apple refresh token returns `409 apple_reauthorization_required`; the client
+should normally complete Sign in with Apple and `POST /v2/apple/authorization` before retrying
+deletion, or offer the explicit manual fallback described below. If Apple revocation succeeds but
+local cleanup temporarily fails, retrying `DELETE /v2/account`
+continues cleanup without a second Apple revoke. Before unrestricted public launch, add abuse
+alerts and a separate production D1 database and Worker environment. TURN/SFU credentials must
+also be short-lived and scoped when voice ships.
+
+When automatic Apple revocation cannot run, the deletion error includes
+`manualRevocationAvailable: true`. Only after explicit user confirmation may a client retry with
+`X-Pass-Apple-Revocation-Fallback: manual`. That authenticated request still takes the per-identity
+deletion lock, skips the Apple network call, deletes local account data, and returns
+`{"deleted":true,"appleRevocation":"manual_required"}`. The client must then direct the user to
+Apple Settings > [name] > Sign-In & Security > Sign in with Apple > Pass. Never send the fallback
+header automatically, and retry normally when `apple_operation_in_progress` is returned.

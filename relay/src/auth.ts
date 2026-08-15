@@ -1,9 +1,13 @@
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, decodeJwt, jwtVerify } from "jose";
 
 import { isValidIdentifier, type Role } from "./protocol";
 
 export const ACCESS_TOKEN_LIFETIME_MS = 15 * 60 * 1_000;
 export const REFRESH_TOKEN_LIFETIME_MS = 30 * 24 * 60 * 60 * 1_000;
+
+export const APPLE_OIDC_ISSUER = "https://appleid.apple.com";
+const APPLE_OIDC_AUDIENCE = "dev.lightsoft.passmobile";
+const APPLE_OIDC_JWKS_URL = "https://appleid.apple.com/auth/keys";
 
 export type CredentialKind = "access" | "refresh";
 
@@ -49,6 +53,21 @@ type PublicAuthEnv = {
   OIDC_ISSUER?: string;
   OIDC_AUDIENCE?: string;
   OIDC_JWKS_URL?: string;
+  APPLE_OIDC_ISSUER?: string;
+  APPLE_OIDC_AUDIENCE?: string;
+  APPLE_OIDC_JWKS_URL?: string;
+};
+
+type OIDCProvider = {
+  issuer: string;
+  audiences: string[];
+  jwksURL: string;
+  algorithms: string[];
+};
+
+type OIDCAuthenticationOptions = {
+  appleNonce?: string;
+  allowMissingAppleNonce?: boolean;
 };
 
 type CredentialRow = {
@@ -91,35 +110,37 @@ export async function tokensMatch(
 export async function authenticateOIDCUser(
   request: Request,
   env: PublicAuthEnv,
+  options: OIDCAuthenticationOptions = {},
 ): Promise<AuthenticationResult<UserIdentity>> {
-  const issuer = env.OIDC_ISSUER?.trim();
-  const audience = env.OIDC_AUDIENCE?.trim();
-  const issuerBase = issuer?.replace(/\/+$/, "");
-  const jwksURL = env.OIDC_JWKS_URL?.trim()
-    || (issuerBase ? `${issuerBase}/.well-known/jwks.json` : "");
-  if (!issuer || !audience || !jwksURL) {
-    return {
-      ok: false,
-      status: 503,
-      code: "auth_unavailable",
-      message: "Public account authentication is not configured.",
-    };
-  }
-
   const token = extractBearerToken(request);
   if (token === null) return unauthorized();
 
   try {
-    let jwks = remoteJWKSets.get(jwksURL);
+    // `iss` is decoded before verification only to select one of the explicitly trusted
+    // provider configurations. No identity or profile claim is consumed until jwtVerify passes.
+    const unverifiedIssuer = decodeJwt(token).iss;
+    if (typeof unverifiedIssuer !== "string") return unauthorized();
+    const provider = oidcProviderForIssuer(env, unverifiedIssuer);
+    if (provider === "unavailable") return authUnavailable();
+    if (provider === null) return unauthorized();
+
+    let jwks = remoteJWKSets.get(provider.jwksURL);
     if (jwks === undefined) {
-      jwks = createRemoteJWKSet(new URL(jwksURL));
-      remoteJWKSets.set(jwksURL, jwks);
+      jwks = createRemoteJWKSet(new URL(provider.jwksURL));
+      remoteJWKSets.set(provider.jwksURL, jwks);
     }
     const { payload } = await jwtVerify(token, jwks, {
-      issuer,
-      audience,
-      algorithms: ["RS256", "ES256", "EdDSA"],
+      issuer: provider.issuer,
+      audience: provider.audiences,
+      algorithms: provider.algorithms,
     });
+    if (options.appleNonce !== undefined) {
+      if (provider.issuer !== APPLE_OIDC_ISSUER) return unauthorized();
+      if (
+        payload.nonce !== options.appleNonce
+        && !(options.allowMissingAppleNonce && payload.nonce === undefined)
+      ) return unauthorized();
+    }
     if (typeof payload.sub !== "string" || payload.sub.length === 0 || payload.sub.length > 512) {
       return unauthorized();
     }
@@ -128,7 +149,7 @@ export async function authenticateOIDCUser(
     return {
       ok: true,
       value: {
-        issuer,
+        issuer: provider.issuer,
         subject: payload.sub,
         ...(email ? { email } : {}),
         ...(displayName ? { displayName } : {}),
@@ -137,6 +158,51 @@ export async function authenticateOIDCUser(
   } catch {
     return unauthorized();
   }
+}
+
+function oidcProviderForIssuer(
+  env: PublicAuthEnv,
+  unverifiedIssuer: string,
+): OIDCProvider | "unavailable" | null {
+  if (unverifiedIssuer === APPLE_OIDC_ISSUER) {
+    const configuredIssuer = env.APPLE_OIDC_ISSUER?.trim();
+    const configuredAudience = env.APPLE_OIDC_AUDIENCE?.trim();
+    const configuredJWKS = env.APPLE_OIDC_JWKS_URL?.trim();
+    if (
+      configuredIssuer !== APPLE_OIDC_ISSUER ||
+      configuredAudience !== APPLE_OIDC_AUDIENCE ||
+      configuredJWKS !== APPLE_OIDC_JWKS_URL
+    ) {
+      return "unavailable";
+    }
+    return {
+      issuer: APPLE_OIDC_ISSUER,
+      audiences: [APPLE_OIDC_AUDIENCE],
+      jwksURL: APPLE_OIDC_JWKS_URL,
+      algorithms: ["RS256"],
+    };
+  }
+
+  const issuer = env.OIDC_ISSUER?.trim();
+  if (!issuer) return "unavailable";
+  if (unverifiedIssuer !== issuer) return null;
+  // A Google deployment normally has distinct native and web OAuth client IDs. Both represent
+  // the same Pass relying party, so deployments may provide a comma-separated allow-list.
+  const audiences = parseAudienceAllowlist(env.OIDC_AUDIENCE);
+  const issuerBase = issuer.replace(/\/+$/, "");
+  const jwksURL = env.OIDC_JWKS_URL?.trim() || `${issuerBase}/.well-known/jwks.json`;
+  if (audiences.length === 0 || !jwksURL) return "unavailable";
+  return {
+    issuer,
+    audiences,
+    jwksURL,
+    // Preserve the existing configurable OIDC verifier behavior for Google deployments.
+    algorithms: ["RS256", "ES256", "EdDSA"],
+  };
+}
+
+function parseAudienceAllowlist(raw: string | undefined): string[] {
+  return raw?.split(",").map((value) => value.trim()).filter(Boolean) ?? [];
 }
 
 export async function authenticateDeviceCredential(
@@ -184,9 +250,11 @@ export async function authenticateDeviceCredential(
         `SELECT dd.device_id
            FROM desktop_devices dd
            JOIN devices d ON d.id = dd.device_id
+           JOIN desktops desktop ON desktop.id = dd.desktop_id
           WHERE dd.desktop_id = ? AND dd.device_id = ? AND d.account_id = ?
-            AND dd.revoked_at IS NULL AND d.revoked_at IS NULL`,
-      ).bind(row.desktop_id, row.subject_id, row.account_id).first();
+            AND desktop.account_id = ? AND dd.revoked_at IS NULL
+            AND d.revoked_at IS NULL AND desktop.revoked_at IS NULL`,
+      ).bind(row.desktop_id, row.subject_id, row.account_id, row.account_id).first();
   if (active === null) return unauthorized();
 
   const scopes = parseScopes(row.scopes_json);
@@ -281,6 +349,15 @@ function unauthorized<T>(): AuthenticationResult<T> {
     status: 401,
     code: "unauthorized",
     message: "Authentication failed.",
+  };
+}
+
+function authUnavailable<T>(): AuthenticationResult<T> {
+  return {
+    ok: false,
+    status: 503,
+    code: "auth_unavailable",
+    message: "Public account authentication is not configured.",
   };
 }
 

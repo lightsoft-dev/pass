@@ -7,6 +7,7 @@ const MAX_EMAIL_LENGTH = 320;
 const NOTION_RICH_TEXT_LIMIT = 2_000;
 
 type FeedbackEnv = {
+  CONTROL_DB: D1Database;
   NOTION_API_TOKEN?: string;
   NOTION_FEEDBACK_DATA_SOURCE_ID?: string;
 };
@@ -42,20 +43,6 @@ export async function handleFeedbackRequest(
     );
   }
 
-  const token = env.NOTION_API_TOKEN?.trim();
-  const dataSourceId = env.NOTION_FEEDBACK_DATA_SOURCE_ID?.trim();
-  if (!token || !dataSourceId) {
-    return response(
-      {
-        error: {
-          code: "feedback_unavailable",
-          message: "Feedback is temporarily unavailable.",
-        },
-      },
-      503,
-    );
-  }
-
   const contentLength = Number(request.headers.get("Content-Length") ?? "0");
   if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
     return invalid("Feedback payload is too large.", 413);
@@ -72,6 +59,48 @@ export async function handleFeedbackRequest(
     return invalid(
       error instanceof Error ? error.message : "Invalid feedback payload.",
     );
+  }
+
+  const reportId = `feedback_${crypto.randomUUID()}`;
+  const receivedAt = Date.now();
+  try {
+    await env.CONTROL_DB.prepare(
+      `INSERT INTO feedback_reports
+        (id, created_at, updated_at, type, title, message, email, app_version,
+         os_version, forward_status, forwarded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL)`,
+    ).bind(
+      reportId,
+      receivedAt,
+      receivedAt,
+      submission.type,
+      submission.title,
+      submission.message,
+      submission.email ?? null,
+      submission.appVersion ?? null,
+      submission.osVersion ?? null,
+    ).run();
+  } catch {
+    console.error(JSON.stringify({
+      level: "error",
+      message: "Feedback D1 persistence failed.",
+      reportId,
+    }));
+    return response(
+      {
+        error: {
+          code: "feedback_unavailable",
+          message: "Feedback is temporarily unavailable.",
+        },
+      },
+      503,
+    );
+  }
+
+  const token = env.NOTION_API_TOKEN?.trim();
+  const dataSourceId = env.NOTION_FEEDBACK_DATA_SOURCE_ID?.trim();
+  if (!token || !dataSourceId) {
+    return accepted(reportId, "queued", 201);
   }
 
   try {
@@ -92,43 +121,43 @@ export async function handleFeedbackRequest(
             title: richText(`[${labelFor(submission.type)}] ${submission.title}`),
           },
         },
-        children: feedbackBlocks(submission),
+        children: feedbackBlocks(submission, reportId, receivedAt),
       }),
     });
     if (!notionResponse.ok) {
-      const detail = (await notionResponse.text()).slice(0, 1_000);
       console.error(JSON.stringify({
         level: "error",
         message: "Notion feedback page creation failed.",
         status: notionResponse.status,
-        detail,
+        reportId,
       }));
-      return response(
-        {
-          error: {
-            code: "feedback_delivery_failed",
-            message: "Could not send feedback. Please try again.",
-          },
-        },
-        502,
-      );
+      return accepted(reportId, "queued", 202);
     }
-    return response({ ok: true }, 201);
+
+    const forwardedAt = Date.now();
+    try {
+      await env.CONTROL_DB.prepare(
+        `UPDATE feedback_reports
+            SET forward_status = 'delivered', forwarded_at = ?, updated_at = ?
+          WHERE id = ? AND forward_status = 'queued'`,
+      ).bind(forwardedAt, forwardedAt, reportId).run();
+    } catch {
+      console.error(JSON.stringify({
+        level: "error",
+        message: "Notion-delivered feedback could not be marked delivered in D1.",
+        reportId,
+      }));
+      return accepted(reportId, "queued", 202);
+    }
+    return accepted(reportId, "delivered", 201);
   } catch (error) {
     console.error(JSON.stringify({
       level: "error",
       message: "Notion feedback delivery failed.",
-      detail: error instanceof Error ? error.message : String(error),
+      errorType: error instanceof Error ? error.name : "UnknownError",
+      reportId,
     }));
-    return response(
-      {
-        error: {
-          code: "feedback_delivery_failed",
-          message: "Could not send feedback. Please try again.",
-        },
-      },
-      502,
-    );
+    return accepted(reportId, "queued", 202);
   }
 }
 
@@ -178,13 +207,18 @@ async function retrieveTitleProperty(
   throw new Error("Notion feedback data source has no title property.");
 }
 
-function feedbackBlocks(submission: FeedbackSubmission): Record<string, unknown>[] {
+function feedbackBlocks(
+  submission: FeedbackSubmission,
+  reportId: string,
+  receivedAt: number,
+): Record<string, unknown>[] {
   const metadata = [
+    `Report ID: ${reportId}`,
     `Type: ${labelFor(submission.type)}`,
     ...(submission.email ? [`Reply email: ${submission.email}`] : []),
     ...(submission.appVersion ? [`App version: ${submission.appVersion}`] : []),
     ...(submission.osVersion ? [`OS: ${submission.osVersion}`] : []),
-    `Received: ${new Date().toISOString()}`,
+    `Received: ${new Date(receivedAt).toISOString()}`,
   ];
   return [
     {
@@ -267,6 +301,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function invalid(message: string, status = 400): Response {
   return response({ error: { code: "invalid_feedback", message } }, status);
+}
+
+function accepted(
+  reportId: string,
+  delivery: "queued" | "delivered",
+  status: 201 | 202,
+): Response {
+  return response({ ok: true, reportId, delivery }, status);
 }
 
 function response(

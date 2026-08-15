@@ -252,6 +252,8 @@ export interface UserSession {
   clientId: string;
   accessToken: string;
   accessExpiresAt: string;
+  identityProvider?: "google" | "apple";
+  providerUserId?: string;
   refreshToken?: string;
 }
 

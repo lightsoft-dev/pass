@@ -69,16 +69,61 @@ test("merges an authoritative live response and supplies a missing user turn", (
     pane: "⏺ I am checking the build",
     agent: "claude",
     latestAssistant: "I am checking the build now.",
+    latestAssistantID: "response_42",
     latestAssistantStreaming: true,
     fallbackUser: "Run the tests",
   });
   assert.deepEqual(
-    blocks.map(({ kind, text, streaming }) => ({ kind, text, streaming })),
+    blocks.map(({ kind, text, streaming, sourceMessageID }) => ({
+      kind,
+      text,
+      streaming,
+      sourceMessageID,
+    })),
     [
-      { kind: "user", text: "Run the tests", streaming: undefined },
-      { kind: "assistant", text: "I am checking the build now.", streaming: true },
+      {
+        kind: "user",
+        text: "Run the tests",
+        streaming: undefined,
+        sourceMessageID: undefined,
+      },
+      {
+        kind: "assistant",
+        text: "I am checking the build now.",
+        streaming: true,
+        sourceMessageID: "response_42",
+      },
     ],
   );
+});
+
+test("preserves the completed stream message ID for content reporting", () => {
+  const blocks = buildConversation({
+    agent: "codex",
+    latestAssistant: "The tests pass.",
+    latestAssistantID: "message_completed_7",
+    latestAssistantStreaming: false,
+  });
+
+  assert.deepEqual(blocks, [
+    {
+      id: "latest_assistant",
+      kind: "assistant",
+      text: "The tests pass.",
+      sourceMessageID: "message_completed_7",
+      streaming: false,
+    },
+  ]);
+});
+
+test("labels a response without a remote message ID as a local reference", () => {
+  const block = buildConversation({
+    agent: "generic",
+    latestAssistant: "Cached response",
+  })[0];
+
+  assert.match(block?.sourceMessageID ?? "", /^local:assistant_/);
+  assert.notEqual(block?.sourceMessageID, "latest_assistant");
 });
 
 test("preserves markdown table rows in an assistant response", () => {

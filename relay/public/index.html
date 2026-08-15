@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Pass의 안전한 브라우저 원격 제어" />
+    <title>Pass · Remote Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&amp;family=Space+Grotesk:wght@400;500;600;700&amp;display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://accounts.google.com/gsi/client" async></script>
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <a class="wordmark" href="/" aria-label="Pass Remote Console 홈">PASS<span>·</span>REMOTE</a>
+        <div class="connection" aria-live="polite">
+          <i id="connection-light"></i><span id="connection-label">SIGN IN REQUIRED</span>
+        </div>
+      </header>
+
+      <section id="sign-in" class="welcome" aria-labelledby="welcome-title">
+        <p class="eyebrow">CLOUDFLARE RELAY / BROWSER CONSOLE</p>
+        <h1 id="welcome-title">작업은<br /><em>Mac에.</em><br />제어는 여기서.</h1>
+        <div class="welcome-foot">
+          <p>Google 계정으로 본인의 Pass 데스크톱만 찾아, 암호화된 Relay를 통해 연결합니다.</p>
+          <div id="google-button" class="google-button"></div>
+          <nav class="legal-links" aria-label="법적 고지">
+            <a href="/privacy">PRIVACY</a><a href="/terms">TERMS</a><a href="/account-deletion">ACCOUNT DELETION</a>
+          </nav>
+        </div>
+      </section>
+
+      <section id="console" class="console" hidden>
+        <aside class="rail" aria-label="데스크톱 목록">
+          <div class="rail-title"><span>YOUR MACHINES</span><button id="refresh" class="icon-button" title="새로 고침" aria-label="데스크톱 새로 고침">↻</button></div>
+          <div id="desktop-list" class="desktop-list"></div>
+          <div class="account-actions">
+            <button id="sign-out" class="quiet-button">SIGN OUT</button>
+            <button id="delete-account" class="quiet-button danger-button">DELETE ACCOUNT</button>
+          </div>
+        </aside>
+        <section class="workbench" aria-label="원격 세션">
+          <div class="workbench-head">
+            <div><p class="eyebrow">LIVE DESKTOP</p><h2 id="desktop-name">데스크톱을 선택하세요</h2></div>
+            <span id="presence" class="presence">—</span>
+          </div>
+          <div id="empty-state" class="empty-state">왼쪽에서 연결할 데스크톱을 고르세요.</div>
+          <div id="sessions" class="sessions"></div>
+          <form id="composer" class="composer" hidden>
+            <label for="message">선택한 세션에 메시지 보내기</label>
+            <div><input id="message" autocomplete="off" maxlength="64000" placeholder="지시를 입력하세요…" /><button type="submit">SEND ↗</button></div>
+          </form>
+        </section>
+      </section>
+      <p id="notice" class="notice" role="status" aria-live="polite"></p>
+    </main>
+  </body>
+</html>

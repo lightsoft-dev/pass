@@ -19,6 +19,7 @@ export async function refreshDeviceCredential(
   }
   const response = await fetchImpl(`${pairing.relayUrl}/v2/token/refresh`, {
     method: "POST",
+    redirect: "error",
     headers: { Authorization: `Bearer ${pairing.refreshCredential}` },
   });
   const payload: unknown = await response.json().catch(() => null);
@@ -56,6 +57,7 @@ export async function revokeDevice(
     `${pairing.relayUrl}/v2/devices/${encodeURIComponent(pairing.deviceId)}`,
     {
       method: "DELETE",
+      redirect: "error",
       headers: { Authorization: `Bearer ${userAccessToken}` },
     },
   );

@@ -17,6 +17,7 @@ const CAPABILITIES = new Set<Capability>([
   "sessions:read",
   "sessions:write",
   "sessions:stream",
+  "sessions:terminal",
   "projects:read",
   "voice:use",
   "decisions:answer",
@@ -112,6 +113,10 @@ export async function loadUserSession(): Promise<UserSession | null> {
       !isString(value.clientId, 500) ||
       !isString(value.accessToken) ||
       !isString(value.accessExpiresAt, 100) ||
+      (value.identityProvider !== undefined &&
+        value.identityProvider !== "google" &&
+        value.identityProvider !== "apple") ||
+      (value.providerUserId !== undefined && !isString(value.providerUserId, 512)) ||
       (value.refreshToken !== undefined && !isString(value.refreshToken))
     ) {
       return null;

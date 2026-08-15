@@ -12,6 +12,10 @@ import {
 } from "react-native";
 
 import { AppButton } from "../../components/AppButton";
+import {
+  ContentReportModal,
+  type ContentReportTarget,
+} from "../../components/ContentReportModal";
 import { ConversationSurface } from "../../components/ConversationSurface";
 import { Screen } from "../../components/Screen";
 import { TerminalSurface } from "../../components/TerminalSurface";
@@ -22,6 +26,7 @@ import {
   splitUTF8ByBytes,
   utf8ByteLength,
 } from "../../protocol/commands";
+import { normalizeRelayBaseURL } from "../../services/relayURL";
 import { useRemote } from "../../state/RemoteProvider";
 import { colors, spacing } from "../../theme/theme";
 
@@ -66,6 +71,14 @@ export default function SessionDetailScreen() {
   const [message, setMessage] = useState("");
   const [resultText, setResultText] = useState<string | null>(null);
   const [terminalError, setTerminalError] = useState<string | null>(null);
+  const [reportTarget, setReportTarget] = useState<ContentReportTarget | null>(null);
+  const reportRelayURL = useMemo(
+    () => normalizeRelayBaseURL(
+      process.env.EXPO_PUBLIC_PASS_RELAY_URL,
+      { allowInsecureDevelopment: __DEV__ },
+    ),
+    [],
+  );
   const fallbackUser = useMemo(
     () =>
       state.activities
@@ -88,10 +101,18 @@ export default function SessionDetailScreen() {
       pane: terminal?.content,
       agent: session?.agent ?? "generic",
       latestAssistant: responseText,
+      latestAssistantID: stream?.messageID,
       latestAssistantStreaming: responseStreaming,
       fallbackUser,
     }),
-    [fallbackUser, responseStreaming, responseText, session?.agent, terminal?.content],
+    [
+      fallbackUser,
+      responseStreaming,
+      responseText,
+      session?.agent,
+      stream?.messageID,
+      terminal?.content,
+    ],
   );
 
   useEffect(() => {
@@ -239,6 +260,10 @@ export default function SessionDetailScreen() {
           <>
             <ConversationSurface
               blocks={conversation}
+              onReportAssistant={(block) => setReportTarget({
+                sourceMessageID: block.sourceMessageID ?? block.id,
+                responseText: block.text,
+              })}
               regularWidth={isRegular}
               truncated={responseTruncated}
             />
@@ -294,6 +319,11 @@ export default function SessionDetailScreen() {
           )
         )}
       </KeyboardAvoidingView>
+      <ContentReportModal
+        onClose={() => setReportTarget(null)}
+        relayBaseURL={reportRelayURL}
+        target={reportTarget}
+      />
     </Screen>
   );
 }

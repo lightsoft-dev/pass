@@ -17,6 +17,7 @@
       "supportsTablet": true,
       "requireFullScreen": false,
       "bundleIdentifier": "dev.lightsoft.passmobile",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -30,16 +31,33 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store",
       [
         "expo-camera",
         {
           "cameraPermission": "Allow Pass Remote to scan a one-time pairing QR code.",
+          "microphonePermission": false,
           "recordAudioAndroid": false,
           "barcodeScannerEnabled": true
         }
       ],
-      "expo-web-browser"
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
+      "expo-system-ui",
+      "expo-apple-authentication",
+      "@react-native-google-signin/google-signin",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#11130f",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
@@ -49,6 +67,12 @@
       "eas": {
         "projectId": "3daf1488-aa08-4d79-b939-4a06b9be9759"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/3daf1488-aa08-4d79-b939-4a06b9be9759"
     }
   }
 }

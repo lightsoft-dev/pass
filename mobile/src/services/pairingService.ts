@@ -8,6 +8,7 @@ import {
   type DeckPairingApprovalPayload,
   type PairedDesktop,
 } from "../protocol/types";
+import { normalizeRelayBaseURL } from "./relayURL";
 
 export async function approveDeckPairing(
   pairing: DeckPairingApprovalPayload,
@@ -17,6 +18,7 @@ export async function approveDeckPairing(
     `${pairing.relayUrl}/v2/deck-pairings/${encodeURIComponent(pairing.pairingId)}/approve`,
     {
       method: "POST",
+      redirect: "error",
       headers: { Authorization: `Bearer ${options.userAccessToken}`, "Content-Type": "application/json" },
       body: JSON.stringify({ approvalSecret: pairing.approvalSecret, desktopId: options.desktopId }),
     },
@@ -74,6 +76,7 @@ const CAPABILITIES = new Set<Capability>([
   "sessions:read",
   "sessions:write",
   "sessions:stream",
+  "sessions:terminal",
   "projects:read",
   "voice:use",
   "decisions:answer",
@@ -88,6 +91,7 @@ export async function claimDevicePairing(
     `${qr.relayUrl}/v2/pairings/${encodeURIComponent(qr.pairingId)}/claim`,
     {
       method: "POST",
+      redirect: "error",
       headers: {
         Authorization: `Bearer ${options.userAccessToken}`,
         "Content-Type": "application/json",
@@ -108,6 +112,9 @@ export async function claimDevicePairing(
   const desktop = payload.desktop;
   const credentials = payload.credentials;
   const scopes = payload.scopes;
+  const returnedRelayUrl = isString(payload.relayUrl, 2048)
+    ? normalizeRelayBaseURL(payload.relayUrl, { allowInsecureDevelopment: true })
+    : null;
   if (
     !isRecord(device) ||
     !isRecord(desktop) ||
@@ -116,8 +123,7 @@ export async function claimDevicePairing(
     !isString(desktop.id, 200) ||
     desktop.id !== qr.desktopId ||
     !isString(desktop.name, 200) ||
-    !isString(payload.relayUrl, 2048) ||
-    payload.relayUrl.replace(/\/+$/, "") !== qr.relayUrl.replace(/\/+$/, "") ||
+    returnedRelayUrl !== qr.relayUrl ||
     !isString(credentials.accessToken) ||
     !isString(credentials.accessExpiresAt, 100) ||
     !isString(credentials.refreshToken) ||
@@ -129,7 +135,7 @@ export async function claimDevicePairing(
   }
   return {
     protocolVersion: PROTOCOL_VERSION,
-    relayUrl: payload.relayUrl,
+    relayUrl: qr.relayUrl,
     desktopId: desktop.id,
     desktopName: desktop.name,
     deviceId: device.id,

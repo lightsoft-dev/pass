@@ -1,23 +1,43 @@
 {
   "cli": {
-    "version": ">= 16.17.4",
+    "version": ">= 21.7.0",
     "appVersionSource": "remote"
   },
   "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "environment": "development",
+      "channel": "development"
+    },
     "preview": {
       "distribution": "internal",
+      "environment": "preview",
+      "channel": "preview",
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "environment": "production",
+      "channel": "production"
     }
   },
   "submit": {
     "production": {
+      "android": {
+        "applicationId": "dev.lightsoft.passmobile",
+        "track": "internal",
+        "releaseStatus": "draft"
+      },
       "ios": {
-        "ascAppId": "6800528850"
+        "ascAppId": "6800528850",
+        "appName": "Pass Remote",
+        "bundleIdentifier": "dev.lightsoft.passmobile",
+        "appleTeamId": "H66C2M66DC",
+        "language": "ko",
+        "metadataPath": "./store.config.json"
       }
     }
   }

@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
 import { Alert, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 
+import { AccountActions } from "../../components/AccountActions";
 import { AppButton } from "../../components/AppButton";
 import { ConnectionPill } from "../../components/ConnectionPill";
 import { Screen } from "../../components/Screen";
@@ -46,7 +47,6 @@ export default function SettingsScreen() {
     reconnect,
     updatePreferences,
     forgetPairing,
-    signOut,
   } = useRemote();
 
   const deviceCredential = pairedDesktop?.authenticationMode === "device";
@@ -134,25 +134,7 @@ export default function SettingsScreen() {
               </View>
             ) : null}
 
-            {userSession ? (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Account</Text>
-                <AppButton
-                  variant="danger"
-                  label="Sign out"
-                  onPress={() => {
-                    void signOut()
-                      .then(() => router.replace("/login"))
-                      .catch((error: unknown) => {
-                        Alert.alert(
-                          "Could not sign out",
-                          error instanceof Error ? error.message : "Device revocation failed.",
-                        );
-                      });
-                  }}
-                />
-              </View>
-            ) : null}
+            {userSession ? <AccountActions /> : null}
           </View>
 
           <View style={[styles.settingsColumn, isRegular && styles.settingsColumnRegular]}>

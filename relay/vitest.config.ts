@@ -4,6 +4,12 @@ import {
 } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 
+const TEST_APPLE_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgMKrP1bjfDiEAUb3J
+toyP8WKRy2UcVLZM/vMydRPTzHuhRANCAATMExhyYIE1ib+H1SIXqf+6cN/lyKKN
+VC8n+XjPzjYQnx2Ahy3i6D3E0PA5PQf4NOygfG4vhjXNubiVJYiQhfSy
+-----END PRIVATE KEY-----`;
+
 const migrations = await readD1Migrations("./migrations");
 
 export default defineConfig({
@@ -22,6 +28,15 @@ export default defineConfig({
           OIDC_ISSUER: "https://identity.pass.test/",
           OIDC_AUDIENCE: "pass-public-api",
           OIDC_JWKS_URL: "https://identity.pass.test/.well-known/jwks.json",
+          APPLE_OIDC_ISSUER: "https://appleid.apple.com",
+          APPLE_OIDC_AUDIENCE: "dev.lightsoft.passmobile",
+          APPLE_OIDC_JWKS_URL: "https://appleid.apple.com/auth/keys",
+          APPLE_TEAM_ID: "H66C2M66DC",
+          APPLE_CLIENT_ID: "dev.lightsoft.passmobile",
+          APPLE_KEY_ID: "TESTKEY123",
+          APPLE_PRIVATE_KEY: TEST_APPLE_PRIVATE_KEY,
+          APPLE_TOKEN_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          GOOGLE_CLIENT_ID: "pass-public-api",
           MARKETPLACE_ADMIN_ACCOUNT_IDS: "acct_admin",
           TEST_MIGRATIONS: migrations,
         },
