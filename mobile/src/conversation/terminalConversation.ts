@@ -1,4 +1,4 @@
-export type ConversationAgent = "claude" | "codex" | "pi" | "shell" | "generic";
+export type ConversationAgent = "claude" | "codex" | "grok" | "pi" | "shell" | "generic";
 
 export type ConversationBlockKind = "user" | "assistant" | "tool" | "output";
 
@@ -109,7 +109,7 @@ export function parseTerminalConversation(
     }
 
     const claudeMatch = value.match(/^(?:⏺|●)\s*(.*)$/u);
-    if (claudeMatch && agent !== "codex") {
+    if (claudeMatch && agent !== "codex" && agent !== "grok") {
       const content = claudeMatch[1]?.trim() ?? "";
       if (isToolTitle(content)) append("tool", "", content);
       else append("assistant", content);

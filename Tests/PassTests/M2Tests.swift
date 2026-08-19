@@ -48,4 +48,11 @@ final class InteractionProfileTests: XCTestCase {
         XCTAssertEqual(p.approveAll, ["2"])
         XCTAssertEqual(p.deny, ["3"])
     }
+
+    func testGrokDecisionKeysFollowApprovalRowOrder() {
+        let p = InteractionProfile.grok
+        XCTAssertEqual(p.approveOnce, ["1"])
+        XCTAssertEqual(p.deny, ["2"])
+        XCTAssertEqual(p.approveAll, ["3"])
+    }
 }

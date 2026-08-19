@@ -51,6 +51,7 @@ const RECEIPT_STATUSES = new Set([
 const AGENTS = new Set<AgentKind>([
   "claude",
   "codex",
+  "grok",
   "pi",
   "shell",
   "generic",

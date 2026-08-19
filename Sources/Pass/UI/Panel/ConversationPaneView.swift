@@ -106,6 +106,7 @@ struct ConversationPaneView: View {
         switch session.agent {
         case .claude: return Color(red: 0.79, green: 0.36, blue: 0.22)
         case .codex: return Color(red: 0.16, green: 0.55, blue: 0.42)
+        case .grok: return Color(red: 0.20, green: 0.62, blue: 0.88)
         case .pi: return Color(red: 0.31, green: 0.45, blue: 0.78)
         case .shell, .generic: return .secondary
         }
@@ -163,6 +164,7 @@ private struct ConversationBlockView: View {
         switch agent {
         case .claude: return Color(red: 0.79, green: 0.36, blue: 0.22)
         case .codex: return Color(red: 0.16, green: 0.55, blue: 0.42)
+        case .grok: return Color(red: 0.20, green: 0.62, blue: 0.88)
         case .pi: return Color(red: 0.31, green: 0.45, blue: 0.78)
         case .shell, .generic: return .secondary
         }

@@ -2,7 +2,7 @@ export const PROTOCOL_VERSION = 1 as const;
 
 export type ProtocolVersion = typeof PROTOCOL_VERSION;
 
-export type AgentKind = "claude" | "codex" | "pi" | "shell" | "generic";
+export type AgentKind = "claude" | "codex" | "grok" | "pi" | "shell" | "generic";
 
 export type Capability =
   | "sessions:read"
@@ -81,7 +81,7 @@ export interface ClientCommandPayloadMap {
   "session.list": Record<string, never>;
   "session.create": {
     projectRoot: string;
-    agent: Extract<AgentKind, "claude" | "codex" | "pi">;
+    agent: Extract<AgentKind, "claude" | "codex" | "grok" | "pi">;
     initialPrompt?: string;
   };
   "session.sendMessage": { session: string; text: string };

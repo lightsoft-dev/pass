@@ -190,13 +190,13 @@ final class SessionStore {
         }
     }
 
-    /// How to relaunch an agent so it picks up where it left off. Claude resumes the directory's
-    /// last conversation with `--continue`; other agents relaunch fresh (no reliable resume flag).
+    /// How to relaunch an agent so it picks up where it left off. Claude and Grok resume the
+    /// directory's last conversation with `--continue`; other agents relaunch fresh.
     /// Honours the user's per-agent launch-command override.
     private static func resumeCommand(for agent: AgentKind) -> String? {
         guard let base = LaunchCommands.command(for: agent) else { return nil }
         switch agent {
-        case .claude:
+        case .claude, .grok:
             let hasContinue = base.contains("--continue")
                 || base.range(of: #"(^|\s)-c(\s|$)"#, options: .regularExpression) != nil
             return hasContinue ? base : base + " --continue"

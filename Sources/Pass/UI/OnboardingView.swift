@@ -340,6 +340,7 @@ struct OnboardingView: View {
             HStack(spacing: 10) {
                 agentCard(.claude, glyph: "✳")
                 agentCard(.codex, glyph: "⬢")
+                agentCard(.grok, glyph: "𝕏")
                 agentCard(.pi, glyph: "π")
             }
             .padding(.top, 24)
@@ -355,6 +356,12 @@ struct OnboardingView: View {
                     .codex,
                     title: "Codex hooks",
                     detail: "Lifecycle events · review once with /hooks"
+                )
+                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                agentHookRow(
+                    .grok,
+                    title: "Grok hooks",
+                    detail: "Approvals, completion, and session events"
                 )
                 Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
                 agentHookRow(

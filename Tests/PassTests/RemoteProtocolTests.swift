@@ -52,6 +52,23 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(decoded.type, RemoteCommandType.sessionAnswerDecision)
     }
 
+    func testGrokSessionCreateCommandRoundTrips() throws {
+        let original = RemoteCommandEnvelope(
+            id: "cmd_grok",
+            sentAt: timestamp,
+            command: .sessionCreate(.init(
+                projectRoot: "/projects/app",
+                agent: .grok,
+                initialPrompt: "Fix the failing test."
+            ))
+        )
+
+        let decoded = try RemoteWireCodec.decodeCommand(from: RemoteWireCodec.encode(original))
+
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.type, RemoteCommandType.sessionCreate)
+    }
+
     func testUnknownCommandKeepsPayloadForForwardCompatibleError() throws {
         let json = #"""
         {

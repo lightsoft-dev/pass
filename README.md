@@ -1,14 +1,14 @@
 # pass
 
-A personal macOS **mission-control for Claude Code sessions** across many projects.
+A personal macOS **mission-control for coding-agent sessions** across many projects.
 
-Agents run on their own; only the sessions that need *you* surface — in one keyboard-driven
+Agents run on their own; only the sessions that need _you_ surface — in one keyboard-driven
 panel you summon with a global hotkey. Answer a permission prompt or type a reply, and it goes
 straight into the session. Sessions live in **tmux**, so they survive pass restarts and you can
 `tmux attach` from any terminal.
 
-> Status: **MVP (M0–M4) complete and verified end-to-end.** Multi-agent adapters for Codex/pi
-> are stubbed (the architecture is in place) but land in M5.
+> Status: **MVP (M0–M4) complete and verified end-to-end.** Claude, Codex, Grok, and pi are
+> available across the desktop session launcher; Grok is also wired through mobile and Raycast.
 
 ## What works today
 
@@ -87,9 +87,9 @@ The first launch opens a three-step setup assistant:
 1. **Runtime check** — detects `tmux` (required) and Git (recommended). If Homebrew is available,
    Pass can install `tmux` in place and re-detect it without an app restart; otherwise it opens
    the Homebrew installation guide.
-2. **Agent check** — detects Claude Code, Codex, and pi independently. Only one is needed; missing
+2. **Agent check** — detects Claude Code, Codex, Grok, and pi independently. Only one is needed; missing
    optional agents link to their official installation guides.
-3. **Integrations** — installs Claude hooks by merging them into `~/.claude/settings.json`
+3. **Integrations** — connects Claude, Codex, Grok, and pi lifecycle hooks without replacing existing settings
    (backed up first; never touches other hooks) and links the bundled `passcli`.
 
 The assistant can be reopened any time from the menu bar. If notifications are blocked, enable
@@ -122,8 +122,8 @@ Claude Code (in tmux)  ──hooks(HTTP)──►  HookServer (127.0.0.1:49817)
         └──────────── ReplyInjector (bracketed paste / y-n) ◄── panel (SwiftUI) ──┘
 ```
 
-- The **core is agent-agnostic**: agent knowledge lives only in adapters (`ClaudeAdapter` today;
-  `/hook/<agent>`, `@pass_agent`, and per-agent glyphs are already wired for Codex/pi in M5).
+- The **core is agent-agnostic**: agent knowledge lives in provider adapters behind
+  `/hook/<agent>`; `@pass_agent` and per-agent glyphs keep every surface aligned.
 - **tmux + git are the database** — pass persists only a small project MRU list; everything else
   (cwd, branch, worktree, agent, activity) is derived live.
 - **Feature JSON is the contract** — the app and local agents read and update the same repository

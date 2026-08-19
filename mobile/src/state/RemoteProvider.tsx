@@ -54,7 +54,7 @@ type CommandResult =
   | { ok: false; error: string };
 
 type Decision = "allowOnce" | "allowAll" | "deny";
-type LaunchableAgent = Extract<AgentKind, "claude" | "codex" | "pi">;
+type LaunchableAgent = Extract<AgentKind, "claude" | "codex" | "grok" | "pi">;
 
 interface RemoteContextValue {
   state: ReturnType<typeof remoteReducer>;

@@ -54,6 +54,23 @@ test("creates the exact Swift v1 command envelope", () => {
   });
 });
 
+test("accepts Grok in a desktop session snapshot", () => {
+  const result = parseServerEvent({
+    version: 1,
+    id: "evt_grok",
+    type: "session.snapshot",
+    sentAt: "2026-07-16T10:01:00.000Z",
+    payload: {
+      generatedAt: "2026-07-16T10:01:00.000Z",
+      sessions: [{ ...session, agent: "grok" }],
+      projects: [],
+      capabilities: ["sessions:read"],
+    },
+  });
+
+  assert.equal(result.ok, true);
+});
+
 test("uses an injected secure UUID factory for command ids", () => {
   const command = createCommand("session.list", {}, {
     uuidFactory: () => "018f6879-dde6-7682-9983-f0cd5d26591d",

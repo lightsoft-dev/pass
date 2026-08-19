@@ -10,8 +10,7 @@ protocol ReplyInjectorTmux: Sendable {
 
 extension TmuxClient: ReplyInjectorTmux {}
 
-/// Per-agent interaction knowledge used by ReplyInjector. Only Claude is populated in the
-/// MVP; other agents get a profile in M5. Values validated in spikes/FINDINGS.md.
+/// Per-agent interaction knowledge used by ReplyInjector.
 struct InteractionProfile: Sendable {
     /// send-keys sequences for a permission prompt (single keypress, no Enter).
     var approveOnce: [String]
@@ -33,9 +32,25 @@ struct InteractionProfile: Sendable {
         }
     )
 
+    static let grok = InteractionProfile(
+        approveOnce: ["1"],
+        // Grok 1.0.5 orders its standard approval rows as Allow once, Reject once,
+        // then Enable always-approve mode.
+        approveAll: ["3"],
+        deny: ["2"],
+        pasteToEnterDelayMs: PassConfig.pasteToEnterDelayMs,
+        isPermissionDialog: { tail in
+            tail.range(of: #"(?im)^\s*(?:❯\s*)?1\.\s+.+$"#, options: .regularExpression) != nil
+                && tail.range(of: #"(?im)^\s*(?:❯\s*)?2\.\s+.+$"#, options: .regularExpression) != nil
+                && (tail.localizedCaseInsensitiveContains("allow")
+                    || tail.localizedCaseInsensitiveContains("permission"))
+        }
+    )
+
     static func `for`(_ agent: AgentKind) -> InteractionProfile {
         switch agent {
         case .claude: return .claude
+        case .grok: return .grok
         // Codex/pi/etc. get real profiles in M5; fall back to Claude's shape for now.
         default: return .claude
         }

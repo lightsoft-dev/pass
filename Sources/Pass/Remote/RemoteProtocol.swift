@@ -126,6 +126,7 @@ private struct RemoteEmptyPayload: Codable, Equatable, Sendable {}
 enum RemoteAgent: String, Codable, CaseIterable, Equatable, Sendable {
     case claude
     case codex
+    case grok
     case pi
     case shell
     case generic

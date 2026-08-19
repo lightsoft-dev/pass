@@ -204,7 +204,7 @@ final class FeatureStore {
         "implementation": {
           "type": "object",
           "properties": {
-            "preferredAgent": { "enum": ["claude", "codex", "pi"] },
+            "preferredAgent": { "enum": ["claude", "codex", "grok", "pi"] },
             "agentSession": { "type": ["string", "null"] },
             "summary": { "type": "string" },
             "files": { "type": "array", "items": { "type": "string" } },

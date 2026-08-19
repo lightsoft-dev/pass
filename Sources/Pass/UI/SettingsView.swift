@@ -546,7 +546,7 @@ struct SettingsView: View {
             Button(appModel.needsHookInstall ? "Install hooks" : "Reinstall hooks") {
                 appModel.installHooks()
             }
-            Text("Adds Pass entries for Claude Code, Codex, and pi. Existing hooks are preserved and changed files are backed up first. New agent sessions pick them up.")
+            Text("Adds Pass entries for Claude Code, Codex, Grok, and pi. Existing hooks are preserved and changed files are backed up first. New agent sessions pick them up.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

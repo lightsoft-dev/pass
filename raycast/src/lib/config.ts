@@ -17,7 +17,7 @@ export const SESSION_ENV_VAR = "PASS_SESSION";
 /** Delay between a bracketed paste and Enter so the agent's TUI processes the paste. */
 export const PASTE_TO_ENTER_DELAY_MS = 150;
 
-export type AgentKind = "claude" | "codex" | "pi" | "shell" | "generic";
+export type AgentKind = "claude" | "codex" | "grok" | "pi" | "shell" | "generic";
 
 /** Glyph shown per agent, matching pass's AgentKind.glyph. */
 export function agentGlyph(agent: AgentKind): string {
@@ -26,6 +26,8 @@ export function agentGlyph(agent: AgentKind): string {
       return "✳";
     case "codex":
       return "⬢";
+    case "grok":
+      return "𝕏";
     case "pi":
       return "π";
     case "shell":
@@ -36,7 +38,7 @@ export function agentGlyph(agent: AgentKind): string {
 }
 
 /** Agents the user can start from New Session (shell/generic are adopted, never launched). */
-export const LAUNCHABLE_AGENTS: AgentKind[] = ["claude", "codex", "pi"];
+export const LAUNCHABLE_AGENTS: AgentKind[] = ["claude", "codex", "grok", "pi"];
 
 /** Built-in launch command per agent (before any preference override). */
 export function defaultLaunchCommand(agent: AgentKind): string | undefined {
@@ -45,6 +47,8 @@ export function defaultLaunchCommand(agent: AgentKind): string | undefined {
       return "claude";
     case "codex":
       return "codex";
+    case "grok":
+      return "grok";
     case "pi":
       return "pi";
     default:
@@ -57,6 +61,7 @@ export function inferAgent(paneCommand: string): AgentKind {
   const c = paneCommand.toLowerCase();
   if (c.startsWith("claude")) return "claude";
   if (c.startsWith("codex")) return "codex";
+  if (c === "grok") return "grok";
   if (c === "pi") return "pi";
   if (["zsh", "bash", "fish", "sh", "-zsh", "-bash"].includes(c)) return "shell";
   return "generic";

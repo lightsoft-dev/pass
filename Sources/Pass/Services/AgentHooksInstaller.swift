@@ -5,6 +5,7 @@ import Foundation
 /// Each agent has a different extension surface:
 /// - Claude Code: native HTTP hooks in `~/.claude/settings.json`
 /// - Codex: command hooks in `~/.codex/hooks.json`
+/// - Grok: global command hooks in `~/.grok/hooks/dev.lightsoft.pass.json`
 /// - pi: a global TypeScript extension in `~/.pi/agent/extensions`
 enum AgentHooksInstaller {
     enum Status: Equatable {
@@ -21,6 +22,7 @@ enum AgentHooksInstaller {
         switch agent {
         case .claude: return ClaudeHooksInstaller.isInstalled()
         case .codex: return CodexHooksInstaller.isInstalled()
+        case .grok: return GrokHooksInstaller.isInstalled()
         case .pi: return PiHooksInstaller.isInstalled()
         case .shell, .generic: return true
         }
@@ -33,6 +35,8 @@ enum AgentHooksInstaller {
             return map(ClaudeHooksInstaller.install())
         case .codex:
             return CodexHooksInstaller.install()
+        case .grok:
+            return GrokHooksInstaller.install()
         case .pi:
             return PiHooksInstaller.install()
         case .shell, .generic:
@@ -66,6 +70,67 @@ enum AgentHooksInstaller {
         case .alreadyInstalled: return .alreadyInstalled
         case .failed(let message): return .failed(message)
         }
+    }
+}
+
+/// Grok discovers additive global hook files, so Pass owns one namespaced file instead of
+/// modifying the user's config.toml or any other integration's hook definition.
+enum GrokHooksInstaller {
+    static let events = [
+        "SessionStart", "UserPromptSubmit", "Stop", "StopFailure", "StopCancelled",
+        "Notification", "SessionEnd",
+    ]
+    static var hookURL: String { "\(PassConfig.hookBaseURL)/hook/grok" }
+    static var hookCommand: String {
+        #"/usr/bin/curl --silent --max-time 2 --header 'Content-Type: application/json' --header "X-Pass-Session: $PASS_SESSION" --data-binary @- '"#
+            + hookURL
+            + #"' >/dev/null 2>&1 || true"#
+    }
+
+    private static var settingsURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".grok/hooks/dev.lightsoft.pass.json")
+    }
+
+    static var configuration: [String: Any] {
+        var hooks: [String: Any] = [:]
+        for event in events {
+            var group: [String: Any] = [
+                "hooks": [[
+                    "type": "command",
+                    "command": hookCommand,
+                    "timeout": 3,
+                ] as [String: Any]],
+            ]
+            if event == "Notification" {
+                group["matcher"] = "permission_prompt|idle_prompt|task_complete|agent_needs_input|elicitation_dialog"
+            }
+            hooks[event] = [group]
+        }
+        return [
+            "description": "Pass lifecycle bridge for Grok Build",
+            "hooks": hooks,
+        ]
+    }
+
+    static func isInstalled() -> Bool {
+        guard let root = readJSON(at: settingsURL),
+              let hooks = root["hooks"] as? [String: Any] else { return false }
+        return events.allSatisfy { event in
+            (hooks[event] as? [[String: Any]] ?? []).contains { group in
+                (group["hooks"] as? [[String: Any]] ?? []).contains { hook in
+                    (hook["type"] as? String) == "command"
+                        && (hook["command"] as? String) == hookCommand
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    static func install() -> AgentHooksInstaller.Status {
+        if isInstalled() { return .alreadyInstalled }
+        backupIfNeeded(settingsURL)
+        return writeJSON(configuration, to: settingsURL)
     }
 }
 

@@ -30,6 +30,18 @@ final class EventRouter {
             return
         }
 
+        // Grok can import Claude-compatible hooks in addition to its own global hooks. Drop a
+        // compatibility copy when its route disagrees with the agent actually owning the pane.
+        // This also prevents any future cross-provider compatibility layer from double-routing.
+        let sessionAgent = sessions.session(named: name)?.agent
+        if let sessionAgent,
+           AgentKind.launchable.contains(sessionAgent),
+           adapter.kind != sessionAgent {
+            Log.hooks.debug("dropped \(raw.eventName, privacy: .public) from mismatched \(adapter.kind.rawValue, privacy: .public) route for \(sessionAgent.rawValue, privacy: .public) session")
+            return
+        }
+        let agentLabel = sessionAgent?.rawValue.capitalized ?? "Agent"
+
         let now = Date()
         switch event.kind {
         case .started:
@@ -39,9 +51,9 @@ final class EventRouter {
             sessions.applyAttention(name: name, .idle)
             onResolved(name)
         case .needsDecision:
-            emit(name, Attention(kind: .decision, receivedAt: now, preview: event.preview ?? "Claude needs your permission"))
+            emit(name, Attention(kind: .decision, receivedAt: now, preview: event.preview ?? "\(agentLabel) needs your permission"))
         case .needsInput:
-            emit(name, Attention(kind: .input, receivedAt: now, preview: event.preview ?? "Claude needs your input"))
+            emit(name, Attention(kind: .input, receivedAt: now, preview: event.preview ?? "\(agentLabel) needs your input"))
         case .finished:
             if let msg = event.preview, !msg.isEmpty { sessions.setLastMessage(name: name, msg) }
             emit(name, Attention(kind: .finished, receivedAt: now, preview: event.preview ?? "Finished"))

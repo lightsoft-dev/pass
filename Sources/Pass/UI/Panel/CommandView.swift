@@ -683,7 +683,7 @@ struct CommandView: View {
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.12)))
     }
 
-    /// ⌘N agent dropdown — pick which CLI the new session launches (claude/codex/pi). Sits at the
+    /// ⌘N agent dropdown — pick which CLI the new session launches (claude/codex/grok/pi). Sits at the
     /// top-right of the new-session bar; the choice is remembered for next time.
     private var newSessionAgentPicker: some View {
         Menu {
@@ -1435,7 +1435,7 @@ struct CommandView: View {
             Image(systemName: "bolt.badge.a").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Agent hooks not installed").font(.system(size: 12, weight: .medium))
-                Text("Pass can't hear from Claude, Codex, or pi until you install them.")
+                Text("Pass can't hear from Claude, Codex, Grok, or pi until you install them.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
