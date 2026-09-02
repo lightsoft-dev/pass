@@ -152,6 +152,39 @@ final class TerminalMouseInteractionPolicyTests: XCTestCase {
     }
 
     @MainActor
+    func testSingleDragEventRunsSelectedTextFromOneLine() throws {
+        let pasteboard = NSPasteboard.general
+        let originalClipboard = pasteboard.string(forType: .string)
+        defer {
+            pasteboard.clearContents()
+            if let originalClipboard { pasteboard.setString(originalClipboard, forType: .string) }
+        }
+
+        let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        terminal.getTerminal().feed(text: "run this command")
+        let y = terminal.bounds.height - 8
+        let down = try mouseEvent(type: .leftMouseDown, x: 2, y: y)
+        let drag = try mouseEvent(type: .leftMouseDragged, x: 125, y: y)
+        let up = try mouseEvent(type: .leftMouseUp, x: 125, y: y)
+
+        terminal.mouseDown(with: down)
+        terminal.primeLocalSelection(at: down.locationInWindow, basedOn: drag)
+        terminal.mouseDragged(with: drag) // the only real drag callback in a short gesture
+        terminal.mouseUp(with: up)
+
+        let selected = terminal.selectedTextForMenu()
+        XCTAssertTrue(selected.hasPrefix("run this"))
+
+        var executedCommand: String?
+        terminal.runSelectionInTerminal = { executedCommand = $0 }
+        let menu = try XCTUnwrap(terminal.selectionActionMenu(for: selected))
+        let runItem = try XCTUnwrap(menu.item(withTitle: "Run in Terminal"))
+        let action = try XCTUnwrap(runItem.action)
+        XCTAssertTrue(NSApp.sendAction(action, to: runItem.target, from: runItem))
+        XCTAssertTrue(executedCommand?.hasPrefix("run this") == true)
+    }
+
+    @MainActor
     func testPlainTextURLHitUsesExactCellsWithKoreanAroundIt() throws {
         let terminal = IMETerminalView(frame: NSRect(x: 0, y: 0, width: 960, height: 240))
         let url = "https://print-so.lightsoft.dev/admin/printer"

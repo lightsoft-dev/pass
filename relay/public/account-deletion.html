@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Delete your Pass account</title>
+    <link rel="stylesheet" href="/legal.css" />
+  </head>
+  <body>
+    <main>
+      <header><a class="wordmark" href="/">PASS<span>·</span>REMOTE</a></header>
+      <p class="eyebrow">ACCOUNT AND DATA DELETION</p>
+      <h1>Delete your Pass account</h1>
+      <p class="summary">You can permanently delete your account from either the Pass Remote mobile app or the web console. No support request is required.</p>
+
+      <h2>From the mobile app</h2>
+      <ol>
+        <li>Sign in with the Google or Apple account linked to Pass.</li>
+        <li>Open <strong>Settings</strong> (or the pairing screen before a desktop is paired).</li>
+        <li>Under <strong>Account</strong>, choose <strong>Delete account</strong> and confirm. If you use Apple, approve the system Sign in with Apple prompt so Pass can revoke that authorization before deletion.</li>
+      </ol>
+
+      <h2>From the web</h2>
+      <ol>
+        <li>Open the Pass Remote console and sign in with the linked Google account.</li>
+        <li>Choose <strong>Delete account</strong> at the bottom of the desktop list.</li>
+        <li>Confirm permanent deletion. If automatic Apple revocation fails, the console offers a second, explicit confirmation to delete the Pass data while leaving Apple revocation for you to complete manually.</li>
+      </ol>
+      <p>The web console currently signs in with Google. Use the iOS app for an Apple-only account. If Google and Apple are linked to the same Pass account, either supported deletion route first attempts to revoke the stored Apple authorization automatically.</p>
+      <a class="button" href="/">OPEN REMOTE CONSOLE</a>
+
+      <h2>What is deleted</h2>
+      <p>Deletion removes your Pass account record, linked provider identities, registered desktops, paired devices, relay credentials, account audit records, and stored relay-room metadata. If Sign in with Apple is linked, Pass first attempts to revoke the stored Apple authorization and then removes its encrypted refresh token. The one-time Apple authorization code and nonce are never retained. All active remote connections are closed. The deletion cannot be undone; you may later create a new empty account by signing in again.</p>
+      <p>If automatic Apple revocation is unavailable, Pass preserves your data until you explicitly choose the manual fallback. That choice continues local account deletion and then tells you to remove Pass at <strong>Apple Settings &gt; [your name] &gt; Sign-In &amp; Security &gt; Sign in with Apple &gt; Pass</strong>. Completing that Apple step is required to revoke the authorization that Pass could not revoke automatically.</p>
+      <p>Feedback submitted separately may not contain an account identifier and is not automatically matched to this deletion. If you also want a feedback report removed from Cloudflare D1 and any forwarded Notion copy, use the help route below to arrange a private follow-up. Keep the report reference private; support may use it together with other verification details to locate and validate the removal request.</p>
+
+      <h2>Need help?</h2>
+      <p>If you cannot access the linked Google or Apple account, contact the project through the <a href="https://github.com/lightsoft-dev/pass/issues">Pass issue tracker</a>. Do not post credentials, QR codes, authorization codes, terminal content, or feedback report references.</p>
+
+      <footer><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/">Remote console</a></footer>
+    </main>
+  </body>
+</html>

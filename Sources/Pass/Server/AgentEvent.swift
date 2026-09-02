@@ -14,14 +14,33 @@ struct RawHookEvent: Sendable {
     var passSessionHeader: String?
 
     init(json: [String: Any], header: String?) {
-        self.eventName = (json["hook_event_name"] as? String) ?? ""
-        self.sessionId = json["session_id"] as? String
-        self.cwd = json["cwd"] as? String
-        self.notificationType = json["notification_type"] as? String
-        self.toolName = json["tool_name"] as? String
-        self.lastAssistantMessage = json["last_assistant_message"] as? String
+        let rawEventName = (json["hook_event_name"] as? String)
+            ?? (json["hookEventName"] as? String)
+            ?? ""
+        self.eventName = Self.canonicalEventName(rawEventName)
+        self.sessionId = (json["session_id"] as? String) ?? (json["sessionId"] as? String)
+        self.cwd = (json["cwd"] as? String) ?? (json["workspaceRoot"] as? String)
+        self.notificationType = (json["notification_type"] as? String)
+            ?? (json["notificationType"] as? String)
+        self.toolName = (json["tool_name"] as? String) ?? (json["toolName"] as? String)
+        self.lastAssistantMessage = (json["last_assistant_message"] as? String)
+            ?? (json["lastAssistantMessage"] as? String)
         self.reason = json["reason"] as? String
         self.passSessionHeader = (header?.isEmpty == false) ? header : nil
+    }
+
+    private static func canonicalEventName(_ value: String) -> String {
+        switch value.replacingOccurrences(of: "-", with: "_").lowercased() {
+        case "session_start": return "SessionStart"
+        case "user_prompt_submit": return "UserPromptSubmit"
+        case "permission_request": return "PermissionRequest"
+        case "notification": return "Notification"
+        case "stop": return "Stop"
+        case "stop_failure": return "StopFailure"
+        case "stop_cancelled": return "StopCancelled"
+        case "session_end": return "SessionEnd"
+        default: return value
+        }
     }
 }
 
@@ -126,8 +145,45 @@ struct PiAdapter: AgentAdapter {
     }
 }
 
+/// Grok Build emits camelCase hook envelopes and Claude-compatible lifecycle names. Its
+/// Notification hook is the reliable signal for both permission prompts and settled turns.
+struct GrokAdapter: AgentAdapter {
+    let kind: AgentKind = .grok
+    let routePath = "/hook/grok"
+
+    func normalize(_ raw: RawHookEvent) -> AgentEvent? {
+        let kind: AgentEvent.Kind
+        var preview = raw.lastAssistantMessage
+        switch raw.eventName {
+        case "Notification":
+            switch raw.notificationType {
+            case "permission_prompt":
+                kind = .needsDecision
+                if preview == nil, let toolName = raw.toolName {
+                    preview = "Approval requested for \(toolName)"
+                }
+            case "idle_prompt", "task_complete":
+                kind = .finished
+            default:
+                kind = .needsInput
+            }
+        case "UserPromptSubmit", "SessionStart":
+            kind = .started
+        case "Stop", "StopFailure", "StopCancelled":
+            kind = .finished
+        case "SessionEnd":
+            kind = .ended
+        default:
+            return nil
+        }
+        return AgentEvent(kind: kind, preview: preview,
+                          sessionNameHint: raw.passSessionHeader,
+                          cwd: raw.cwd, agentSessionId: raw.sessionId)
+    }
+}
+
 enum AgentRegistry {
-    static let all: [AgentAdapter] = [ClaudeAdapter(), CodexAdapter(), PiAdapter()]
+    static let all: [AgentAdapter] = [ClaudeAdapter(), CodexAdapter(), GrokAdapter(), PiAdapter()]
     static func adapter(forRoute path: String) -> AgentAdapter? {
         all.first { $0.routePath == path }
     }

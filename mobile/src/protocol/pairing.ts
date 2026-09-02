@@ -3,13 +3,20 @@ import {
   type PairingQrPayload,
   type DeckPairingApprovalPayload,
 } from "./types.ts";
+import {
+  normalizeRelayBaseURL,
+  requirePinnedRelayURL,
+} from "../services/relayURL.ts";
 
 export type PairingParseResult =
   | { ok: true; value: PairingQrPayload }
   | { ok: false; error: string };
 
 type PairingParseOptions = {
+  allowDevelopmentPairing?: boolean;
   allowInsecureDevelopment?: boolean;
+  enforceTrustedRelay?: boolean;
+  trustedRelayUrl?: string;
   now?: () => Date;
 };
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -30,7 +37,9 @@ export function parseDeckPairingApproval(input: string): DeckPairingApprovalPayl
     throw new Error("Deck pairing payload must be an object.");
   }
   const value = candidate as Record<string, unknown>;
-  const relayUrl = nonEmpty(value.relayUrl, 2048) ? normalizeRelayUrl(value.relayUrl, false) : null;
+  const relayUrl = nonEmpty(value.relayUrl, 2048)
+    ? normalizeRelayBaseURL(value.relayUrl)
+    : null;
   if (
     value.v !== 3 || !relayUrl ||
     !nonEmpty(value.pairingId, 200) || !IDENTIFIER_PATTERN.test(value.pairingId) ||
@@ -49,26 +58,6 @@ export function parseDeckPairingApproval(input: string): DeckPairingApprovalPayl
     deviceName: value.deviceName,
     expiresAt: expiresAt.toISOString(),
   };
-}
-
-function normalizeRelayUrl(
-  raw: string,
-  allowInsecureDevelopment: boolean,
-): string | null {
-  try {
-    const url = new URL(raw);
-    const validProtocol =
-      url.protocol === "https:" ||
-      (allowInsecureDevelopment && url.protocol === "http:");
-    if (!validProtocol || !url.hostname || url.username || url.password) return null;
-
-    url.search = "";
-    url.hash = "";
-    url.pathname = url.pathname.replace(/\/+$/, "");
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return null;
-  }
 }
 
 function fromUrl(input: string): Record<string, unknown> | null {
@@ -129,9 +118,9 @@ export function parsePairingPayload(
   if (!nonEmpty(value.relayUrl, 2048)) {
     return { ok: false, error: "Pairing payload has no relay URL." };
   }
-  const relayUrl = normalizeRelayUrl(
+  let relayUrl = normalizeRelayBaseURL(
     value.relayUrl,
-    options.allowInsecureDevelopment === true,
+    { allowInsecureDevelopment: options.allowInsecureDevelopment === true },
   );
   if (!relayUrl) {
     return {
@@ -146,6 +135,16 @@ export function parsePairingPayload(
     return { ok: false, error: "Desktop id contains unsupported characters." };
   }
   if (value.v === 2) {
+    if (options.enforceTrustedRelay === true) {
+      try {
+        relayUrl = requirePinnedRelayURL(relayUrl, options.trustedRelayUrl);
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : "Pairing Relay validation failed.",
+        };
+      }
+    }
     if (
       !nonEmpty(value.pairingId, 200) ||
       !IDENTIFIER_PATTERN.test(value.pairingId.trim()) ||
@@ -171,6 +170,13 @@ export function parsePairingPayload(
         pairingSecret: value.pairingSecret.trim(),
         expiresAt: expiresAt.toISOString(),
       },
+    };
+  }
+
+  if (options.allowDevelopmentPairing !== true) {
+    return {
+      ok: false,
+      error: "Shared-token pairing is available only in development builds.",
     };
   }
 

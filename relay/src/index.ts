@@ -37,6 +37,7 @@ const INTERNAL_ACCOUNT_ID_HEADER = "X-Pass-Internal-Account-ID";
 const INTERNAL_AUTHORIZATION_HEADER = "X-Pass-Internal-Authorization";
 const INTERNAL_SCOPES_HEADER = "X-Pass-Internal-Scopes";
 const INTERNAL_CREDENTIAL_EXPIRES_AT_HEADER = "X-Pass-Internal-Credential-Expires-At";
+const INTERNAL_BROWSER_PROTOCOL_HEADER = "X-Pass-Internal-Browser-Protocol";
 const OPEN = 1;
 const TERMINAL_SUBSCRIPTION_LIFETIME_MS = 45 * 1_000;
 
@@ -55,6 +56,16 @@ type RelayEnv = Env & {
   OIDC_ISSUER?: string;
   OIDC_AUDIENCE?: string;
   OIDC_JWKS_URL?: string;
+  APPLE_OIDC_ISSUER?: string;
+  APPLE_OIDC_AUDIENCE?: string;
+  APPLE_OIDC_JWKS_URL?: string;
+  APPLE_TEAM_ID?: string;
+  APPLE_CLIENT_ID?: string;
+  APPLE_KEY_ID?: string;
+  APPLE_PRIVATE_KEY?: string;
+  APPLE_TOKEN_ENCRYPTION_KEY?: string;
+  GOOGLE_CLIENT_ID?: string;
+  ASSETS?: Fetcher;
 };
 
 type ConnectionAttachment = {
@@ -104,6 +115,50 @@ function jsonResponse(
   return Response.json(body, { status, headers });
 }
 
+/**
+ * Browsers cannot attach Authorization or X-Pass-* headers to a WebSocket handshake. A browser
+ * therefore supplies an already-issued device access token as an RFC 6455 subprotocol named
+ * `pass.auth.<token>`. The token never appears in a URL, logs, referrers, or history.
+ */
+function browserSocketToken(request: Request): string | null {
+  const protocols = request.headers.get("Sec-WebSocket-Protocol");
+  if (!protocols) return null;
+  for (const protocol of protocols.split(",")) {
+    const candidate = protocol.trim();
+    if (!candidate.startsWith("pass.auth.")) continue;
+    const token = candidate.slice("pass.auth.".length);
+    if (/^pass_at_cred_[A-Za-z0-9-]+\.[A-Za-z0-9_-]{20,}$/.test(token)) return token;
+  }
+  return null;
+}
+
+function requestsBrowserSocketProtocol(request: Request): boolean {
+  return request.headers.get("Sec-WebSocket-Protocol")
+    ?.split(",")
+    .some((protocol) => protocol.trim() === "pass.v1") ?? false;
+}
+
+function requestWithBearer(request: Request, token: string): Request {
+  const headers = new Headers(request.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  return new Request(request, { headers });
+}
+
+async function staticAsset(request: Request, assets: Fetcher): Promise<Response> {
+  const response = await assets.fetch(request);
+  const headers = new Headers(response.headers);
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Referrer-Policy", "no-referrer");
+  headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  headers.set(
+    "Content-Security-Policy",
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src https://accounts.google.com; "
+      + "script-src 'self' https://accounts.google.com; style-src 'self' https://fonts.googleapis.com; "
+      + "font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://accounts.google.com wss:",
+  );
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 function structuredLog(
   level: "info" | "warn" | "error",
   message: string,
@@ -124,24 +179,27 @@ function structuredLog(
   }
 }
 
-async function rateLimitKey(request: Request): Promise<string> {
+async function rateLimitKeys(request: Request): Promise<string[]> {
+  const keys = [`ip:${request.headers.get("CF-Connecting-IP") ?? "unknown"}`];
   const token = extractBearerToken(request);
   if (token !== null) {
     const digest = new Uint8Array(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)),
     );
-    return `credential:${Array.from(digest.slice(0, 16), (byte) =>
-      byte.toString(16).padStart(2, "0")).join("")}`;
+    keys.push(`credential:${Array.from(digest.slice(0, 16), (byte) =>
+      byte.toString(16).padStart(2, "0")).join("")}`);
   }
-  return `anonymous:${request.headers.get("CF-Connecting-IP") ?? "unknown"}`;
+  return keys;
 }
 
 async function enforceRateLimit(
   request: Request,
   limiter: RateLimit,
 ): Promise<Response | null> {
-  const result = await limiter.limit({ key: await rateLimitKey(request) });
-  if (result.success) return null;
+  const results = await Promise.all(
+    (await rateLimitKeys(request)).map((key) => limiter.limit({ key })),
+  );
+  if (results.every((result) => result.success)) return null;
   return jsonResponse(
     { error: { code: "rate_limited", message: "Too many requests. Try again shortly." } },
     429,
@@ -339,6 +397,15 @@ export class DesktopRoom extends DurableObject<Env> {
       ? undefined
       : Number(rawCredentialExpiry);
 
+    if (url.pathname === "/purge" && request.method === "POST") {
+      if (!isValidIdentifier(desktopId)) {
+        return jsonResponse({ error: "Invalid purge request." }, 400);
+      }
+      const closed = this.disconnectSockets(null);
+      await this.ctx.storage.deleteAll({});
+      return jsonResponse({ closed, purged: true });
+    }
+
     if (url.pathname === "/disconnect" && request.method === "POST") {
       if (!isValidIdentifier(desktopId)) {
         return jsonResponse({ error: "Invalid disconnect request." }, 400);
@@ -417,7 +484,15 @@ export class DesktopRoom extends DurableObject<Env> {
       connectionId: attachment.connectionId,
     });
 
-    return new Response(null, { status: 101, webSocket: client });
+    // Browsers require the server to select an offered subprotocol. Select only the stable
+    // protocol marker; the credential-bearing protocol is used for authentication but is never
+    // reflected in the response headers.
+    const browserProtocol = request.headers.get(INTERNAL_BROWSER_PROTOCOL_HEADER) === "pass.v1";
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      ...(browserProtocol ? { headers: { "Sec-WebSocket-Protocol": "pass.v1" } } : {}),
+    });
   }
 
   override async alarm(): Promise<void> {
@@ -1040,6 +1115,9 @@ export default {
     const controlResponse = await handleControlRequest(request, env);
     if (controlResponse !== null) return controlResponse;
     if (url.pathname !== "/connect") {
+      if (request.method === "GET" && env.ASSETS) {
+        return staticAsset(request, env.ASSETS);
+      }
       return jsonResponse({ error: "Not found." }, 404);
     }
     if (request.method !== "GET") {
@@ -1057,7 +1135,9 @@ export default {
       );
     }
 
-    const token = extractBearerToken(request);
+    const bearerToken = extractBearerToken(request);
+    const webToken = browserSocketToken(request);
+    const token = bearerToken ?? webToken;
     const protocolVersion =
       request.headers.get("X-Pass-Protocol-Version") ??
       url.searchParams.get("version");
@@ -1080,7 +1160,11 @@ export default {
     let credentialExpiresAt: number | null = null;
 
     if (token?.startsWith("pass_at_") === true) {
-      const authenticated = await authenticateDeviceCredential(request, env, "access");
+      const authenticated = await authenticateDeviceCredential(
+        webToken === null ? request : requestWithBearer(request, token),
+        env,
+        "access",
+      );
       if (!authenticated.ok) {
         return jsonResponse(
           { error: authenticated.message, code: authenticated.code },
@@ -1096,11 +1180,17 @@ export default {
       scopes = authenticated.value.scopes;
       credentialExpiresAt = authenticated.value.expiresAt;
     } else {
+      // A subprotocol credential is only ever a real device access token. It must not enable
+      // development mode, even in a local relay with development authentication enabled.
+      if (webToken !== null) {
+        return jsonResponse({ error: "Unauthorized." }, 401, { "WWW-Authenticate": "Bearer" });
+      }
+      const developmentToken = env.RELAY_AUTH_TOKEN;
       if (
         env.ALLOW_DEVELOPMENT_AUTH !== "true" ||
-        env.RELAY_AUTH_TOKEN.length === 0 ||
+        !developmentToken ||
         token === null ||
-        !(await tokensMatch(token, env.RELAY_AUTH_TOKEN))
+        !(await tokensMatch(token, developmentToken))
       ) {
         return jsonResponse(
           { error: "Unauthorized." },
@@ -1141,6 +1231,11 @@ export default {
     if (accountId !== null) internalHeaders.set(INTERNAL_ACCOUNT_ID_HEADER, accountId);
     if (credentialExpiresAt !== null) {
       internalHeaders.set(INTERNAL_CREDENTIAL_EXPIRES_AT_HEADER, String(credentialExpiresAt));
+    }
+    if (webToken !== null && requestsBrowserSocketProtocol(request)) {
+      // Forward only the negotiated marker. The credential-bearing protocol was already
+      // authenticated above and must not be reflected by the Durable Object response.
+      internalHeaders.set(INTERNAL_BROWSER_PROTOCOL_HEADER, "pass.v1");
     }
     const internalRequest = new Request("https://relay.internal/connect", {
       method: "GET",

@@ -11,6 +11,7 @@ import { loadProjects } from "./lib/projects";
 const AGENT_CHOICES: { value: AgentKind; title: string }[] = [
   { value: "claude", title: "Claude" },
   { value: "codex", title: "Codex" },
+  { value: "grok", title: "Grok" },
   { value: "pi", title: "pi" },
   { value: "shell", title: "Shell (no agent)" },
 ];

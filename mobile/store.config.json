@@ -1,0 +1,53 @@
+{
+  "configVersion": 0,
+  "apple": {
+    "version": "0.1.1",
+    "copyright": "2026 Lightsoft",
+    "categories": [
+      "DEVELOPER_TOOLS",
+      "PRODUCTIVITY"
+    ],
+    "info": {
+      "en-US": {
+        "title": "Pass Remote",
+        "subtitle": "Secure remote development",
+        "description": "Pass Remote keeps you connected to development sessions running on your own Mac. Sign in, securely link this device with a short-lived QR code from Pass for macOS, and check session status from iPhone or iPad.\n\nFrom the remote app you can:\n• See which desktop and sessions are online\n• Read current Claude, Codex, and terminal activity\n• Send messages and answer permission requests\n• Create a session from a registered project\n• Open an interactive terminal when exact TTY control is needed\n• Revoke the paired device or permanently delete your account\n\nCommands travel through a credential-scoped Cloudflare Relay. Pass does not use command or terminal content for advertising or model training. Your Mac remains the execution environment and must be online to receive commands.\n\nPass Remote requires the companion Pass app for macOS.",
+        "keywords": [
+          "developer",
+          "remote",
+          "terminal",
+          "Claude",
+          "Codex",
+          "productivity"
+        ],
+        "promoText": "Keep an eye on development sessions running on your Mac and respond from anywhere.",
+        "marketingUrl": "https://pass.lightsoft.dev",
+        "supportUrl": "https://github.com/lightsoft-dev/pass/issues",
+        "privacyPolicyUrl": "https://remote.pass.lightsoft.dev/privacy",
+        "privacyChoicesUrl": "https://remote.pass.lightsoft.dev/account-deletion"
+      },
+      "ko": {
+        "title": "Pass Remote",
+        "subtitle": "안전한 원격 개발 도구",
+        "description": "Pass Remote는 내 Mac에서 실행 중인 개발 세션을 iPhone과 iPad에서 확인하고 제어하는 Pass의 동반 앱입니다. 로그인한 뒤 Mac용 Pass에서 표시되는 단기 QR 코드를 스캔해 이 기기를 안전하게 연결하세요.\n\n주요 기능:\n• 데스크톱과 세션의 온라인 상태 확인\n• Claude, Codex 및 터미널 작업 내용 확인\n• 메시지 전송과 권한 요청 응답\n• 등록된 프로젝트에서 새 세션 시작\n• 정확한 TTY 제어가 필요할 때 대화형 터미널 사용\n• 페어링 기기 해제 및 계정 영구 삭제\n\n명령은 기기별 권한으로 제한된 Cloudflare Relay를 통해 전달됩니다. Pass는 명령이나 터미널 내용을 광고 또는 모델 학습에 사용하지 않습니다. 실제 작업은 Mac에서 실행되며 명령을 받으려면 Mac이 온라인이어야 합니다.\n\nPass Remote를 사용하려면 Mac용 Pass 앱이 필요합니다.",
+        "keywords": [
+          "개발",
+          "원격",
+          "터미널",
+          "Claude",
+          "Codex",
+          "생산성"
+        ],
+        "promoText": "Mac에서 실행 중인 개발 세션을 어디서나 확인하고 응답하세요.",
+        "marketingUrl": "https://pass.lightsoft.dev",
+        "supportUrl": "https://github.com/lightsoft-dev/pass/issues",
+        "privacyPolicyUrl": "https://remote.pass.lightsoft.dev/privacy",
+        "privacyChoicesUrl": "https://remote.pass.lightsoft.dev/account-deletion"
+      }
+    },
+    "release": {
+      "automaticRelease": false,
+      "phasedRelease": false
+    }
+  }
+}

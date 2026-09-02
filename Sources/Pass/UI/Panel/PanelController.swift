@@ -83,7 +83,7 @@ final class PanelController {
         },
         onDeminiaturize: { [weak self] in
             self?.appModel.panelVisible = true
-            self?.appModel.focusToken &+= 1
+            self?.appModel.requestPanelPresentation()
             self?.appModel.scheduleProjectDirectorySyncForVisibilityChange()
         }
     )
@@ -144,8 +144,6 @@ final class PanelController {
         let panel = panel ?? makePanel()
         self.panel = panel
 
-        if let session { appModel.pendingPreselect = session }
-
         applyMode()
         // Floating: re-center where you're working (Spotlight-style). Normal window: restore the
         // spot you dragged it to — but never leave it at the initial (0,0) bottom-left corner or
@@ -155,7 +153,9 @@ final class PanelController {
         if panel.isMiniaturized { panel.deminiaturize(nil) }
         panel.makeKeyAndOrderFront(nil)
         appModel.panelVisible = true  // home attaches its live terminal only while visible
-        appModel.focusToken &+= 1 // tell the omnibox to (re)take focus on every show
+        // Tell the view to reset its route/focus and carry any notification deep-link in the
+        // same observable change. The view also handles the current request on first mount.
+        appModel.requestPanelPresentation(preselecting: session)
         appModel.scheduleProjectDirectorySyncForVisibilityChange()
     }
 

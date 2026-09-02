@@ -198,7 +198,7 @@ struct CommandView: View {
             .background(.regularMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.08)))
-            .onChange(of: appModel.focusToken) { _, _ in
+            .onChange(of: appModel.panelPresentation, initial: true) { _, request in
                 query = ""
                 showQuickCommand = false // fresh summon lands in the terminal, not the bar
                 newSessionMode = false
@@ -210,7 +210,7 @@ struct CommandView: View {
                     route = .specs(selectedSession?.projectRoot) // land on the current project
                 } else {
                     route = .list
-                    focusSoon()
+                    focusSoon(preselecting: request.preselectedSession)
                 }
             }
             .onChange(of: appModel.backToken) { _, _ in
@@ -592,7 +592,8 @@ struct CommandView: View {
             }
             .animation(.easeOut(duration: 0.12), value: showsCommandBar)
         }
-        .onAppear { focusSoon() }
+        // Initial selection/focus is driven by `panelPresentation` above. A second onAppear
+        // fallback here can run after that handler and overwrite a notification's target.
         .onChange(of: selectedSession?.name) { _, _ in syncTerminalTarget() }
         .onChange(of: selectedSession?.launching) { _, _ in syncTerminalTarget() }
         // A needs-you request landing on the session whose live terminal is on screen is
@@ -683,7 +684,7 @@ struct CommandView: View {
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.12)))
     }
 
-    /// ⌘N agent dropdown — pick which CLI the new session launches (claude/codex/pi). Sits at the
+    /// ⌘N agent dropdown — pick which CLI the new session launches (claude/codex/grok/pi). Sits at the
     /// top-right of the new-session bar; the choice is remembered for next time.
     private var newSessionAgentPicker: some View {
         Menu {
@@ -1435,7 +1436,7 @@ struct CommandView: View {
             Image(systemName: "bolt.badge.a").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Agent hooks not installed").font(.system(size: 12, weight: .medium))
-                Text("Pass can't hear from Claude, Codex, or pi until you install them.")
+                Text("Pass can't hear from Claude, Codex, Grok, or pi until you install them.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
@@ -1448,19 +1449,17 @@ struct CommandView: View {
         .background(Color.orange.opacity(0.10))
     }
 
-    private func focusSoon() {
-        selectedSessionName = initialSelectionName()
+    private func focusSoon(preselecting session: String? = nil) {
+        selectedSessionName = initialSelectionName(preselecting: session)
         syncTerminalTarget()
         refocusField()
     }
 
     /// Where the cursor lands when the panel opens: an explicitly requested session first
-    /// (notification click, CLI browser open — `pendingPreselect`, consumed here), else the
+    /// (notification click or CLI browser open), else the
     /// first waiting session at the top, else the first session.
-    private func initialSelectionName() -> String? {
-        let target = appModel.pendingPreselect
-        appModel.pendingPreselect = nil
-        if let target, orderedSessions.contains(where: { $0.name == target }) { return target }
+    private func initialSelectionName(preselecting session: String?) -> String? {
+        if let session, orderedSessions.contains(where: { $0.name == session }) { return session }
         if let waiting = orderedSessions.first(where: { $0.needsUser }) { return waiting.name }
         return orderedSessions.first?.name
     }

@@ -2,7 +2,8 @@
   "expo": {
     "name": "Pass Remote",
     "slug": "pass-mobile",
-    "version": "0.1.0",
+    "owner": "lightsoft-crew",
+    "version": "0.1.1",
     "icon": "./assets/icon.png",
     "orientation": "default",
     "scheme": "passremote",
@@ -12,28 +13,66 @@
       "android"
     ],
     "ios": {
+      "icon": "./assets/icon.png",
       "supportsTablet": true,
       "requireFullScreen": false,
-      "bundleIdentifier": "app.lightsoft.pass.remote"
+      "bundleIdentifier": "dev.lightsoft.passmobile",
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
-      "package": "app.lightsoft.pass.remote"
+      "icon": "./assets/icon.png",
+      "package": "dev.lightsoft.passmobile",
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store",
       [
         "expo-camera",
         {
           "cameraPermission": "Allow Pass Remote to scan a one-time pairing QR code.",
+          "microphonePermission": false,
           "recordAudioAndroid": false,
           "barcodeScannerEnabled": true
         }
       ],
-      "expo-web-browser"
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
+      "expo-system-ui",
+      "expo-apple-authentication",
+      "@react-native-google-signin/google-signin",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#11130f",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3daf1488-aa08-4d79-b939-4a06b9be9759"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/3daf1488-aa08-4d79-b939-4a06b9be9759"
     }
   }
 }

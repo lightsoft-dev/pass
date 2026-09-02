@@ -29,6 +29,7 @@ test("refreshes a device credential and rotates both tokens", async () => {
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     requestedURL = String(input);
     authorization = new Headers(init?.headers).get("Authorization") ?? "";
+    assert.equal(init?.redirect, "error");
     return Response.json({
       credentials: {
         accessToken: "new-access",
@@ -62,6 +63,7 @@ test("revokes the server-side device using the user access token", async () => {
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     requestedURL = String(input);
     authorization = new Headers(init?.headers).get("Authorization") ?? "";
+    assert.equal(init?.redirect, "error");
     assert.equal(init?.method, "DELETE");
     return Response.json({ revoked: true });
   }) as typeof fetch;

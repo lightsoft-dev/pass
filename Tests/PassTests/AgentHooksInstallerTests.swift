@@ -54,6 +54,30 @@ final class CodexHooksInstallerTests: XCTestCase {
     }
 }
 
+final class GrokHooksInstallerTests: XCTestCase {
+    func testConfigurationContainsEveryLifecycleHook() {
+        let root = GrokHooksInstaller.configuration
+        XCTAssertEqual(root["description"] as? String, "Pass lifecycle bridge for Grok Build")
+        let hooks = root["hooks"] as! [String: Any]
+
+        for event in GrokHooksInstaller.events {
+            let groups = hooks[event] as? [[String: Any]] ?? []
+            let commands = groups.flatMap {
+                ($0["hooks"] as? [[String: Any]] ?? []).compactMap { $0["command"] as? String }
+            }
+            XCTAssertEqual(commands, [GrokHooksInstaller.hookCommand], event)
+        }
+
+        let notification = (hooks["Notification"] as? [[String: Any]])?.first
+        XCTAssertEqual(
+            notification?["matcher"] as? String,
+            "permission_prompt|idle_prompt|task_complete|agent_needs_input|elicitation_dialog"
+        )
+        XCTAssertTrue(GrokHooksInstaller.hookCommand.contains("/hook/grok"))
+        XCTAssertTrue(GrokHooksInstaller.hookCommand.contains("X-Pass-Session"))
+    }
+}
+
 final class MultiAgentAdapterTests: XCTestCase {
     private func raw(
         _ event: String,
@@ -100,9 +124,41 @@ final class MultiAgentAdapterTests: XCTestCase {
         XCTAssertNotNil(adapter.normalize(raw("SessionEnd")))
     }
 
+    func testGrokMapsCamelCaseLifecycleAndAttentionEvents() {
+        func grokRaw(_ event: String, extra: [String: Any] = [:]) -> RawHookEvent {
+            var json: [String: Any] = [
+                "hookEventName": event,
+                "sessionId": "grok-session",
+                "workspaceRoot": "/repo",
+            ]
+            for (key, value) in extra { json[key] = value }
+            return RawHookEvent(json: json, header: "pass-grok")
+        }
+
+        let adapter = GrokAdapter()
+        let permission = adapter.normalize(grokRaw(
+            "notification",
+            extra: ["notificationType": "permission_prompt", "toolName": "run_terminal_command"]
+        ))
+        XCTAssertEqual(permission?.kind, .needsDecision)
+        XCTAssertEqual(permission?.preview, "Approval requested for run_terminal_command")
+        XCTAssertEqual(permission?.sessionNameHint, "pass-grok")
+        XCTAssertEqual(adapter.normalize(grokRaw("user_prompt_submit"))?.kind, .started)
+        XCTAssertEqual(adapter.normalize(grokRaw(
+            "stop",
+            extra: ["lastAssistantMessage": "Done"]
+        ))?.preview, "Done")
+        XCTAssertEqual(adapter.normalize(grokRaw(
+            "notification",
+            extra: ["notificationType": "idle_prompt"]
+        ))?.kind, .finished)
+        XCTAssertEqual(adapter.normalize(grokRaw("session_end"))?.kind, .ended)
+    }
+
     func testRegistryIncludesEveryLaunchableAgent() {
         XCTAssertNotNil(AgentRegistry.adapter(forRoute: "/hook/claude"))
         XCTAssertNotNil(AgentRegistry.adapter(forRoute: "/hook/codex"))
+        XCTAssertNotNil(AgentRegistry.adapter(forRoute: "/hook/grok"))
         XCTAssertNotNil(AgentRegistry.adapter(forRoute: "/hook/pi"))
     }
 

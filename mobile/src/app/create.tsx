@@ -11,10 +11,11 @@ import { useRemote } from "../state/RemoteProvider";
 import { selectProjects } from "../state/selectors";
 import { colors, radius, spacing } from "../theme/theme";
 
-type LaunchableAgent = Extract<AgentKind, "claude" | "codex" | "pi">;
+type LaunchableAgent = Extract<AgentKind, "claude" | "codex" | "grok" | "pi">;
 const agents: Array<{ id: LaunchableAgent; glyph: string; detail: string }> = [
   { id: "claude", glyph: "✳", detail: "Claude Code" },
   { id: "codex", glyph: "⬢", detail: "OpenAI Codex" },
+  { id: "grok", glyph: "𝕏", detail: "xAI Grok Build" },
   { id: "pi", glyph: "π", detail: "Pi coding agent" },
 ];
 

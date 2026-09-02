@@ -21,6 +21,7 @@ type Props = {
   blocks: ConversationBlock[];
   truncated?: boolean;
   regularWidth?: boolean;
+  onReportAssistant?: (block: ConversationBlock) => void;
 };
 
 function InlineText({ value }: { value: string }) {
@@ -168,7 +169,13 @@ function ToolBlock({ block }: { block: ConversationBlock }) {
   );
 }
 
-function ConversationItem({ block }: { block: ConversationBlock }) {
+function ConversationItem({
+  block,
+  onReportAssistant,
+}: {
+  block: ConversationBlock;
+  onReportAssistant?: (block: ConversationBlock) => void;
+}) {
   if (block.kind === "tool") return <ToolBlock block={block} />;
   if (block.kind === "output") {
     return (
@@ -193,11 +200,28 @@ function ConversationItem({ block }: { block: ConversationBlock }) {
         </View>
       ) : null}
       <RichMessage text={block.text} />
+      {!block.streaming && block.text.trim() && onReportAssistant ? (
+        <Pressable
+          accessibilityLabel="Report this assistant response"
+          accessibilityRole="button"
+          hitSlop={6}
+          onPress={() => onReportAssistant(block)}
+          style={({ pressed }) => [styles.reportButton, pressed && styles.pressed]}
+        >
+          <Text style={styles.reportFlag}>!</Text>
+          <Text style={styles.reportText}>Report response</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
-export function ConversationSurface({ blocks, truncated = false, regularWidth = false }: Props) {
+export function ConversationSurface({
+  blocks,
+  truncated = false,
+  regularWidth = false,
+  onReportAssistant,
+}: Props) {
   const scrollView = useRef<ScrollView>(null);
   const nearBottom = useRef(true);
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -219,7 +243,11 @@ export function ConversationSurface({ blocks, truncated = false, regularWidth = 
       scrollEventThrottle={80}
     >
       {blocks.length ? blocks.map((block) => (
-        <ConversationItem block={block} key={block.id} />
+        <ConversationItem
+          block={block}
+          key={block.id}
+          onReportAssistant={onReportAssistant}
+        />
       )) : (
         <View style={styles.emptyState}>
           <View style={styles.emptyLine} />
@@ -260,6 +288,31 @@ const styles = StyleSheet.create({
   agentDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: "#69c89a" },
   streamingDot: { backgroundColor: "#72b7ff" },
   liveLabel: { color: "#72b7ff", fontSize: 9, fontWeight: "900" },
+  reportButton: {
+    minHeight: 38,
+    alignSelf: "flex-start",
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#30363e",
+    backgroundColor: "#13161a",
+  },
+  reportFlag: {
+    width: 15,
+    height: 15,
+    color: colors.subtle,
+    borderWidth: 1,
+    borderColor: colors.subtle,
+    borderRadius: 8,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  reportText: { color: colors.subtle, fontSize: 10, fontWeight: "700" },
   richMessage: { gap: 8 },
   messageText: { color: "#e6e9ed", fontSize: 15, lineHeight: 23 },
   listText: { flex: 1, minWidth: 0 },

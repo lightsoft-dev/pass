@@ -42,6 +42,7 @@ struct OnboardingDependency: Identifiable, Equatable, Sendable {
         case git
         case claude
         case codex
+        case grok
         case pi
     }
 
@@ -70,6 +71,9 @@ enum OnboardingDiagnostics {
                        required: false, versionArgs: ["--version"]),
             dependency(.codex, name: "Codex",
                        purpose: "Runs Codex CLI sessions from Pass.",
+                       required: false, versionArgs: ["--version"]),
+            dependency(.grok, name: "Grok",
+                       purpose: "Runs xAI Grok Build sessions from Pass.",
                        required: false, versionArgs: ["--version"]),
             dependency(.pi, name: "pi",
                        purpose: "Runs pi coding-agent sessions from Pass.",
@@ -137,7 +141,7 @@ final class OnboardingModel {
 
     var installedAgentCount: Int {
         dependencies.filter {
-            [.claude, .codex, .pi].contains($0.kind) && $0.isInstalled
+            [.claude, .codex, .grok, .pi].contains($0.kind) && $0.isInstalled
         }.count
     }
 
@@ -228,6 +232,8 @@ final class OnboardingModel {
             rawURL = "https://docs.anthropic.com/en/docs/claude-code/getting-started"
         case .codex:
             rawURL = "https://help.openai.com/en/articles/11096431"
+        case .grok:
+            rawURL = "https://x.ai/cli"
         case .pi:
             rawURL = "https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/README.md"
         }

@@ -7,6 +7,7 @@ import { colors, radius, spacing } from "../theme/theme";
 const agentGlyph: Record<RemoteSession["agent"], string> = {
   claude: "✳",
   codex: "⬢",
+  grok: "𝕏",
   pi: "π",
   shell: "$",
   generic: "•",

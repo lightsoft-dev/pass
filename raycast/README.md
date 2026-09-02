@@ -1,6 +1,6 @@
 # Pass for Raycast
 
-Mission control for [pass](../README.md) — your Claude Code sessions running in **tmux** — from
+Mission control for [pass](../README.md) — your coding-agent sessions running in **tmux** — from
 Raycast. The extension talks to tmux directly (the same way pass does), so it works whether or not
 the pass menu-bar app is running.
 
@@ -12,7 +12,7 @@ the pass menu-bar app is running.
 - **Reply to Session** — pick a session and inject a reply into its agent.
 - **Send Message to Session** — send free text and/or a file's contents to a session.
 - **New Session** — create a `pass-<repo>[--<label>]` tmux session for a project and launch an
-  agent (Claude / Codex / pi / plain shell). Projects come from pass's own registered list.
+  agent (Claude / Codex / Grok / pi / plain shell). Projects come from pass's own registered list.
 - **Pass Attention** _(menu bar)_ — a count of sessions waiting on your answer, with quick attach.
 
 ## How it works
@@ -30,7 +30,7 @@ pass treats **tmux + git as the database**. This extension mirrors that:
 ## Preferences
 
 - **Attach Terminal** — Ghostty (default, falls back to Terminal) or Terminal.app.
-- **Claude / Codex / pi Launch Command** — what New Session types into a fresh session per agent.
+- **Claude / Codex / Grok / pi Launch Command** — what New Session types into a fresh session per agent.
 
 ## Requirements
 

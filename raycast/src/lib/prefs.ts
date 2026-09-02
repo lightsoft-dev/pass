@@ -6,6 +6,7 @@ interface Prefs {
   terminalApp: TerminalPreference;
   claudeCommand: string;
   codexCommand: string;
+  grokCommand: string;
   piCommand: string;
 }
 
@@ -16,6 +17,7 @@ export function prefs(): Prefs {
     terminalApp: p.terminalApp || "ghostty",
     claudeCommand: p.claudeCommand || "claude",
     codexCommand: p.codexCommand || "codex",
+    grokCommand: p.grokCommand || "grok",
     piCommand: p.piCommand || "pi",
   };
 }
@@ -28,6 +30,8 @@ export function launchCommandFor(agent: AgentKind): string | undefined {
       return p.claudeCommand;
     case "codex":
       return p.codexCommand;
+    case "grok":
+      return p.grokCommand;
     case "pi":
       return p.piCommand;
     default:

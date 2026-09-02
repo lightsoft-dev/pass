@@ -24,6 +24,7 @@ final class AgentKindTests: XCTestCase {
         XCTAssertEqual(AgentKind.infer(fromPaneCommand: "claude.exe"), .claude)
         XCTAssertEqual(AgentKind.infer(fromPaneCommand: "claude"), .claude)
         XCTAssertEqual(AgentKind.infer(fromPaneCommand: "codex"), .codex)
+        XCTAssertEqual(AgentKind.infer(fromPaneCommand: "grok"), .grok)
         XCTAssertEqual(AgentKind.infer(fromPaneCommand: "pi"), .pi)
         XCTAssertEqual(AgentKind.infer(fromPaneCommand: "zsh"), .shell)
         XCTAssertEqual(AgentKind.infer(fromPaneCommand: "-zsh"), .shell)
@@ -32,12 +33,14 @@ final class AgentKindTests: XCTestCase {
 
     func testForegroundAgentOverridesCreationTimeTag() {
         XCTAssertEqual(AgentKind.resolve(tagged: "claude", paneCommand: "codex"), .codex)
+        XCTAssertEqual(AgentKind.resolve(tagged: "codex", paneCommand: "grok"), .grok)
         XCTAssertEqual(AgentKind.resolve(tagged: "codex", paneCommand: "pi"), .pi)
         XCTAssertEqual(AgentKind.resolve(tagged: "pi", paneCommand: "claude.exe"), .claude)
     }
 
     func testTagSurvivesShellWindowBetweenAgents() {
         XCTAssertEqual(AgentKind.resolve(tagged: "codex", paneCommand: "zsh"), .codex)
+        XCTAssertEqual(AgentKind.resolve(tagged: "grok", paneCommand: "bash"), .grok)
         XCTAssertEqual(AgentKind.resolve(tagged: "pi", paneCommand: "vim"), .pi)
     }
 

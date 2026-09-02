@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Pass Privacy Policy</title>
+    <link rel="stylesheet" href="/legal.css" />
+  </head>
+  <body>
+    <main>
+      <header><a class="wordmark" href="/">PASS<span>·</span>REMOTE</a></header>
+      <p class="eyebrow">EFFECTIVE AUGUST 12, 2026</p>
+      <h1>Privacy Policy</h1>
+      <p class="summary">Pass is a remote companion for software-development sessions running on devices you control. Lightsoft operates the Pass account and relay service.</p>
+
+      <h2>Information we process</h2>
+      <ul>
+        <li>Google or Apple account identifiers used for sign-in, including the provider subject identifier and, when provided, email address and display name. If you use Hide My Email, the email address may be an Apple private-relay address.</li>
+        <li>Names and identifiers for registered desktops and paired devices, device platform, connection timestamps, and credential status.</li>
+        <li>Security and reliability metadata such as authentication events, command type and delivery status. Pass stores relay credentials as one-way hashes. For Sign in with Apple, Pass stores an encrypted Apple refresh token only so the authorization can be revoked when required; the one-time authorization code and request nonce are not retained.</li>
+        <li>Commands and terminal/session updates that you choose to relay between your devices. Pass routes this content to provide the service and does not use it for advertising or model training.</li>
+        <li>Feedback you choose to submit, including its title and body, optional contact email, and app and operating-system version. For an in-app AI response report, the mobile app automatically attaches only your chosen reason, the editable response excerpt, an optional note, and a response message reference; it does not attach account or device credentials, account identifiers, project paths, or terminal history. Because the response text itself may mention sensitive information, review the excerpt and remove secrets before submitting.</li>
+      </ul>
+
+      <h2>How we use information</h2>
+      <p>We use this information only to authenticate you, link devices that belong to your account, route remote commands, keep connections reliable, prevent abuse, and support the service.</p>
+
+      <h2>Service providers</h2>
+      <p>Google and Apple provide account authentication. Cloudflare hosts the web console, relay, database, and connection infrastructure; feedback reports are first stored in the Cloudflare D1 database. Expo may deliver mobile application updates. When optional feedback forwarding is configured, Notion also stores successfully forwarded submissions for support and product improvement. These providers process limited information under their own privacy terms.</p>
+
+      <h2>Retention and security</h2>
+      <p>Account and device records remain while your account is active. Short-lived operational records may be retained for reliability, fraud prevention, and security. Feedback is retained in Cloudflare D1, and optionally in Notion, while it is needed to investigate or resolve the report and is removed through an operator-run retention review or on request. Transport is encrypted in transit, credentials are scoped and revocable, Apple refresh tokens are encrypted at rest, and the control database does not intentionally retain relayed command bodies or terminal content outside a feedback report you deliberately submit.</p>
+
+      <h2>Your choices and deletion</h2>
+      <p>You can sign out, revoke a paired device, or permanently delete your Pass account. Account deletion removes the account, linked provider identities, registered desktops, paired-device credentials, audit records tied to the account, and stored relay-room metadata. If an Apple identity is linked, Pass first attempts to revoke its stored Sign in with Apple authorization. If automatic revocation fails, no local data is deleted until you explicitly approve the manual fallback; after approval, data deletion continues and Pass instructs you to revoke Pass yourself under Apple Settings &gt; [your name] &gt; Sign-In &amp; Security &gt; Sign in with Apple. A feedback report submitted separately may not contain an account identifier. Keep the report reference returned after submission private; support may use it together with other verification details if you request removal. See the <a href="/account-deletion">account deletion instructions</a>.</p>
+
+      <h2>Contact</h2>
+      <p>For privacy questions, open a request without including personal data, secrets, or a feedback report reference in the <a href="https://github.com/lightsoft-dev/pass/issues">Pass issue tracker</a> so Lightsoft can arrange an appropriate private follow-up channel.</p>
+
+      <footer><a href="/terms">Terms</a><a href="/account-deletion">Account deletion</a><a href="/">Remote console</a></footer>
+    </main>
+  </body>
+</html>

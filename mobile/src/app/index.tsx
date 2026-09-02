@@ -1,5 +1,5 @@
 import { Redirect } from "expo-router";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
 
 import { Screen } from "../components/Screen";
 import { publicOIDCConfiguration } from "../services/authService";
@@ -18,7 +18,7 @@ export default function EntryRoute() {
     );
   }
   if (pairedDesktop) return <Redirect href="/(tabs)" />;
-  if (publicOIDCConfiguration() && !userSession) {
+  if ((publicOIDCConfiguration() || Platform.OS === "ios") && !userSession) {
     return <Redirect href="/login" />;
   }
   return <Redirect href="/pair" />;

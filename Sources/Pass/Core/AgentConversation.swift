@@ -31,6 +31,8 @@ enum AgentConversationParser {
             parsed = ClaudeStrategy.parse(lines)
         case .codex:
             parsed = CodexStrategy.parse(lines)
+        case .grok:
+            parsed = CodexStrategy.parse(lines)
         case .pi:
             parsed = PiStrategy.parse(lines)
         case .shell, .generic:

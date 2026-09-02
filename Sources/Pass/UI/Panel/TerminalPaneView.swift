@@ -119,6 +119,7 @@ final class IMETerminalView: LocalProcessTerminalView {
     private static weak var mouseDownTerm: IMETerminalView?
     private static var mouseReportingBeforeDrag: Bool?
     private static var mouseGestureUsesTmux = false
+    private static var localSelectionAnchored = false
 
     /// Hover a plain-text URL → underline + pointing hand. Click it in place (or ⌘-click
     /// anywhere on it) → open in the browser. Runs as a monitor because SwiftTerm's own mouse
@@ -142,6 +143,14 @@ final class IMETerminalView: LocalProcessTerminalView {
                     // Keep reporting off for the whole gesture. SwiftTerm now extends its own
                     // selection, which remains visible after mouse-up and is handled by ⌘C.
                     dragTerm?.allowMouseReporting = false
+                    // SwiftTerm starts a selection at the FIRST drag event instead of at
+                    // mouse-down. A short same-line gesture may contain only one drag event,
+                    // leaving a zero-width selection. Prime its anchor at mouse-down so that
+                    // single event can extend to the user's actual endpoint.
+                    if !localSelectionAnchored, let dragTerm, let mouseDownPoint {
+                        localSelectionAnchored = true
+                        dragTerm.primeLocalSelection(at: mouseDownPoint, basedOn: event)
+                    }
                 }
                 dragTerm?.clearInteractiveHover()
                 if mouseGestureUsesTmux { return eventForTmux(event) }
@@ -154,6 +163,7 @@ final class IMETerminalView: LocalProcessTerminalView {
                 mouseDownTerm = term
                 mouseReportingBeforeDrag = nil
                 mouseGestureUsesTmux = false
+                localSelectionAnchored = false
                 if let term {
                     if TerminalMouseInteractionPolicy.usesLocalSelection(
                         modifierFlags: event.modifierFlags
@@ -176,6 +186,7 @@ final class IMETerminalView: LocalProcessTerminalView {
                 mouseDownTerm = nil
                 mouseReportingBeforeDrag = nil
                 mouseGestureUsesTmux = false
+                localSelectionAnchored = false
 
                 // The local monitor runs before SwiftTerm receives mouseUp. Restore reporting on
                 // the next main-queue turn so mouseUp also follows the local-selection path.
@@ -564,6 +575,24 @@ final class IMETerminalView: LocalProcessTerminalView {
     /// window-activation click and never reaches mouseDown — scroll is exempt from that rule,
     /// which is why scrolling worked while selection and clicks didn't.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// Seed SwiftTerm's first drag callback at the real mouse-down coordinate. Its selection
+    /// implementation does not retain mouse-down as the anchor, so a single drag callback would
+    /// otherwise select nothing. Internal for a regression test that models that exact gesture.
+    func primeLocalSelection(at point: NSPoint, basedOn event: NSEvent) {
+        guard let anchorEvent = NSEvent.mouseEvent(
+            with: .leftMouseDragged,
+            location: point,
+            modifierFlags: event.modifierFlags,
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            eventNumber: event.eventNumber,
+            clickCount: event.clickCount,
+            pressure: event.pressure
+        ) else { return }
+        mouseDragged(with: anchorEvent)
+    }
 
     // MARK: Selected text actions
 

@@ -6,6 +6,19 @@ enum AgentHookPromptPreference {
     static let dismissedKey = "agentHooks.installPromptDismissed.v1"
 }
 
+/// One atomic request to present (or refresh) the main panel. Keeping the target session on
+/// the same observable value as the revision prevents a newly-created SwiftUI view from
+/// missing the preselection while it is still mounting.
+struct PanelPresentationRequest: Equatable {
+    var revision: Int = 0
+    var preselectedSession: String?
+
+    mutating func advance(preselecting session: String? = nil) {
+        revision &+= 1
+        preselectedSession = session
+    }
+}
+
 /// Composition root + shared observable state for the whole app.
 @MainActor
 @Observable
@@ -36,12 +49,14 @@ final class AppModel {
     /// Bumped when a project-local pass-config.json changes so views re-read shared settings.
     var configRevision: Int = 0
 
-    /// When a notification is clicked, the session to preselect on next panel show.
-    var pendingPreselect: String?
+    /// Advanced whenever the panel should refresh its route, session selection, and focus.
+    /// The session travels with the revision so notification deep-links also survive the
+    /// panel's first SwiftUI mount.
+    var panelPresentation = PanelPresentationRequest()
 
-    /// Bumped by PanelController on every show so the omnibox re-takes focus (onAppear
-    /// only fires once for a cached panel).
-    var focusToken: Int = 0
+    func requestPanelPresentation(preselecting session: String? = nil) {
+        panelPresentation.advance(preselecting: session)
+    }
 
     /// Whether the panel is on screen. The home view attaches a live terminal to the selected
     /// session only while visible — hiding the panel detaches it (the session keeps running).
@@ -448,7 +463,7 @@ final class AppModel {
 
     func showFeatures() {
         pendingOpenFeatures = true
-        focusToken &+= 1
+        requestPanelPresentation()
     }
 
     func summon() {

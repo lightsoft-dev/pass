@@ -1,4 +1,5 @@
 import {
+  APPLE_OIDC_ISSUER,
   authenticateDeviceCredential,
   authenticateOIDCUser,
   compactUUID,
@@ -10,9 +11,19 @@ import {
   type CredentialMaterial,
   type UserIdentity,
 } from "./auth";
+import {
+  AppleServiceError,
+  encryptAppleRefreshToken,
+  exchangeAppleAuthorizationCode,
+  revokeAppleRefreshToken,
+  revokeEncryptedAppleRefreshToken,
+  type EncryptedAppleRefreshToken,
+} from "./apple";
 
 const PAIRING_LIFETIME_MS = 5 * 60 * 1_000;
+const APPLE_TOKEN_OPERATION_TIMEOUT_MS = 15 * 60 * 1_000;
 const MAX_JSON_BODY_BYTES = 16 * 1_024;
+const APPLE_REVOCATION_FALLBACK_HEADER = "X-Pass-Apple-Revocation-Fallback";
 const INTERNAL_DESKTOP_ID_HEADER = "X-Pass-Internal-Desktop-ID";
 const INTERNAL_DEVICE_ID_HEADER = "X-Pass-Internal-Device-ID";
 const MOBILE_SCOPES = [
@@ -29,12 +40,39 @@ type ControlEnv = Env & {
   OIDC_ISSUER?: string;
   OIDC_AUDIENCE?: string;
   OIDC_JWKS_URL?: string;
+  APPLE_OIDC_ISSUER?: string;
+  APPLE_OIDC_AUDIENCE?: string;
+  APPLE_OIDC_JWKS_URL?: string;
+  APPLE_TEAM_ID?: string;
+  APPLE_CLIENT_ID?: string;
+  APPLE_KEY_ID?: string;
+  APPLE_PRIVATE_KEY?: string;
+  APPLE_TOKEN_ENCRYPTION_KEY?: string;
+  GOOGLE_CLIENT_ID?: string;
 };
 
 type Account = {
   id: string;
   email?: string;
   displayName?: string;
+};
+
+type AccountRow = {
+  id: string;
+  email: string | null;
+  display_name: string | null;
+};
+
+type AppleIdentityTokenRow = {
+  oidc_issuer: string;
+  oidc_subject: string;
+  apple_refresh_token_ciphertext: string | null;
+  apple_refresh_token_iv: string | null;
+  apple_refresh_token_version: number | null;
+  apple_refresh_token_revoked_at: number | null;
+  apple_token_operation: string | null;
+  apple_token_operation_id: string | null;
+  apple_token_operation_started_at: number | null;
 };
 
 type CredentialPair = {
@@ -53,6 +91,12 @@ export async function handleControlRequest(
 
   if (url.pathname === "/v2/me" && request.method === "GET") {
     return handleMe(request, env);
+  }
+  if (url.pathname === "/v2/apple/authorization" && request.method === "POST") {
+    return handleAppleAuthorization(request, env);
+  }
+  if (url.pathname === "/v2/web/config" && request.method === "GET") {
+    return handleWebConfiguration(env);
   }
   if (url.pathname === "/v2/account" && request.method === "DELETE") {
     return handleDeleteAccount(request, env);
@@ -98,6 +142,20 @@ export async function handleControlRequest(
     return handleRevokeDevice(request, env, device[1]);
   }
   return apiError(404, "not_found", "API route not found.");
+}
+
+/**
+ * This is intentionally the only browser-specific public configuration. A Google OAuth client
+ * id identifies the relying party; it is not a credential. Keeping it here lets the static app
+ * live on the same verified Worker origin without baking deployment values into its bundle.
+ */
+function handleWebConfiguration(env: ControlEnv): Response {
+  const googleClientID = env.GOOGLE_CLIENT_ID?.trim();
+  const audiences = env.OIDC_AUDIENCE?.split(",").map((value) => value.trim()) ?? [];
+  if (!googleClientID || !audiences.includes(googleClientID)) {
+    return apiError(503, "auth_unavailable", "Google sign-in is not configured.");
+  }
+  return apiResponse({ googleClientId: googleClientID });
 }
 
 async function handleCreateDeckPairing(request: Request, env: ControlEnv): Promise<Response> {
@@ -223,16 +281,384 @@ async function handleMe(request: Request, env: ControlEnv): Promise<Response> {
   return apiResponse({ account });
 }
 
+async function handleAppleAuthorization(request: Request, env: ControlEnv): Promise<Response> {
+  const body = await parseJSONBody(request);
+  if (body instanceof Response) return body;
+  const authorizationCode = boundedOpaqueString(body.authorizationCode, 4_096);
+  const nonce = boundedOpaqueString(body.nonce, 512);
+  if (authorizationCode === null || nonce === null) {
+    return apiError(
+      400,
+      "invalid_request",
+      "Apple authorization code and nonce are required.",
+    );
+  }
+
+  const authenticated = await authenticateOIDCUser(request, env, { appleNonce: nonce });
+  if (!authenticated.ok) return authenticationError(authenticated);
+  if (authenticated.value.issuer !== APPLE_OIDC_ISSUER) {
+    return apiError(401, "unauthorized", "A valid Apple identity token is required.");
+  }
+
+  const account = await ensureAccount(env.CONTROL_DB, authenticated.value);
+  const operationId = `appleop_${compactUUID()}`;
+  const now = Date.now();
+  const acquired = await env.CONTROL_DB.prepare(
+    `UPDATE account_identities
+        SET apple_token_operation = 'authorizing', apple_token_operation_id = ?,
+            apple_token_operation_started_at = ?
+      WHERE oidc_issuer = ? AND oidc_subject = ? AND account_id = ?
+        AND NOT (
+          apple_refresh_token_ciphertext IS NOT NULL
+          AND apple_refresh_token_iv IS NOT NULL
+          AND apple_refresh_token_version = 1
+        )
+        AND (
+          apple_token_operation IS NULL OR apple_token_operation_started_at IS NULL
+          OR apple_token_operation_started_at <= ?
+        )`,
+  ).bind(
+    operationId,
+    now,
+    authenticated.value.issuer,
+    authenticated.value.subject,
+    account.id,
+    now - APPLE_TOKEN_OPERATION_TIMEOUT_MS,
+  ).run();
+  if (changes(acquired) === 0) {
+    const state = await appleIdentityTokenState(env.CONTROL_DB, authenticated.value);
+    if (
+      state !== null
+      && state.apple_token_operation === null
+      && hasCompleteAppleRefreshToken(state)
+    ) {
+      return apiResponse({
+        authorized: true,
+        account: await ensureAccount(env.CONTROL_DB, authenticated.value),
+      });
+    }
+    return appleServiceErrorResponse(new AppleServiceError(
+      503,
+      "apple_operation_in_progress",
+      "Another Apple account operation is in progress. Retry shortly.",
+      "retry",
+    ));
+  }
+
+  let exchangedRefreshToken: string | null = null;
+  try {
+    const exchanged = await exchangeAppleAuthorizationCode(env, authorizationCode);
+    exchangedRefreshToken = exchanged.refreshToken;
+    const exchangedIdentity = await authenticateOIDCUser(
+      new Request(request.url, {
+        headers: { Authorization: `Bearer ${exchanged.identityToken}` },
+      }),
+      env,
+      { appleNonce: nonce, allowMissingAppleNonce: true },
+    );
+    if (
+      !exchangedIdentity.ok
+      || exchangedIdentity.value.issuer !== APPLE_OIDC_ISSUER
+      || exchangedIdentity.value.subject !== authenticated.value.subject
+    ) {
+      throw new AppleServiceError(
+        409,
+        "apple_reauthorization_required",
+        "Apple authorization did not match the signed-in account. Sign in with Apple again.",
+        "reauthorize_with_apple",
+      );
+    }
+
+    const encrypted = await encryptAppleRefreshToken(
+      env,
+      authenticated.value.issuer,
+      authenticated.value.subject,
+      exchanged.refreshToken,
+    );
+    const stored = await env.CONTROL_DB.prepare(
+      `UPDATE account_identities
+          SET apple_refresh_token_ciphertext = ?, apple_refresh_token_iv = ?,
+              apple_refresh_token_version = ?, apple_refresh_token_updated_at = ?,
+              apple_refresh_token_revoked_at = NULL,
+              apple_token_operation = NULL, apple_token_operation_id = NULL,
+              apple_token_operation_started_at = NULL
+        WHERE oidc_issuer = ? AND oidc_subject = ? AND account_id = ?
+          AND apple_token_operation = 'authorizing' AND apple_token_operation_id = ?
+          AND apple_refresh_token_ciphertext IS NULL`,
+    ).bind(
+      encrypted.ciphertext,
+      encrypted.iv,
+      encrypted.version,
+      Date.now(),
+      authenticated.value.issuer,
+      authenticated.value.subject,
+      account.id,
+      operationId,
+    ).run();
+    if (changes(stored) === 0) {
+      throw new AppleServiceError(
+        503,
+        "apple_service_unavailable",
+        "Apple authorization could not be stored. Sign in with Apple again before retrying.",
+        "reauthorize_with_apple",
+      );
+    }
+    return apiResponse({ authorized: true, account });
+  } catch (error) {
+    if (exchangedRefreshToken !== null) {
+      try {
+        await revokeAppleRefreshToken(env, exchangedRefreshToken);
+      } catch {
+        // Never expose or log token material. A fresh Apple authorization is required either way.
+      }
+    }
+    await releaseAppleTokenOperation(env.CONTROL_DB, authenticated.value, operationId);
+    let failure = error instanceof AppleServiceError
+      ? error
+      : new AppleServiceError(
+        503,
+        "apple_service_unavailable",
+        "Apple authorization could not be completed.",
+        exchangedRefreshToken === null ? "retry" : "reauthorize_with_apple",
+      );
+    if (exchangedRefreshToken !== null && failure.action === "retry") {
+      failure = new AppleServiceError(
+        failure.status,
+        failure.code,
+        `${failure.message} Sign in with Apple again before retrying.`,
+        "reauthorize_with_apple",
+      );
+    }
+    return appleServiceErrorResponse(failure);
+  }
+}
+
 async function handleDeleteAccount(request: Request, env: ControlEnv): Promise<Response> {
   const authenticated = await authenticateOIDCUser(request, env);
   if (!authenticated.ok) return authenticationError(authenticated);
+  const manualAppleRevocationRequested = request.headers.get(
+    APPLE_REVOCATION_FALLBACK_HEADER,
+  ) === "manual";
   const account = await ensureAccount(env.CONTROL_DB, authenticated.value);
-  const desktops = await env.CONTROL_DB.prepare(
-    "SELECT id FROM desktops WHERE account_id = ? AND revoked_at IS NULL",
-  ).bind(account.id).all<{ id: string }>();
-  await env.CONTROL_DB.prepare("DELETE FROM accounts WHERE id = ?").bind(account.id).run();
-  await Promise.all(desktops.results.map((desktop) => disconnectRoom(env, desktop.id)));
-  return apiResponse({ deleted: true });
+  const appleIdentity = await env.CONTROL_DB.prepare(
+    `SELECT oidc_issuer, oidc_subject, apple_refresh_token_ciphertext,
+            apple_refresh_token_iv, apple_refresh_token_version,
+            apple_refresh_token_revoked_at,
+            apple_token_operation, apple_token_operation_id,
+            apple_token_operation_started_at
+       FROM account_identities
+      WHERE account_id = ? AND oidc_issuer = ?`,
+  ).bind(account.id, APPLE_OIDC_ISSUER).first<AppleIdentityTokenRow>();
+  let appleDeleteOperation: {
+    identity: Pick<UserIdentity, "issuer" | "subject">;
+    operationId: string;
+  } | null = null;
+  if (appleIdentity !== null) {
+    const operationId = `appleop_${compactUUID()}`;
+    const operationStartedAt = Date.now();
+    const staleBefore = operationStartedAt - APPLE_TOKEN_OPERATION_TIMEOUT_MS;
+    const acquired = manualAppleRevocationRequested
+      ? await env.CONTROL_DB.prepare(
+        `UPDATE account_identities
+            SET apple_token_operation = 'deleting', apple_token_operation_id = ?,
+                apple_token_operation_started_at = ?
+          WHERE account_id = ? AND oidc_issuer = ? AND oidc_subject = ?
+            AND (
+              apple_token_operation IS NULL OR apple_token_operation_started_at IS NULL
+              OR apple_token_operation_started_at <= ?
+            )`,
+      ).bind(
+        operationId,
+        operationStartedAt,
+        account.id,
+        appleIdentity.oidc_issuer,
+        appleIdentity.oidc_subject,
+        staleBefore,
+      ).run()
+      : appleIdentity.apple_refresh_token_revoked_at !== null
+      ? await env.CONTROL_DB.prepare(
+        `UPDATE account_identities
+            SET apple_token_operation = 'deleting', apple_token_operation_id = ?,
+                apple_token_operation_started_at = ?
+          WHERE account_id = ? AND oidc_issuer = ? AND oidc_subject = ?
+            AND apple_refresh_token_revoked_at = ?
+            AND (
+              apple_token_operation IS NULL OR apple_token_operation_started_at IS NULL
+              OR apple_token_operation_started_at <= ?
+            )`,
+      ).bind(
+        operationId,
+        operationStartedAt,
+        account.id,
+        appleIdentity.oidc_issuer,
+        appleIdentity.oidc_subject,
+        appleIdentity.apple_refresh_token_revoked_at,
+        staleBefore,
+      ).run()
+      : hasCompleteAppleRefreshToken(appleIdentity)
+      ? await env.CONTROL_DB.prepare(
+        `UPDATE account_identities
+            SET apple_token_operation = 'deleting', apple_token_operation_id = ?,
+                apple_token_operation_started_at = ?
+          WHERE account_id = ? AND oidc_issuer = ? AND oidc_subject = ?
+            AND apple_refresh_token_ciphertext = ? AND apple_refresh_token_iv = ?
+            AND apple_refresh_token_version = ? AND apple_refresh_token_revoked_at IS NULL
+            AND (
+              apple_token_operation IS NULL OR apple_token_operation_started_at IS NULL
+              OR apple_token_operation_started_at <= ?
+            )`,
+      ).bind(
+        operationId,
+        operationStartedAt,
+        account.id,
+        appleIdentity.oidc_issuer,
+        appleIdentity.oidc_subject,
+        appleIdentity.apple_refresh_token_ciphertext,
+        appleIdentity.apple_refresh_token_iv,
+        appleIdentity.apple_refresh_token_version,
+        staleBefore,
+      ).run()
+      : null;
+    if (acquired === null) {
+      return appleServiceErrorResponse(new AppleServiceError(
+        409,
+        "apple_reauthorization_required",
+        "Sign in with Apple again before retrying account deletion.",
+        "reauthorize_with_apple",
+      ), true);
+    }
+    if (changes(acquired) === 0) {
+      return appleServiceErrorResponse(new AppleServiceError(
+        503,
+        "apple_operation_in_progress",
+        "Another Apple account operation is in progress. Retry account deletion shortly.",
+        "retry",
+      ));
+    }
+    appleDeleteOperation = {
+      identity: {
+        issuer: appleIdentity.oidc_issuer,
+        subject: appleIdentity.oidc_subject,
+      },
+      operationId,
+    };
+    if (
+      !manualAppleRevocationRequested
+      && appleIdentity.apple_refresh_token_revoked_at === null
+    ) {
+      const encrypted: EncryptedAppleRefreshToken = {
+        ciphertext: appleIdentity.apple_refresh_token_ciphertext!,
+        iv: appleIdentity.apple_refresh_token_iv!,
+        version: appleIdentity.apple_refresh_token_version as EncryptedAppleRefreshToken["version"],
+      };
+      try {
+        await revokeEncryptedAppleRefreshToken(
+          env,
+          appleIdentity.oidc_issuer,
+          appleIdentity.oidc_subject,
+          encrypted,
+        );
+      } catch (error) {
+        const failure = error instanceof AppleServiceError
+          ? error
+          : new AppleServiceError(
+            503,
+            "apple_service_unavailable",
+            "Apple token revocation is temporarily unavailable.",
+            "retry",
+          );
+        if (failure.action === "reauthorize_with_apple") {
+          await clearAppleTokenForReauthorization(
+            env.CONTROL_DB,
+            appleIdentity,
+            account.id,
+            operationId,
+          );
+        } else {
+          await releaseAppleTokenOperation(
+            env.CONTROL_DB,
+            appleDeleteOperation.identity,
+            operationId,
+          );
+        }
+        return appleServiceErrorResponse(failure, true);
+      }
+      const markedRevoked = await markAppleTokenRevoked(
+        env.CONTROL_DB,
+        appleIdentity,
+        account.id,
+        operationId,
+        Date.now(),
+      );
+      if (!markedRevoked) {
+        await releaseAppleTokenOperation(
+          env.CONTROL_DB,
+          appleDeleteOperation.identity,
+          operationId,
+        );
+        return appleServiceErrorResponse(new AppleServiceError(
+          503,
+          "apple_service_unavailable",
+          "Apple was revoked, but account deletion could not be finalized. Retry deletion.",
+          "retry",
+        ));
+      }
+    }
+  }
+  try {
+    const desktops = await env.CONTROL_DB.prepare(
+      // Include revoked rows so account deletion also cleans up room data left behind by an
+      // interrupted or older revocation flow.
+      "SELECT id FROM desktops WHERE account_id = ?",
+    ).bind(account.id).all<{ id: string }>();
+
+    // Block every account credential before touching Durable Object storage. If a room purge
+    // fails, the account and desktop ids remain available so the user can safely retry deletion.
+    const now = Date.now();
+    await env.CONTROL_DB.batch([
+      env.CONTROL_DB.prepare(
+        "UPDATE credentials SET revoked_at = COALESCE(revoked_at, ?) WHERE account_id = ?",
+      ).bind(now, account.id),
+      env.CONTROL_DB.prepare(
+        "UPDATE desktops SET revoked_at = COALESCE(revoked_at, ?) WHERE account_id = ?",
+      ).bind(now, account.id),
+      env.CONTROL_DB.prepare(
+        "UPDATE devices SET revoked_at = COALESCE(revoked_at, ?) WHERE account_id = ?",
+      ).bind(now, account.id),
+      env.CONTROL_DB.prepare(
+        "UPDATE pairing_challenges SET expires_at = MIN(expires_at, ?) WHERE account_id = ?",
+      ).bind(now, account.id),
+    ]);
+    await Promise.all(desktops.results.map((desktop) => purgeRoom(env, desktop.id)));
+    await env.CONTROL_DB.batch([
+      env.CONTROL_DB.prepare("DELETE FROM audit_events WHERE account_id = ?").bind(account.id),
+      env.CONTROL_DB.prepare("DELETE FROM accounts WHERE id = ?").bind(account.id),
+    ]);
+    return apiResponse({
+      deleted: true,
+      ...(manualAppleRevocationRequested && appleIdentity !== null
+        ? { appleRevocation: "manual_required" }
+        : {}),
+    });
+  } catch {
+    if (appleDeleteOperation !== null) {
+      try {
+        await releaseAppleTokenOperation(
+          env.CONTROL_DB,
+          appleDeleteOperation.identity,
+          appleDeleteOperation.operationId,
+        );
+      } catch {
+        // A stale operation can be recovered after APPLE_TOKEN_OPERATION_TIMEOUT_MS.
+      }
+    }
+    return apiError(
+      503,
+      "account_deletion_unavailable",
+      "Account deletion could not be finalized. Retry shortly.",
+      { retryable: true, action: "retry" },
+    );
+  }
 }
 
 async function handleListDesktops(request: Request, env: ControlEnv): Promise<Response> {
@@ -383,8 +809,13 @@ async function handleRevokeDesktop(
 ): Promise<Response> {
   const context = await accountContext(request, env);
   if (context instanceof Response) return context;
+  const ownedDesktop = await env.CONTROL_DB.prepare(
+    "SELECT id FROM desktops WHERE id = ? AND account_id = ? AND revoked_at IS NULL",
+  ).bind(desktopId, context.account.id).first<{ id: string }>();
+  if (ownedDesktop === null) return apiError(404, "not_found", "Desktop not found.");
+
   const now = Date.now();
-  const results = await env.CONTROL_DB.batch([
+  await env.CONTROL_DB.batch([
     env.CONTROL_DB.prepare(
       "UPDATE desktops SET revoked_at = ? WHERE id = ? AND account_id = ? AND revoked_at IS NULL",
     ).bind(now, desktopId, context.account.id),
@@ -392,12 +823,20 @@ async function handleRevokeDesktop(
       "UPDATE credentials SET revoked_at = ? WHERE desktop_id = ? AND account_id = ? AND revoked_at IS NULL",
     ).bind(now, desktopId, context.account.id),
     env.CONTROL_DB.prepare(
-      "UPDATE desktop_devices SET revoked_at = ? WHERE desktop_id = ? AND revoked_at IS NULL",
-    ).bind(now, desktopId),
+      `UPDATE desktop_devices SET revoked_at = ?
+        WHERE desktop_id = ? AND revoked_at IS NULL
+          AND EXISTS (
+            SELECT 1 FROM desktops
+             WHERE desktops.id = desktop_devices.desktop_id AND desktops.account_id = ?
+          )`,
+    ).bind(now, desktopId, context.account.id),
+    env.CONTROL_DB.prepare(
+      `UPDATE pairing_challenges SET expires_at = MIN(expires_at, ?)
+        WHERE desktop_id = ? AND account_id = ? AND claimed_at IS NULL`,
+    ).bind(now, desktopId, context.account.id),
     auditInsert(env.CONTROL_DB, context.account.id, "user", context.identity.subject, "desktop.revoke", "desktop", desktopId, now),
   ]);
-  if (changes(results[0]) === 0) return apiError(404, "not_found", "Desktop not found.");
-  await disconnectRoom(env, desktopId);
+  await purgeRoom(env, desktopId);
   return apiResponse({ revoked: true, desktopId });
 }
 
@@ -470,25 +909,75 @@ async function handleClaimPairing(
   if (pepper instanceof Response) return pepper;
 
   const now = Date.now();
-  const deviceId = `device_${compactUUID()}`;
   const secretHash = await hashSecret(pairingSecret, pepper);
+  const pairingOwner = await env.CONTROL_DB.prepare(
+    `SELECT p.account_id
+       FROM pairing_challenges p
+       JOIN desktops d ON d.id = p.desktop_id AND d.account_id = p.account_id
+      WHERE p.id = ? AND p.secret_hash = ? AND p.claimed_at IS NULL
+        AND p.expires_at > ? AND d.revoked_at IS NULL`,
+  ).bind(pairingId, secretHash, now).first<{ account_id: string }>();
+  if (pairingOwner === null) {
+    return apiError(409, "pairing_unavailable", "Pairing code is invalid, expired, or already used.");
+  }
+
+  const linksAppleIdentity = pairingOwner.account_id !== context.account.id;
+  if (linksAppleIdentity && context.identity.issuer !== APPLE_OIDC_ISSUER) {
+    return apiError(409, "pairing_unavailable", "Pairing code is invalid, expired, used, or belongs to another account.");
+  }
+
+  const deviceId = `device_${compactUUID()}`;
   const credentials = await createCredentialPair(pepper, now);
   const scopesJSON = JSON.stringify(MOBILE_SCOPES);
-  const results = await env.CONTROL_DB.batch([
+  const statements: D1PreparedStatement[] = [];
+  let identityLinkIndex: number | null = null;
+  let temporaryAccountDeleteIndex: number | null = null;
+  if (linksAppleIdentity) {
+    identityLinkIndex = statements.length;
+    statements.push(linkAppleIdentityForPairing(
+      env.CONTROL_DB,
+      context.identity,
+      context.account.id,
+      pairingOwner.account_id,
+      env.OIDC_ISSUER?.trim() ?? "",
+      pairingId,
+      secretHash,
+      now,
+    ));
+    temporaryAccountDeleteIndex = statements.length;
+    statements.push(deleteEmptyLinkedAccount(
+      env.CONTROL_DB,
+      context.account.id,
+      pairingOwner.account_id,
+      context.identity,
+    ));
+  }
+
+  const deviceInsertIndex = statements.length;
+  statements.push(
     env.CONTROL_DB.prepare(
       `INSERT INTO devices (id, account_id, name, platform, created_at)
-       SELECT ?, account_id, ?, ?, ? FROM pairing_challenges
-        WHERE id = ? AND account_id = ? AND secret_hash = ?
-          AND claimed_at IS NULL AND expires_at > ?`,
+       SELECT ?, p.account_id, ?, ?, ?
+         FROM pairing_challenges p
+         JOIN desktops d ON d.id = p.desktop_id AND d.account_id = p.account_id
+        WHERE p.id = ? AND p.account_id = ? AND p.secret_hash = ?
+          AND p.claimed_at IS NULL AND p.expires_at > ? AND d.revoked_at IS NULL
+          AND EXISTS (
+            SELECT 1 FROM account_identities identity
+             WHERE identity.oidc_issuer = ? AND identity.oidc_subject = ?
+               AND identity.account_id = p.account_id
+          )`,
     ).bind(
       deviceId,
       deviceName,
       platform,
       now,
       pairingId,
-      context.account.id,
+      pairingOwner.account_id,
       secretHash,
       now,
+      context.identity.issuer,
+      context.identity.subject,
     ),
     env.CONTROL_DB.prepare(
       `UPDATE pairing_challenges
@@ -496,7 +985,7 @@ async function handleClaimPairing(
         WHERE id = ? AND account_id = ? AND secret_hash = ?
           AND claimed_at IS NULL AND expires_at > ?
           AND EXISTS (SELECT 1 FROM devices WHERE id = ?)`,
-    ).bind(now, deviceId, pairingId, context.account.id, secretHash, now, deviceId),
+    ).bind(now, deviceId, pairingId, pairingOwner.account_id, secretHash, now, deviceId),
     env.CONTROL_DB.prepare(
       `INSERT INTO desktop_devices (desktop_id, device_id, scopes_json, paired_at)
        SELECT desktop_id, ?, ?, ? FROM pairing_challenges
@@ -504,20 +993,51 @@ async function handleClaimPairing(
     ).bind(deviceId, scopesJSON, now, pairingId, deviceId, now),
     credentialInsertFromPairing(env.CONTROL_DB, credentials.access, pairingId, deviceId, now, scopesJSON),
     credentialInsertFromPairing(env.CONTROL_DB, credentials.refresh, pairingId, deviceId, now, scopesJSON),
-  ]);
-  if (changes(results[0]) === 0) {
+  );
+  const results = await env.CONTROL_DB.batch(statements);
+  const identityWasLinked = identityLinkIndex !== null
+    && changes(results[identityLinkIndex]) > 0;
+  if (changes(results[deviceInsertIndex]) === 0) {
+    if (identityLinkIndex !== null && !identityWasLinked) {
+      return apiError(
+        409,
+        "account_link_conflict",
+        "This Apple identity belongs to an account with existing data or cannot be linked safely.",
+      );
+    }
     return apiError(409, "pairing_unavailable", "Pairing code is invalid, expired, used, or belongs to another account.");
   }
-  await auditInsert(
+  if (
+    identityWasLinked
+    && temporaryAccountDeleteIndex !== null
+    && changes(results[temporaryAccountDeleteIndex]) === 0
+  ) {
+    return apiError(500, "internal_error", "The temporary Apple account could not be removed.");
+  }
+  const auditStatements: D1PreparedStatement[] = [];
+  if (linksAppleIdentity) {
+    auditStatements.push(auditInsert(
+      env.CONTROL_DB,
+      pairingOwner.account_id,
+      "user",
+      context.identity.subject,
+      "account.identity.link",
+      "account",
+      pairingOwner.account_id,
+      now,
+    ));
+  }
+  auditStatements.push(auditInsert(
     env.CONTROL_DB,
-    context.account.id,
+    pairingOwner.account_id,
     "user",
     context.identity.subject,
     "pairing.claim",
     "device",
     deviceId,
     now,
-  ).run();
+  ));
+  await env.CONTROL_DB.batch(auditStatements);
   const pairing = await env.CONTROL_DB.prepare(
     `SELECT p.desktop_id, d.name AS desktop_name
        FROM pairing_challenges p JOIN desktops d ON d.id = p.desktop_id
@@ -604,25 +1124,35 @@ async function handleRevokeDevice(
 ): Promise<Response> {
   const context = await accountContext(request, env);
   if (context instanceof Response) return context;
+  const ownedDevice = await env.CONTROL_DB.prepare(
+    "SELECT id FROM devices WHERE id = ? AND account_id = ? AND revoked_at IS NULL",
+  ).bind(deviceId, context.account.id).first<{ id: string }>();
+  if (ownedDevice === null) return apiError(404, "not_found", "Device not found.");
+
   const now = Date.now();
   const pairings = await env.CONTROL_DB.prepare(
-    `SELECT desktop_id FROM desktop_devices
-      WHERE device_id = ? AND revoked_at IS NULL`,
-  ).bind(deviceId).all<{ desktop_id: string }>();
-  const results = await env.CONTROL_DB.batch([
+    `SELECT dd.desktop_id FROM desktop_devices dd
+       JOIN devices d ON d.id = dd.device_id
+      WHERE dd.device_id = ? AND d.account_id = ? AND dd.revoked_at IS NULL`,
+  ).bind(deviceId, context.account.id).all<{ desktop_id: string }>();
+  await env.CONTROL_DB.batch([
     env.CONTROL_DB.prepare(
       "UPDATE devices SET revoked_at = ? WHERE id = ? AND account_id = ? AND revoked_at IS NULL",
     ).bind(now, deviceId, context.account.id),
     env.CONTROL_DB.prepare(
-      "UPDATE desktop_devices SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
-    ).bind(now, deviceId),
+      `UPDATE desktop_devices SET revoked_at = ?
+        WHERE device_id = ? AND revoked_at IS NULL
+          AND EXISTS (
+            SELECT 1 FROM devices
+             WHERE devices.id = desktop_devices.device_id AND devices.account_id = ?
+          )`,
+    ).bind(now, deviceId, context.account.id),
     env.CONTROL_DB.prepare(
       `UPDATE credentials SET revoked_at = ?
         WHERE subject_type = 'device' AND subject_id = ? AND account_id = ? AND revoked_at IS NULL`,
     ).bind(now, deviceId, context.account.id),
     auditInsert(env.CONTROL_DB, context.account.id, "user", context.identity.subject, "device.revoke", "device", deviceId, now),
   ]);
-  if (changes(results[0]) === 0) return apiError(404, "not_found", "Device not found.");
   await Promise.all(
     pairings.results.map((pairing) => disconnectRoom(env, pairing.desktop_id, deviceId)),
   );
@@ -642,30 +1172,165 @@ async function accountContext(
 }
 
 async function ensureAccount(db: D1Database, identity: UserIdentity): Promise<Account> {
-  const accountId = await accountID(identity.issuer, identity.subject);
   const now = Date.now();
-  await db.prepare(
-    `INSERT INTO accounts
-      (id, oidc_issuer, oidc_subject, email, display_name, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       email = excluded.email,
-       display_name = excluded.display_name,
-       updated_at = excluded.updated_at`,
-  ).bind(
-    accountId,
-    identity.issuer,
-    identity.subject,
-    identity.email ?? null,
-    identity.displayName ?? null,
-    now,
-    now,
-  ).run();
+  let resolved = await accountForIdentity(db, identity);
+  if (resolved === null) {
+    const legacy = await db.prepare(
+      `SELECT id, email, display_name FROM accounts
+        WHERE oidc_issuer = ? AND oidc_subject = ?`,
+    ).bind(identity.issuer, identity.subject).first<AccountRow>();
+    const accountId = legacy?.id ?? await accountID(identity.issuer, identity.subject);
+    await db.batch([
+      db.prepare(
+        `INSERT INTO accounts
+          (id, oidc_issuer, oidc_subject, email, display_name, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO NOTHING`,
+      ).bind(
+        accountId,
+        identity.issuer,
+        identity.subject,
+        identity.email ?? null,
+        identity.displayName ?? null,
+        now,
+        now,
+      ),
+      db.prepare(
+        `INSERT INTO account_identities
+          (oidc_issuer, oidc_subject, account_id, created_at, last_used_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(oidc_issuer, oidc_subject) DO UPDATE SET
+           last_used_at = excluded.last_used_at`,
+      ).bind(identity.issuer, identity.subject, accountId, now, now),
+    ]);
+    resolved = await accountForIdentity(db, identity);
+    if (resolved === null) throw new Error("OIDC identity could not be resolved to an account.");
+  }
+
+  await db.batch([
+    db.prepare(
+      `UPDATE account_identities SET last_used_at = ?
+        WHERE oidc_issuer = ? AND oidc_subject = ? AND account_id = ?`,
+    ).bind(now, identity.issuer, identity.subject, resolved.id),
+    db.prepare(
+      `UPDATE accounts SET
+         email = COALESCE(email, ?),
+         display_name = COALESCE(display_name, ?),
+         updated_at = ?
+       WHERE id = ?`,
+    ).bind(identity.email ?? null, identity.displayName ?? null, now, resolved.id),
+  ]);
+  const email = resolved.email ?? identity.email;
+  const displayName = resolved.display_name ?? identity.displayName;
   return {
-    id: accountId,
-    ...(identity.email ? { email: identity.email } : {}),
-    ...(identity.displayName ? { displayName: identity.displayName } : {}),
+    id: resolved.id,
+    ...(email ? { email } : {}),
+    ...(displayName ? { displayName } : {}),
   };
+}
+
+async function accountForIdentity(
+  db: D1Database,
+  identity: UserIdentity,
+): Promise<AccountRow | null> {
+  return db.prepare(
+    `SELECT account.id, account.email, account.display_name
+       FROM account_identities identity
+       JOIN accounts account ON account.id = identity.account_id
+      WHERE identity.oidc_issuer = ? AND identity.oidc_subject = ?`,
+  ).bind(identity.issuer, identity.subject).first<AccountRow>();
+}
+
+async function appleIdentityTokenState(
+  db: D1Database,
+  identity: UserIdentity,
+): Promise<AppleIdentityTokenRow | null> {
+  return db.prepare(
+    `SELECT oidc_issuer, oidc_subject, apple_refresh_token_ciphertext,
+            apple_refresh_token_iv, apple_refresh_token_version,
+            apple_refresh_token_revoked_at,
+            apple_token_operation, apple_token_operation_id,
+            apple_token_operation_started_at
+       FROM account_identities
+      WHERE oidc_issuer = ? AND oidc_subject = ?`,
+  ).bind(identity.issuer, identity.subject).first<AppleIdentityTokenRow>();
+}
+
+function hasCompleteAppleRefreshToken(identity: AppleIdentityTokenRow): boolean {
+  return identity.apple_refresh_token_ciphertext !== null
+    && identity.apple_refresh_token_iv !== null
+    && identity.apple_refresh_token_version === 1
+    && identity.apple_refresh_token_revoked_at === null;
+}
+
+async function releaseAppleTokenOperation(
+  db: D1Database,
+  identity: Pick<UserIdentity, "issuer" | "subject">,
+  operationId: string,
+): Promise<void> {
+  await db.prepare(
+    `UPDATE account_identities
+        SET apple_token_operation = NULL, apple_token_operation_id = NULL,
+            apple_token_operation_started_at = NULL
+      WHERE oidc_issuer = ? AND oidc_subject = ? AND apple_token_operation_id = ?`,
+  ).bind(identity.issuer, identity.subject, operationId).run();
+}
+
+async function clearAppleTokenForReauthorization(
+  db: D1Database,
+  identity: AppleIdentityTokenRow,
+  accountId: string,
+  operationId: string,
+): Promise<void> {
+  await db.prepare(
+      `UPDATE account_identities
+        SET apple_refresh_token_ciphertext = NULL, apple_refresh_token_iv = NULL,
+            apple_refresh_token_version = NULL, apple_refresh_token_updated_at = NULL,
+            apple_refresh_token_revoked_at = NULL,
+            apple_token_operation = NULL, apple_token_operation_id = NULL,
+            apple_token_operation_started_at = NULL
+      WHERE oidc_issuer = ? AND oidc_subject = ? AND account_id = ?
+        AND apple_token_operation = 'deleting' AND apple_token_operation_id = ?
+        AND apple_refresh_token_ciphertext = ? AND apple_refresh_token_iv = ?
+        AND apple_refresh_token_version = ?`,
+  ).bind(
+    identity.oidc_issuer,
+    identity.oidc_subject,
+    accountId,
+    operationId,
+    identity.apple_refresh_token_ciphertext,
+    identity.apple_refresh_token_iv,
+    identity.apple_refresh_token_version,
+  ).run();
+}
+
+async function markAppleTokenRevoked(
+  db: D1Database,
+  identity: AppleIdentityTokenRow,
+  accountId: string,
+  operationId: string,
+  revokedAt: number,
+): Promise<boolean> {
+  const result = await db.prepare(
+    `UPDATE account_identities
+        SET apple_refresh_token_ciphertext = NULL, apple_refresh_token_iv = NULL,
+            apple_refresh_token_version = NULL, apple_refresh_token_updated_at = NULL,
+            apple_refresh_token_revoked_at = ?
+      WHERE oidc_issuer = ? AND oidc_subject = ? AND account_id = ?
+        AND apple_token_operation = 'deleting' AND apple_token_operation_id = ?
+        AND apple_refresh_token_ciphertext = ? AND apple_refresh_token_iv = ?
+        AND apple_refresh_token_version = ? AND apple_refresh_token_revoked_at IS NULL`,
+  ).bind(
+    revokedAt,
+    identity.oidc_issuer,
+    identity.oidc_subject,
+    accountId,
+    operationId,
+    identity.apple_refresh_token_ciphertext,
+    identity.apple_refresh_token_iv,
+    identity.apple_refresh_token_version,
+  ).run();
+  return changes(result) > 0;
 }
 
 async function accountID(issuer: string, subject: string): Promise<string> {
@@ -673,6 +1338,126 @@ async function accountID(issuer: string, subject: string): Promise<string> {
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${issuer}\u0000${subject}`)),
   );
   return `acct_${Array.from(digest.slice(0, 20), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function linkAppleIdentityForPairing(
+  db: D1Database,
+  identity: UserIdentity,
+  currentAccountId: string,
+  targetAccountId: string,
+  googleIssuer: string,
+  pairingId: string,
+  secretHash: string,
+  now: number,
+): D1PreparedStatement {
+  return db.prepare(
+    `UPDATE account_identities
+        SET account_id = ?, last_used_at = ?
+      WHERE oidc_issuer = ? AND oidc_subject = ? AND account_id = ?
+        AND oidc_issuer = ? AND account_id <> ? AND apple_token_operation IS NULL
+        AND (SELECT COUNT(*) FROM account_identities owned_identity
+              WHERE owned_identity.account_id = account_identities.account_id) = 1
+        AND NOT EXISTS (SELECT 1 FROM desktops resource
+                         WHERE resource.account_id = account_identities.account_id)
+        AND NOT EXISTS (SELECT 1 FROM devices resource
+                         WHERE resource.account_id = account_identities.account_id)
+        AND NOT EXISTS (SELECT 1 FROM credentials resource
+                         WHERE resource.account_id = account_identities.account_id)
+        AND NOT EXISTS (SELECT 1 FROM pairing_challenges resource
+                         WHERE resource.account_id = account_identities.account_id)
+        AND NOT EXISTS (SELECT 1 FROM deck_pairing_challenges resource
+                         WHERE resource.account_id = account_identities.account_id)
+        AND NOT EXISTS (SELECT 1 FROM audit_events resource
+                         WHERE resource.account_id = account_identities.account_id)
+        AND NOT EXISTS (SELECT 1 FROM marketplace_extensions resource
+                         WHERE resource.owner_account_id = account_identities.account_id
+                            OR resource.hidden_by_account_id = account_identities.account_id)
+        AND NOT EXISTS (SELECT 1 FROM marketplace_extension_installs resource
+                         WHERE resource.account_id = account_identities.account_id)
+        AND NOT EXISTS (SELECT 1 FROM marketplace_extension_reports resource
+                         WHERE resource.reporter_account_id = account_identities.account_id)
+        AND NOT EXISTS (SELECT 1 FROM usage_leaderboard_profiles resource
+                         WHERE resource.account_id = account_identities.account_id)
+        AND NOT EXISTS (SELECT 1 FROM usage_daily_totals resource
+                         WHERE resource.account_id = account_identities.account_id)
+        AND EXISTS (SELECT 1 FROM account_identities target_identity
+                     WHERE target_identity.account_id = ? AND target_identity.oidc_issuer = ?)
+        AND NOT EXISTS (SELECT 1 FROM account_identities target_identity
+                         WHERE target_identity.account_id = ? AND target_identity.oidc_issuer = ?)
+        AND EXISTS (
+          SELECT 1
+            FROM pairing_challenges pairing
+            JOIN desktops desktop
+              ON desktop.id = pairing.desktop_id
+             AND desktop.account_id = pairing.account_id
+           WHERE pairing.id = ? AND pairing.account_id = ? AND pairing.secret_hash = ?
+             AND pairing.claimed_at IS NULL AND pairing.expires_at > ?
+             AND desktop.revoked_at IS NULL
+        )`,
+  ).bind(
+    targetAccountId,
+    now,
+    identity.issuer,
+    identity.subject,
+    currentAccountId,
+    APPLE_OIDC_ISSUER,
+    targetAccountId,
+    targetAccountId,
+    googleIssuer,
+    targetAccountId,
+    APPLE_OIDC_ISSUER,
+    pairingId,
+    targetAccountId,
+    secretHash,
+    now,
+  );
+}
+
+function deleteEmptyLinkedAccount(
+  db: D1Database,
+  currentAccountId: string,
+  targetAccountId: string,
+  identity: UserIdentity,
+): D1PreparedStatement {
+  return db.prepare(
+    `DELETE FROM accounts
+      WHERE id = ? AND id <> ?
+        AND NOT EXISTS (SELECT 1 FROM account_identities identity
+                         WHERE identity.account_id = accounts.id)
+        AND EXISTS (SELECT 1 FROM account_identities linked_identity
+                     WHERE linked_identity.oidc_issuer = ?
+                       AND linked_identity.oidc_subject = ?
+                       AND linked_identity.account_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM desktops resource
+                         WHERE resource.account_id = accounts.id)
+        AND NOT EXISTS (SELECT 1 FROM devices resource
+                         WHERE resource.account_id = accounts.id)
+        AND NOT EXISTS (SELECT 1 FROM credentials resource
+                         WHERE resource.account_id = accounts.id)
+        AND NOT EXISTS (SELECT 1 FROM pairing_challenges resource
+                         WHERE resource.account_id = accounts.id)
+        AND NOT EXISTS (SELECT 1 FROM deck_pairing_challenges resource
+                         WHERE resource.account_id = accounts.id)
+        AND NOT EXISTS (SELECT 1 FROM audit_events resource
+                         WHERE resource.account_id = accounts.id)
+        AND NOT EXISTS (SELECT 1 FROM marketplace_extensions resource
+                         WHERE resource.owner_account_id = accounts.id
+                            OR resource.hidden_by_account_id = accounts.id)
+        AND NOT EXISTS (SELECT 1 FROM marketplace_extension_installs resource
+                         WHERE resource.account_id = accounts.id)
+        AND NOT EXISTS (SELECT 1 FROM marketplace_extension_reports resource
+                         WHERE resource.reporter_account_id = accounts.id)
+        AND NOT EXISTS (SELECT 1 FROM usage_leaderboard_profiles resource
+                         WHERE resource.account_id = accounts.id)
+        AND NOT EXISTS (SELECT 1 FROM usage_daily_totals resource
+                         WHERE resource.account_id = accounts.id)`,
+  ).bind(
+    currentAccountId,
+    targetAccountId,
+    identity.issuer,
+    identity.subject,
+    targetAccountId,
+  );
 }
 
 async function createCredentialPair(pepper: string, now: number): Promise<CredentialPair> {
@@ -847,6 +1632,17 @@ function authenticationError<T>(failure: Exclude<AuthenticationResult<T>, { ok: 
   return apiError(failure.status, failure.code, failure.message);
 }
 
+function appleServiceErrorResponse(
+  error: AppleServiceError,
+  manualRevocationAvailable = false,
+): Response {
+  return apiError(error.status, error.code, error.message, {
+    retryable: error.action === "retry",
+    action: error.action,
+    ...(manualRevocationAvailable ? { manualRevocationAvailable: true } : {}),
+  });
+}
+
 function apiResponse(body: Record<string, unknown>, status = 200): Response {
   return Response.json(body, {
     status,
@@ -858,8 +1654,13 @@ function apiResponse(body: Record<string, unknown>, status = 200): Response {
   });
 }
 
-function apiError(status: number, code: string, message: string): Response {
-  return apiResponse({ error: { code, message } }, status);
+function apiError(
+  status: number,
+  code: string,
+  message: string,
+  metadata: Record<string, unknown> = {},
+): Response {
+  return apiResponse({ error: { code, message, ...metadata } }, status);
 }
 
 function publicRelayURL(request: Request): string {
@@ -871,6 +1672,12 @@ function boundedString(value: unknown, maximumLength: number): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 && trimmed.length <= maximumLength ? trimmed : null;
+}
+
+function boundedOpaqueString(value: unknown, maximumLength: number): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= maximumLength
+    ? value
+    : null;
 }
 
 function parsePlatform(value: unknown): "ios" | "android" | "macos" | "unknown" | null {
@@ -944,5 +1751,13 @@ async function disconnectRoom(
   await room.fetch(new Request("https://relay.internal/disconnect", {
     method: "POST",
     headers,
+  }));
+}
+
+async function purgeRoom(env: ControlEnv, desktopId: string): Promise<void> {
+  const room = env.DESKTOP_ROOMS.getByName(desktopId);
+  await room.fetch(new Request("https://relay.internal/purge", {
+    method: "POST",
+    headers: { [INTERNAL_DESKTOP_ID_HEADER]: desktopId },
   }));
 }

@@ -264,7 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         [.banner, .sound]
     }
 
-    /// Clicking a notification summons the panel (M3 will deep-link to the session).
+    /// Clicking a notification summons the panel and selects the session that emitted it.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse

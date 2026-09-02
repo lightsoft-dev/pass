@@ -5,6 +5,7 @@ import Foundation
 enum AgentKind: String, Codable, Hashable, CaseIterable {
     case claude
     case codex
+    case grok
     case pi
     case shell   // no agent — a plain shell (claude exited, or a manual session)
     case generic // unknown agent
@@ -14,6 +15,7 @@ enum AgentKind: String, Codable, Hashable, CaseIterable {
         switch self {
         case .claude:  return "✳"
         case .codex:   return "⬢"
+        case .grok:    return "𝕏"
         case .pi:      return "π"
         case .shell:   return "$"
         case .generic: return "•"
@@ -26,6 +28,7 @@ enum AgentKind: String, Codable, Hashable, CaseIterable {
         switch self {
         case .claude:  return "claude"
         case .codex:   return "codex"
+        case .grok:    return "grok"
         case .pi:      return "pi"
         case .shell, .generic: return nil
         }
@@ -33,7 +36,7 @@ enum AgentKind: String, Codable, Hashable, CaseIterable {
 
     /// Agents the user can start (and customize the launch command for). shell/generic are
     /// adopted, never launched.
-    static var launchable: [AgentKind] { [.claude, .codex, .pi] }
+    static var launchable: [AgentKind] { [.claude, .codex, .grok, .pi] }
 
     /// Best-effort mapping from a pane's foreground command to an agent kind.
     /// (`claude.exe` is what Claude Code reports as `pane_current_command`.)
@@ -41,6 +44,7 @@ enum AgentKind: String, Codable, Hashable, CaseIterable {
         let c = cmd.lowercased()
         if c.hasPrefix("claude") { return .claude }
         if c.hasPrefix("codex") { return .codex }
+        if c == "grok" { return .grok }
         if c == "pi" { return .pi }
         if ["zsh", "bash", "fish", "sh", "-zsh", "-bash"].contains(c) { return .shell }
         return .generic
