@@ -94,3 +94,24 @@ final class HooksInstallerMergeTests: XCTestCase {
         XCTAssertFalse(changed2) // second run makes no changes
     }
 }
+
+final class PanelPresentationRequestTests: XCTestCase {
+    func testSessionDeepLinkAdvancesAsOneRequest() {
+        var request = PanelPresentationRequest()
+
+        request.advance(preselecting: "pass-target")
+
+        XCTAssertEqual(request.revision, 1)
+        XCTAssertEqual(request.preselectedSession, "pass-target")
+    }
+
+    func testOrdinaryPresentationClearsPreviousDeepLink() {
+        var request = PanelPresentationRequest()
+        request.advance(preselecting: "pass-target")
+
+        request.advance()
+
+        XCTAssertEqual(request.revision, 2)
+        XCTAssertNil(request.preselectedSession)
+    }
+}
