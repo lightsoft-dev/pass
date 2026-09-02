@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 
+import { AccountActions } from "../components/AccountActions";
 import { AppButton } from "../components/AppButton";
 import { Screen } from "../components/Screen";
 import { useAdaptiveLayout } from "../hooks/useAdaptiveLayout";
@@ -24,7 +25,7 @@ export default function PairScreen() {
   const router = useRouter();
   const { isRegular } = useAdaptiveLayout();
   const { pair, pairingBusy, pairingError, userSession } = useRemote();
-  const publicMode = publicOIDCConfiguration() !== null;
+  const publicMode = publicOIDCConfiguration() !== null || Platform.OS === "ios";
   const [permission, requestPermission] = useCameraPermissions();
   const [showScanner, setShowScanner] = useState(false);
   const [scanned, setScanned] = useState(false);
@@ -153,6 +154,7 @@ export default function PairScreen() {
               </Text>
             </View>
           </View>
+          {publicMode && userSession ? <AccountActions /> : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>

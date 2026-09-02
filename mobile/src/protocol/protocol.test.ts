@@ -351,6 +351,7 @@ test("accepts authorizationToken and legacy pairingToken JSON fields", () => {
         desktopId: "desk_123",
         [tokenField]: "shared-dev-token",
       }),
+      { allowDevelopmentPairing: true },
     );
     assert.equal(parsed.ok, true);
     if (parsed.ok && parsed.value.v === 1) {
@@ -380,6 +381,54 @@ test("accepts an unexpired one-time v2 pairing payload without a bearer token", 
     assert.equal(parsed.value.expiresAt, "2026-07-18T12:05:00.000Z");
     assert.equal("authorizationToken" in parsed.value, false);
   }
+});
+
+test("pins production v2 pairing to the normalized configured Relay", () => {
+  const payload = {
+    v: 2,
+    desktopId: "desk_123",
+    pairingId: "pair_456",
+    pairingSecret: "one-time-secret",
+    expiresAt: "2026-07-18T12:05:00Z",
+  };
+  const options = {
+    enforceTrustedRelay: true,
+    trustedRelayUrl: "https://relay.example.com/control/",
+    now: () => new Date("2026-07-18T12:00:00Z"),
+  };
+
+  const trusted = parsePairingPayload(JSON.stringify({
+    ...payload,
+    relayUrl: "https://RELAY.example.com/control///?source=qr",
+  }), options);
+  assert.equal(trusted.ok, true);
+  if (trusted.ok && trusted.value.v === 2) {
+    assert.equal(trusted.value.relayUrl, "https://relay.example.com/control");
+  }
+
+  const arbitraryHTTPS = parsePairingPayload(JSON.stringify({
+    ...payload,
+    relayUrl: "https://attacker.example.com",
+  }), options);
+  assert.equal(arbitraryHTTPS.ok, false);
+  if (!arbitraryHTTPS.ok) assert.match(arbitraryHTTPS.error, /untrusted Pass Relay/);
+});
+
+test("fails closed for production v2 pairing when the configured Relay is missing", () => {
+  const parsed = parsePairingPayload(JSON.stringify({
+    v: 2,
+    relayUrl: "https://relay.example.com",
+    desktopId: "desk_123",
+    pairingId: "pair_456",
+    pairingSecret: "one-time-secret",
+    expiresAt: "2026-07-18T12:05:00Z",
+  }), {
+    enforceTrustedRelay: true,
+    now: () => new Date("2026-07-18T12:00:00Z"),
+  });
+
+  assert.equal(parsed.ok, false);
+  if (!parsed.ok) assert.match(parsed.error, /production build has no valid HTTPS Pass Relay/);
 });
 
 test("parses a Deck approval QR without treating it as a phone credential", () => {
@@ -422,7 +471,27 @@ test("rejects insecure relay URLs outside explicit development mode", () => {
   });
   assert.equal(parsePairingPayload(payload).ok, false);
   assert.equal(
-    parsePairingPayload(payload, { allowInsecureDevelopment: true }).ok,
+    parsePairingPayload(payload, {
+      allowDevelopmentPairing: true,
+      allowInsecureDevelopment: true,
+    }).ok,
+    true,
+  );
+});
+
+test("rejects v1 shared-token pairing in production even for an HTTPS Relay", () => {
+  const payload = JSON.stringify({
+    v: 1,
+    relayUrl: "https://attacker.example.com",
+    desktopId: "desk_attacker",
+    authorizationToken: "shared-token",
+  });
+
+  const parsed = parsePairingPayload(payload);
+  assert.equal(parsed.ok, false);
+  if (!parsed.ok) assert.match(parsed.error, /only in development builds/);
+  assert.equal(
+    parsePairingPayload(payload, { allowDevelopmentPairing: true }).ok,
     true,
   );
 });

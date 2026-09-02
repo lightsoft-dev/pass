@@ -28,9 +28,32 @@ import {
   approveDeckPairing as approveDeckPairingRequest,
 } from "../services/pairingService";
 import {
+  clearIdentityProviderSession,
   isUserSessionFresh,
   refreshUserSession,
+  requestAppleDeletionAuthorization,
 } from "../services/authService";
+import {
+  deleteAccount as deleteAccountRequest,
+  type AccountDeletionResult,
+} from "../services/accountService";
+import {
+  fallbackForAppleDeletionResponse,
+  fallbackForApplePreparationFailure,
+  manualDeletionSessionStrategy,
+  persistAppleSignInBeforeBackgroundRegistration,
+  persistFreshAppleSessionAfterRegistrationAttempt,
+} from "../services/appleDeletionFallback";
+import {
+  registerAppleAuthorization,
+  type AppleAuthorization,
+} from "../services/appleAuthorizationService";
+import { identityProviderForSession } from "../services/identitySession";
+import {
+  pinStoredPairingForProduction,
+  requirePinnedRelayURL,
+  resolveAccountRelayURL,
+} from "../services/relayURL";
 import {
   refreshDeviceCredential,
   revokeDevice,
@@ -55,6 +78,7 @@ type CommandResult =
 
 type Decision = "allowOnce" | "allowAll" | "deny";
 type LaunchableAgent = Extract<AgentKind, "claude" | "codex" | "grok" | "pi">;
+type DeleteAccountOptions = { appleRevocationFallback?: "manual" };
 
 interface RemoteContextValue {
   state: ReturnType<typeof remoteReducer>;
@@ -67,7 +91,9 @@ interface RemoteContextValue {
   pair: (rawPayload: string) => Promise<CommandResult>;
   approveDeckPairing: (rawPayload: string) => Promise<CommandResult>;
   completeSignIn: (session: UserSession) => Promise<void>;
+  completeAppleSignIn: (authorization: AppleAuthorization) => Promise<void>;
   signOut: () => Promise<void>;
+  deleteAccount: (options?: DeleteAccountOptions) => Promise<AccountDeletionResult>;
   forgetPairing: () => Promise<void>;
   updatePreferences: (patch: Partial<UserPreferences>) => Promise<void>;
   reconnect: () => void;
@@ -117,17 +143,45 @@ export function RemoteProvider({ children }: PropsWithChildren) {
     Promise.all([loadPairedDesktop(), loadPreferences(), loadUserSession()])
       .then(async ([storedPairing, storedPreferences, storedUserSession]) => {
         if (!active) return;
+        let effectivePairing = storedPairing;
+        let storedPairingError: string | null = null;
+        if (!__DEV__ && effectivePairing) {
+          try {
+            effectivePairing = pinStoredPairingForProduction(
+              effectivePairing,
+              process.env.EXPO_PUBLIC_PASS_RELAY_URL,
+            );
+          } catch (error) {
+            // Validate legacy storage before any credential refresh or WebSocket can use its URL.
+            effectivePairing = null;
+            storedPairingError = `Saved pairing was removed: ${errorMessage(error)}`;
+            await clearPairedDesktop();
+          }
+        }
         let effectiveUserSession = storedUserSession;
         if (effectiveUserSession && !isUserSessionFresh(effectiveUserSession)) {
           try {
-            effectiveUserSession = await refreshUserSession(effectiveUserSession);
+            effectiveUserSession = await refreshUserSession(effectiveUserSession, {
+              allowUserInteraction: false,
+            });
             await saveUserSession(effectiveUserSession);
           } catch {
-            effectiveUserSession = null;
-            await clearUserSession();
+            // Apple cannot silently mint a new ID token: refreshAsync intentionally presents
+            // system UI. Retain the expired credential metadata so a later user-initiated account
+            // action can refresh it interactively. Google refresh failures require a fresh login.
+            let retainForInteractiveAppleRefresh = false;
+            try {
+              retainForInteractiveAppleRefresh =
+                identityProviderForSession(effectiveUserSession) === "apple";
+            } catch {
+              // Unsupported legacy providers are cleared below.
+            }
+            if (!retainForInteractiveAppleRefresh) {
+              effectiveUserSession = null;
+              await clearUserSession();
+            }
           }
         }
-        let effectivePairing = storedPairing;
         if (effectivePairing && shouldRefreshDeviceCredential(effectivePairing)) {
           try {
             effectivePairing = await refreshDeviceCredential(effectivePairing);
@@ -145,6 +199,14 @@ export function RemoteProvider({ children }: PropsWithChildren) {
         setPairedDesktop(effectivePairing);
         setPreferences(storedPreferences);
         dispatch({ type: "RESET", configured: effectivePairing !== null });
+        if (storedPairingError) {
+          setPairingError(storedPairingError);
+          dispatch({
+            type: "CONNECTION_PHASE",
+            phase: "error",
+            error: storedPairingError,
+          });
+        }
       })
       .catch((error) => {
         if (!active) return;
@@ -214,7 +276,10 @@ export function RemoteProvider({ children }: PropsWithChildren) {
     setPairingError(null);
     try {
       const parsed = parsePairingPayload(rawPayload, {
+        allowDevelopmentPairing: __DEV__,
         allowInsecureDevelopment: __DEV__,
+        enforceTrustedRelay: !__DEV__,
+        trustedRelayUrl: process.env.EXPO_PUBLIC_PASS_RELAY_URL,
       });
       if (!parsed.ok) {
         setPairingError(parsed.error);
@@ -270,10 +335,22 @@ export function RemoteProvider({ children }: PropsWithChildren) {
         setUserSession(activeSession);
       }
       const parsed = parseDeckPairingApproval(rawPayload);
-      if (parsed.relayUrl.replace(/\/+$/, "") !== pairedDesktop.relayUrl.replace(/\/+$/, "")) {
+      const requestRelayUrl = __DEV__
+        ? parsed.relayUrl
+        : requirePinnedRelayURL(
+            parsed.relayUrl,
+            process.env.EXPO_PUBLIC_PASS_RELAY_URL,
+          );
+      const pairedRelayUrl = __DEV__
+        ? pairedDesktop.relayUrl
+        : requirePinnedRelayURL(
+            pairedDesktop.relayUrl,
+            process.env.EXPO_PUBLIC_PASS_RELAY_URL,
+          );
+      if (requestRelayUrl !== pairedRelayUrl) {
         throw new Error("This Deck uses a different Pass relay.");
       }
-      await approveDeckPairingRequest(parsed, {
+      await approveDeckPairingRequest({ ...parsed, relayUrl: requestRelayUrl }, {
         userAccessToken: activeSession.accessToken,
         desktopId: pairedDesktop.desktopId,
       });
@@ -290,16 +367,41 @@ export function RemoteProvider({ children }: PropsWithChildren) {
     setUserSession(session);
   }, []);
 
+  const completeAppleSignIn = useCallback(async (
+    authorization: AppleAuthorization,
+  ) => {
+    const relayUrl = resolveAccountRelayURL(
+      process.env.EXPO_PUBLIC_PASS_RELAY_URL,
+    );
+    await persistAppleSignInBeforeBackgroundRegistration(
+      authorization,
+      async (session) => {
+        await saveUserSession(session);
+        setUserSession(session);
+      },
+      () => registerAppleAuthorization(relayUrl, authorization),
+    );
+  }, []);
+
   const revokeCurrentPairing = useCallback(async () => {
     if (!pairedDesktop || pairedDesktop.authenticationMode !== "device") return;
     if (!userSession) throw new Error("Sign in again to revoke this device.");
+    const relayUrl = __DEV__
+      ? pairedDesktop.relayUrl
+      : requirePinnedRelayURL(
+          pairedDesktop.relayUrl,
+          process.env.EXPO_PUBLIC_PASS_RELAY_URL,
+        );
     let activeSession = userSession;
     if (!isUserSessionFresh(activeSession)) {
       activeSession = await refreshUserSession(activeSession);
       await saveUserSession(activeSession);
       setUserSession(activeSession);
     }
-    await revokeDevice(pairedDesktop, activeSession.accessToken);
+    await revokeDevice(
+      { ...pairedDesktop, relayUrl },
+      activeSession.accessToken,
+    );
   }, [pairedDesktop, userSession]);
 
   const forgetPairing = useCallback(async () => {
@@ -316,12 +418,104 @@ export function RemoteProvider({ children }: PropsWithChildren) {
     await revokeCurrentPairing();
     clientRef.current?.stop(false);
     clientRef.current = null;
-    await Promise.all([clearPairedDesktop(), clearUserSession()]);
+    await Promise.all([
+      clearPairedDesktop(),
+      clearUserSession(),
+      clearIdentityProviderSession(userSession),
+    ]);
     setPairedDesktop(null);
     setUserSession(null);
     setPairingError(null);
     dispatch({ type: "RESET", configured: false });
-  }, [revokeCurrentPairing]);
+  }, [revokeCurrentPairing, userSession]);
+
+  const deleteAccount = useCallback(async (
+    options: DeleteAccountOptions = {},
+  ): Promise<AccountDeletionResult> => {
+    const manualFallback = options.appleRevocationFallback === "manual";
+    const storedSession = manualFallback ? await loadUserSession() : userSession;
+    if (!storedSession) throw new Error("Sign in again to delete this account.");
+    const relayUrl = resolveAccountRelayURL(
+      process.env.EXPO_PUBLIC_PASS_RELAY_URL,
+      { allowInsecureDevelopment: __DEV__ },
+    );
+
+    let activeSession = storedSession;
+    const provider = identityProviderForSession(activeSession);
+    if (manualFallback) {
+      const strategy = manualDeletionSessionStrategy(activeSession);
+      if (strategy === "reject_expired_apple") {
+        throw new Error(
+          "The saved Apple sign-in token is no longer fresh. Pass data was not deleted; retry automatic deletion.",
+        );
+      }
+      if (strategy === "refresh_google") {
+        activeSession = await refreshUserSession(activeSession);
+        await saveUserSession(activeSession);
+        setUserSession(activeSession);
+      }
+    } else if (provider === "apple") {
+      // Account deletion is a user-initiated action. Always obtain a new one-time code, even when
+      // the saved Apple ID token is fresh, so the Relay can revoke Apple's server-side grant.
+      let authorization: AppleAuthorization;
+      try {
+        authorization = await requestAppleDeletionAuthorization(activeSession);
+      } catch (error) {
+        const fallback = fallbackForApplePreparationFailure(error);
+        if (fallback) throw fallback;
+        throw error;
+      }
+      const registrationError = await persistFreshAppleSessionAfterRegistrationAttempt(
+        authorization,
+        () => registerAppleAuthorization(relayUrl, authorization),
+        async (session) => {
+          await saveUserSession(session);
+          setUserSession(session);
+        },
+      );
+      activeSession = authorization.session;
+      if (registrationError !== null) {
+        const fallback = fallbackForApplePreparationFailure(registrationError);
+        if (fallback) throw fallback;
+        throw registrationError;
+      }
+    } else if (!isUserSessionFresh(activeSession)) {
+      activeSession = await refreshUserSession(activeSession);
+      await saveUserSession(activeSession);
+      setUserSession(activeSession);
+    }
+
+    let result: AccountDeletionResult;
+    try {
+      result = await deleteAccountRequest(
+        relayUrl,
+        activeSession.accessToken,
+        manualFallback ? { appleRevocationFallback: "manual" } : {},
+      );
+    } catch (error) {
+      if (!manualFallback) {
+        const fallback = fallbackForAppleDeletionResponse(error);
+        if (fallback) throw fallback;
+      }
+      throw error;
+    }
+
+    clientRef.current?.stop(false);
+    clientRef.current = null;
+    try {
+      await Promise.all([
+        clearPairedDesktop(),
+        clearUserSession(),
+        clearIdentityProviderSession(activeSession).catch(() => undefined),
+      ]);
+    } finally {
+      setPairedDesktop(null);
+      setUserSession(null);
+      setPairingError(null);
+      dispatch({ type: "RESET", configured: false });
+    }
+    return result;
+  }, [userSession]);
 
   const updatePreferences = useCallback(
     async (patch: Partial<UserPreferences>) => {
@@ -360,7 +554,9 @@ export function RemoteProvider({ children }: PropsWithChildren) {
       pair,
       approveDeckPairing,
       completeSignIn,
+      completeAppleSignIn,
       signOut,
+      deleteAccount,
       forgetPairing,
       updatePreferences,
       reconnect: () => clientRef.current?.reconnect(),
@@ -402,7 +598,9 @@ export function RemoteProvider({ children }: PropsWithChildren) {
       pairedDesktop,
       pairingBusy,
       pairingError,
+      completeAppleSignIn,
       completeSignIn,
+      deleteAccount,
       preferences,
       send,
       state,

@@ -1,117 +1,94 @@
 import {
-  ResponseType,
-  exchangeCodeAsync,
-  makeRedirectUri,
-  useAuthRequest,
-  useAutoDiscovery,
-} from "expo-auth-session";
+  GoogleSignin,
+  isSuccessResponse,
+} from "@react-native-google-signin/google-signin";
+import * as AppleAuthentication from "expo-apple-authentication";
 import { useRouter } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
-import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
 
 import { AppButton } from "../components/AppButton";
 import { Screen } from "../components/Screen";
 import {
+  configureGoogleSignIn,
   publicOIDCConfiguration,
+  requestInitialAppleAuthorization,
   type PublicOIDCConfiguration,
-  userSessionFromTokenResponse,
+  userSessionFromGoogleUser,
 } from "../services/authService";
+import {
+  isAppleRequestCanceled,
+  shouldShowAppleSignIn,
+} from "../services/identitySession";
 import { useRemote } from "../state/RemoteProvider";
 import { colors, radius, spacing } from "../theme/theme";
 
-WebBrowser.maybeCompleteAuthSession();
-
-const redirectUri = makeRedirectUri({ scheme: "passremote", path: "oauth" });
-
 export default function LoginScreen() {
-  const configuration = publicOIDCConfiguration();
-  if (!configuration) return <MissingConfiguration />;
-  return <ConfiguredLogin configuration={configuration} />;
+  const googleConfiguration = publicOIDCConfiguration();
+  const appleAvailable = useAppleSignInAvailability();
+  if (!googleConfiguration && appleAvailable === null) return <CheckingAvailability />;
+  const showApple = shouldShowAppleSignIn(Platform.OS, appleAvailable === true);
+  if (!googleConfiguration && !showApple) return <MissingConfiguration />;
+  return (
+    <ConfiguredLogin
+      googleConfiguration={googleConfiguration}
+      showApple={showApple}
+    />
+  );
 }
 
 function ConfiguredLogin({
-  configuration,
+  googleConfiguration,
+  showApple,
 }: {
-  configuration: PublicOIDCConfiguration;
+  googleConfiguration: PublicOIDCConfiguration | null;
+  showApple: boolean;
 }) {
   const router = useRouter();
-  const { completeSignIn } = useRemote();
-  const discovery = useAutoDiscovery(configuration.issuer);
-  const [busy, setBusy] = useState(false);
+  const { completeAppleSignIn, completeSignIn } = useRemote();
+  const [busyProvider, setBusyProvider] = useState<"google" | "apple" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const handledCode = useRef<string | null>(null);
-  const [request, response, promptAsync] = useAuthRequest(
-    {
-      clientId: configuration.clientId,
-      redirectUri,
-      responseType: ResponseType.Code,
-      scopes: ["openid", "profile", "email", "offline_access"],
-      usePKCE: true,
-      ...(configuration.audience
-        ? { extraParams: { audience: configuration.audience } }
-        : {}),
-    },
-    discovery,
-  );
 
-  useEffect(() => {
-    if (!response) return;
-    if (response.type === "error") {
-      setBusy(false);
-      setError(response.error?.message ?? "Sign in was not completed.");
-      return;
-    }
-    if (response.type === "cancel" || response.type === "dismiss") {
-      setBusy(false);
-      return;
-    }
-    if (response.type !== "success") return;
-
-    const code = response.params.code;
-    if (!code || handledCode.current === code || !request?.codeVerifier || !discovery) {
-      if (!code || !request?.codeVerifier) {
-        setBusy(false);
-        setError("The identity provider returned an incomplete authorization response.");
-      }
-      return;
-    }
-    handledCode.current = code;
-    setBusy(true);
-    void exchangeCodeAsync(
-      {
-        clientId: configuration.clientId,
-        code,
-        redirectUri,
-        extraParams: { code_verifier: request.codeVerifier },
-      },
-      discovery,
-    )
-      .then((tokenResponse) =>
-        completeSignIn(userSessionFromTokenResponse(configuration, tokenResponse)),
-      )
-      .then(() => router.replace("/pair"))
-      .catch((exchangeError: unknown) => {
-        handledCode.current = null;
-        setBusy(false);
-        setError(
-          exchangeError instanceof Error
-            ? exchangeError.message
-            : "Could not complete sign in.",
-        );
-      });
-  }, [completeSignIn, configuration, discovery, request, response, router]);
-
-  const startSignIn = () => {
+  const startGoogleSignIn = () => {
+    if (!googleConfiguration) return;
     setError(null);
-    setBusy(true);
-    void promptAsync().catch((promptError: unknown) => {
-      setBusy(false);
-      setError(
-        promptError instanceof Error ? promptError.message : "Could not open sign in.",
-      );
-    });
+    setBusyProvider("google");
+    configureGoogleSignIn(googleConfiguration);
+    void (async () => {
+      if (Platform.OS === "android") {
+        await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      }
+      const response = await GoogleSignin.signIn();
+      if (!isSuccessResponse(response)) return;
+      await completeSignIn(userSessionFromGoogleUser(googleConfiguration, response.data));
+      router.replace("/pair");
+    })()
+      .catch((signInError: unknown) => {
+        setError(
+          signInError instanceof Error ? signInError.message : "Could not complete sign in.",
+        );
+      })
+      .finally(() => setBusyProvider(null));
   };
+
+  const startAppleSignIn = () => {
+    setError(null);
+    setBusyProvider("apple");
+    void (async () => {
+      const authorization = await requestInitialAppleAuthorization();
+      await completeAppleSignIn(authorization);
+      router.replace("/pair");
+    })()
+      .catch((signInError: unknown) => {
+        if (isAppleRequestCanceled(signInError)) return;
+        setError(
+          signInError instanceof Error ? signInError.message : "Could not complete sign in.",
+        );
+      })
+      .finally(() => setBusyProvider(null));
+  };
+
+  const busy = busyProvider !== null;
 
   return (
     <Screen style={styles.screen} edges={["top", "bottom", "left", "right"]}>
@@ -119,23 +96,73 @@ function ConfiguredLogin({
         <View style={styles.mark}><Text style={styles.markText}>P</Text></View>
         <Text style={styles.title}>Sign in to Pass</Text>
         <Text style={styles.subtitle}>
-          Use the same account on this device and your Mac.
+          Sign in, then securely link this device to your Mac with a QR code.
         </Text>
-        {!discovery ? (
-          <View style={styles.discovery}>
-            <ActivityIndicator color={colors.accent} />
-            <Text style={styles.discoveryText}>Connecting to sign in...</Text>
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {showApple ? (
+          <View
+            pointerEvents={busy ? "none" : "auto"}
+            style={[styles.appleButtonWrapper, busy && styles.disabled]}
+          >
+            <AppleAuthentication.AppleAuthenticationButton
+              buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+              buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+              cornerRadius={radius.md}
+              onPress={startAppleSignIn}
+              style={styles.appleButton}
+            />
           </View>
         ) : null}
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <AppButton
-          label="Continue"
-          disabled={!request || !discovery}
-          loading={busy}
-          onPress={startSignIn}
-          style={styles.button}
-        />
+        {showApple && googleConfiguration ? <Text style={styles.divider}>or</Text> : null}
+        {googleConfiguration ? (
+          <AppButton
+            label="Continue with Google"
+            disabled={busy}
+            loading={busyProvider === "google"}
+            onPress={startGoogleSignIn}
+            style={styles.button}
+          />
+        ) : null}
+        <View style={styles.demoEntry}>
+          <Text style={styles.demoHint}>Review the complete interface with safe sample data.</Text>
+          <AppButton
+            label="Explore demo"
+            disabled={busy}
+            onPress={() => router.replace("./demo")}
+            style={styles.button}
+            variant="ghost"
+          />
+        </View>
       </View>
+    </Screen>
+  );
+}
+
+function useAppleSignInAvailability(): boolean | null {
+  const [available, setAvailable] = useState<boolean | null>(
+    Platform.OS === "ios" ? null : false,
+  );
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    let active = true;
+    void AppleAuthentication.isAvailableAsync()
+      .then((result) => {
+        if (active) setAvailable(result);
+      })
+      .catch(() => {
+        if (active) setAvailable(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  return available;
+}
+
+function CheckingAvailability() {
+  return (
+    <Screen style={styles.screen} edges={["top", "bottom", "left", "right"]}>
+      <ActivityIndicator color={colors.accent} />
     </Screen>
   );
 }
@@ -146,8 +173,9 @@ function MissingConfiguration() {
     <Screen style={styles.screen} edges={["top", "bottom", "left", "right"]}>
       <View style={styles.content}>
         <Text style={styles.title}>Sign in is unavailable</Text>
-        <Text style={styles.subtitle}>This build has no public identity provider.</Text>
+        <Text style={styles.subtitle}>This build has no Google OAuth client.</Text>
         <AppButton label="Use development pairing" onPress={() => router.replace("/pair")} />
+        <AppButton label="Explore demo" onPress={() => router.replace("./demo")} variant="ghost" />
       </View>
     </Screen>
   );
@@ -168,8 +196,19 @@ const styles = StyleSheet.create({
   markText: { color: colors.white, fontSize: 32, fontWeight: "900" },
   title: { color: colors.text, fontSize: 28, fontWeight: "800", textAlign: "center" },
   subtitle: { color: colors.muted, fontSize: 15, lineHeight: 22, textAlign: "center" },
-  discovery: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  discoveryText: { color: colors.muted, fontSize: 13 },
   error: { color: colors.danger, fontSize: 13, lineHeight: 19, textAlign: "center" },
   button: { width: "100%", marginTop: spacing.sm },
+  appleButtonWrapper: { width: "100%", height: 50, marginTop: spacing.sm },
+  appleButton: { width: "100%", height: 50 },
+  disabled: { opacity: 0.42 },
+  divider: { color: colors.muted, fontSize: 13, lineHeight: 18 },
+  demoEntry: {
+    width: "100%",
+    marginTop: spacing.sm,
+    paddingTop: spacing.md,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.sm,
+  },
+  demoHint: { color: colors.subtle, fontSize: 11, lineHeight: 16, textAlign: "center" },
 });

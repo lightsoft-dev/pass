@@ -8,12 +8,15 @@ export interface ConversationBlock {
   text: string;
   title?: string;
   streaming?: boolean;
+  /** Remote message id when present; otherwise a non-account local response reference. */
+  sourceMessageID?: string;
 }
 
 type ConversationOptions = {
   pane?: string | null;
   agent: ConversationAgent;
   latestAssistant?: string | null;
+  latestAssistantID?: string | null;
   latestAssistantStreaming?: boolean;
   fallbackUser?: string | null;
 };
@@ -185,6 +188,10 @@ export function buildConversation(options: ConversationOptions): ConversationBlo
       blocks[assistantIndex] = {
         ...blocks[assistantIndex]!,
         text: latest,
+        sourceMessageID:
+          options.latestAssistantID?.trim()
+          || blocks[assistantIndex]!.sourceMessageID
+          || `local:${blocks[assistantIndex]!.id}`,
         streaming: options.latestAssistantStreaming === true,
       };
     } else {
@@ -192,6 +199,9 @@ export function buildConversation(options: ConversationOptions): ConversationBlo
         id: "latest_assistant",
         kind: "assistant",
         text: latest,
+        sourceMessageID:
+          options.latestAssistantID?.trim()
+          || `local:${blockID({ kind: "assistant", text: latest }, blocks.length)}`,
         streaming: options.latestAssistantStreaming === true,
       });
     }
