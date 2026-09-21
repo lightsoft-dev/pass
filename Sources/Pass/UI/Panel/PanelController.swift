@@ -140,7 +140,7 @@ final class PanelController {
         appModel.scheduleProjectDirectorySyncForVisibilityChange()
     }
 
-    func show(preselecting session: String?) {
+    func show(preselecting session: String?, projectRoot: String? = nil) {
         let panel = panel ?? makePanel()
         self.panel = panel
 
@@ -155,7 +155,7 @@ final class PanelController {
         appModel.panelVisible = true  // home attaches its live terminal only while visible
         // Tell the view to reset its route/focus and carry any notification deep-link in the
         // same observable change. The view also handles the current request on first mount.
-        appModel.requestPanelPresentation(preselecting: session)
+        appModel.requestPanelPresentation(preselecting: session, projectRoot: projectRoot)
         appModel.scheduleProjectDirectorySyncForVisibilityChange()
     }
 

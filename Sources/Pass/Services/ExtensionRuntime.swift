@@ -299,7 +299,8 @@ final class ExtensionRuntime: ExtensionWindowRuntime {
             // Unique kind per delivery — NotificationService replaces same-identifier banners,
             // and two rules firing seconds apart must not overwrite each other.
             await NotificationService().notify(
-                session: "ext:" + extensionId, kind: "extension-" + UUID().uuidString,
+                session: "ext:" + extensionId, projectRoot: session?.projectRoot,
+                kind: "extension-" + UUID().uuidString,
                 title: ExtensionTemplate.expand(n.title, context: ctx),
                 body: ExtensionTemplate.expand(n.body ?? "", context: ctx), sound: false)
             return .ok

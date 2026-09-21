@@ -99,19 +99,41 @@ final class PanelPresentationRequestTests: XCTestCase {
     func testSessionDeepLinkAdvancesAsOneRequest() {
         var request = PanelPresentationRequest()
 
-        request.advance(preselecting: "pass-target")
+        request.advance(preselecting: "pass-target", projectRoot: "/repos/target")
 
         XCTAssertEqual(request.revision, 1)
         XCTAssertEqual(request.preselectedSession, "pass-target")
+        XCTAssertEqual(request.preselectedProjectRoot, "/repos/target")
     }
 
     func testOrdinaryPresentationClearsPreviousDeepLink() {
         var request = PanelPresentationRequest()
-        request.advance(preselecting: "pass-target")
+        request.advance(preselecting: "pass-target", projectRoot: "/repos/target")
 
         request.advance()
 
         XCTAssertEqual(request.revision, 2)
         XCTAssertNil(request.preselectedSession)
+        XCTAssertNil(request.preselectedProjectRoot)
+    }
+
+    func testProjectFallbackWinsOverAnotherProjectsWaitingSession() {
+        var other = Session(
+            name: "pass-other", projectRoot: "/repos/other", cwd: "/repos/other",
+            agent: .claude, lastActivity: .now, isAttached: false
+        )
+        other.attention = .pending(Attention(kind: .input, receivedAt: .now, preview: "Input"))
+        let target = Session(
+            name: "pass-target", projectRoot: "/repos/target", cwd: "/repos/target",
+            agent: .claude, lastActivity: .now, isAttached: false
+        )
+
+        let selected = PanelSessionSelection.resolve(
+            preselectedSession: "pass-ended-session",
+            projectRoot: "/repos/target",
+            orderedSessions: [other, target]
+        )
+
+        XCTAssertEqual(selected, target.name)
     }
 }
