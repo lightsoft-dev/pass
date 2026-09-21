@@ -6,16 +6,18 @@ enum AgentHookPromptPreference {
     static let dismissedKey = "agentHooks.installPromptDismissed.v1"
 }
 
-/// One atomic request to present (or refresh) the main panel. Keeping the target session on
-/// the same observable value as the revision prevents a newly-created SwiftUI view from
-/// missing the preselection while it is still mounting.
+/// One atomic request to present (or refresh) the main panel. Keeping the target session and
+/// project on the same observable value as the revision prevents a newly-created SwiftUI view
+/// from missing the preselection while it is still mounting.
 struct PanelPresentationRequest: Equatable {
     var revision: Int = 0
     var preselectedSession: String?
+    var preselectedProjectRoot: String?
 
-    mutating func advance(preselecting session: String? = nil) {
+    mutating func advance(preselecting session: String? = nil, projectRoot: String? = nil) {
         revision &+= 1
         preselectedSession = session
+        preselectedProjectRoot = projectRoot
     }
 }
 
@@ -50,12 +52,12 @@ final class AppModel {
     var configRevision: Int = 0
 
     /// Advanced whenever the panel should refresh its route, session selection, and focus.
-    /// The session travels with the revision so notification deep-links also survive the
+    /// The destination travels with the revision so notification deep-links also survive the
     /// panel's first SwiftUI mount.
     var panelPresentation = PanelPresentationRequest()
 
-    func requestPanelPresentation(preselecting session: String? = nil) {
-        panelPresentation.advance(preselecting: session)
+    func requestPanelPresentation(preselecting session: String? = nil, projectRoot: String? = nil) {
+        panelPresentation.advance(preselecting: session, projectRoot: projectRoot)
     }
 
     /// Whether the panel is on screen. The home view attaches a live terminal to the selected

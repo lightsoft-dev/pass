@@ -199,14 +199,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             sessions: appModel.sessions,
             onAttention: { name, display, att in
                 let sound = att.kind != .finished // finished notifies silently
+                let projectRoot = appModel.sessions?.session(named: name)?.projectRoot
                 let body: String
                 switch att.kind {
                 case .decision: body = "Permission needed — \(att.preview)"
                 case .input:    body = att.preview
                 case .finished: body = att.preview
                 }
-                Task { await notifications.notify(session: name, kind: att.kind.rawValue,
-                                                  title: display, body: body, sound: sound) }
+                Task {
+                    await notifications.notify(
+                        session: name, projectRoot: projectRoot, kind: att.kind.rawValue,
+                        title: display, body: body, sound: sound
+                    )
+                }
                 appModel.extensionBuilder?.attentionPending(sessionName: name, attention: att)
                 if appModel.sessions?.isEphemeral(name) != true,
                    appModel.extensionBuilder?.ownsSession(name) != true {
@@ -264,15 +269,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         [.banner, .sound]
     }
 
-    /// Clicking a notification summons the panel and selects the session that emitted it.
+    /// Clicking a notification summons the panel and selects the session/project that emitted it.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
         let sessionName = response.notification.request.content.userInfo["session"] as? String
-        Log.app.debug("notification clicked, session=\(sessionName ?? "-", privacy: .public)")
+        let projectRoot = response.notification.request.content.userInfo["projectRoot"] as? String
+        Log.app.debug(
+            "notification clicked, session=\(sessionName ?? "-", privacy: .public), project=\(projectRoot ?? "-", privacy: .public)"
+        )
         await MainActor.run {
-            panelController.show(preselecting: sessionName)
+            panelController.show(preselecting: sessionName, projectRoot: projectRoot)
         }
     }
 

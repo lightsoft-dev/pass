@@ -24,12 +24,23 @@ struct NotificationService: Sendable {
 
     /// Post (or replace) a notification for a session. identifier = "<session>:<kind>" so a
     /// re-fired event updates the existing banner instead of stacking.
-    func notify(session: String, kind: String, title: String, body: String, sound: Bool) async {
+    func notify(
+        session: String,
+        projectRoot: String? = nil,
+        kind: String,
+        title: String,
+        body: String,
+        sound: Bool
+    ) async {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         if sound { content.sound = .default }
-        content.userInfo = ["session": session, "kind": kind]
+        var destination = ["session": session, "kind": kind]
+        if let projectRoot, !projectRoot.isEmpty {
+            destination["projectRoot"] = projectRoot
+        }
+        content.userInfo = destination
         content.threadIdentifier = session
 
         let request = UNNotificationRequest(

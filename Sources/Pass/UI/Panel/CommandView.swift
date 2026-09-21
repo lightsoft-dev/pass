@@ -210,7 +210,10 @@ struct CommandView: View {
                     route = .specs(selectedSession?.projectRoot) // land on the current project
                 } else {
                     route = .list
-                    focusSoon(preselecting: request.preselectedSession)
+                    focusSoon(
+                        preselecting: request.preselectedSession,
+                        projectRoot: request.preselectedProjectRoot
+                    )
                 }
             }
             .onChange(of: appModel.backToken) { _, _ in
@@ -1449,19 +1452,14 @@ struct CommandView: View {
         .background(Color.orange.opacity(0.10))
     }
 
-    private func focusSoon(preselecting session: String? = nil) {
-        selectedSessionName = initialSelectionName(preselecting: session)
+    private func focusSoon(preselecting session: String? = nil, projectRoot: String? = nil) {
+        selectedSessionName = PanelSessionSelection.resolve(
+            preselectedSession: session,
+            projectRoot: projectRoot,
+            orderedSessions: orderedSessions
+        )
         syncTerminalTarget()
         refocusField()
-    }
-
-    /// Where the cursor lands when the panel opens: an explicitly requested session first
-    /// (notification click or CLI browser open), else the
-    /// first waiting session at the top, else the first session.
-    private func initialSelectionName(preselecting session: String?) -> String? {
-        if let session, orderedSessions.contains(where: { $0.name == session }) { return session }
-        if let waiting = orderedSessions.first(where: { $0.needsUser }) { return waiting.name }
-        return orderedSessions.first?.name
     }
 
     /// Route the keyboard to whichever input is active: the message bar when it's up,
@@ -1474,6 +1472,28 @@ struct CommandView: View {
             omniboxFocused = true
             FieldEditorFix.cursorToEnd()
         }
+    }
+}
+
+/// Resolves panel deep-links without letting another project's waiting session steal focus.
+/// `orderedSessions` already places waiting sessions first, so the project fallback chooses the
+/// most relevant live session in that project when the exact originating session has disappeared.
+enum PanelSessionSelection {
+    static func resolve(
+        preselectedSession: String?,
+        projectRoot: String?,
+        orderedSessions: [Session]
+    ) -> String? {
+        if let preselectedSession,
+           orderedSessions.contains(where: { $0.name == preselectedSession }) {
+            return preselectedSession
+        }
+        if let projectRoot,
+           let projectSession = orderedSessions.first(where: { $0.projectRoot == projectRoot }) {
+            return projectSession.name
+        }
+        if let waiting = orderedSessions.first(where: { $0.needsUser }) { return waiting.name }
+        return orderedSessions.first?.name
     }
 }
 
