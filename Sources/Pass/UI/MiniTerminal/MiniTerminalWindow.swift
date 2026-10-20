@@ -107,7 +107,7 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false
-        window.level = .floating
+        window.level = .normal
         window.minSize = NSSize(width: 460, height: 280)
         window.collectionBehavior = [.fullScreenAuxiliary]
 
@@ -246,6 +246,17 @@ enum MiniTerminalEditingShortcut {
 private final class MiniTerminalPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func becomeKey() {
+        super.becomeKey()
+        level = .floating
+    }
+
+    override func resignKey() {
+        super.resignKey()
+        // Like the summon panel, leave the shell open behind the newly focused app.
+        level = .normal
+    }
 
     /// Pass is an accessory app, so the normal Edit-menu key equivalents are not reliably
     /// dispatched for this standalone panel. Send them through the responder chain explicitly;

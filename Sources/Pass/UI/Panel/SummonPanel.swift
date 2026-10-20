@@ -37,9 +37,14 @@ struct PanelNavEvent {
 
 /// A Spotlight/Raycast-style floating panel: non-activating (takes keystrokes without
 /// activating pass or deactivating the frontmost app), keyboard-first, appears over
-/// full-screen apps. Dismissal is explicit only (Esc / hotkey toggle) — it does NOT
-/// hide on focus loss, so you can copy from your editor into a reply field.
+/// full-screen apps. It floats only while it owns the keyboard; switching to another
+/// app lowers it to the normal window level without hiding it.
 final class SummonPanel: NSPanel {
+    /// The controller disables floating in normal mode and while Settings is open.
+    var floatsWhenKey = true {
+        didSet { updateLevel() }
+    }
+
     var onCancel: (() -> Void)?
     /// The red traffic-light button hides the reusable panel instead of terminating Pass.
     var onRequestClose: (() -> Void)?
@@ -68,7 +73,7 @@ final class SummonPanel: NSPanel {
         )
         minSize = NSSize(width: 460, height: 300)
         isFloatingPanel = true
-        level = .floating
+        level = .normal
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
         isMovableByWindowBackground = true
@@ -85,6 +90,22 @@ final class SummonPanel: NSPanel {
     // Required so the panel (and its text fields) can receive keyboard input.
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func becomeKey() {
+        super.becomeKey()
+        updateLevel()
+    }
+
+    override func resignKey() {
+        super.resignKey()
+        // Non-activating panels can lose the keyboard without deactivating the app.
+        // Follow the window's focus rather than application activation notifications.
+        level = .normal
+    }
+
+    private func updateLevel() {
+        level = floatsWhenKey && isKeyWindow ? .floating : .normal
+    }
 
     @objc private func requestClose(_ sender: Any?) {
         onRequestClose?()

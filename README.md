@@ -14,8 +14,8 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
 
 - **Global hotkey** (default ⌥Space) summons the panel over any app, any Space, without
   disruptively stealing your editor's focus. **Resizable** (drag edges; size is remembered) and
-  toggleable between **floating** (always-on-top) and a **normal window** you keep beside your
-  editor (⌘⇧F).
+  toggleable between **floating while focused** and a **normal window** you keep beside your
+  editor (⌘⇧F). Clicking another app brings it in front while Pass stays open.
 - **Chat home** — a feed of every session with its **last response**, and one input pinned at
   the bottom. Type to **reply to the selected session** (injected safely; refuses a bare shell),
   `@` to **jump** to a project/session, `y`/`n` to answer a pending permission, ⏎/⌘⏎ to open its
