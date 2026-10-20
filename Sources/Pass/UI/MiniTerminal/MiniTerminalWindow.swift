@@ -4,6 +4,7 @@ import SwiftUI
 
 @MainActor
 protocol MiniTerminalWindowControlling: AnyObject {
+    var isKey: Bool { get }
     func show()
     func showForActiveSession()
     func hideForInactiveSession()
@@ -11,18 +12,20 @@ protocol MiniTerminalWindowControlling: AnyObject {
     func close()
 }
 
-/// Owns one persistent mini shell per working directory. Reopening the same project raises its
-/// existing shell, preserving command history, environment changes, and running processes.
+/// Keeps independent project shells alive while their windows follow Pass's workspace.
 @MainActor
 final class MiniTerminalManager {
     typealias ControllerFactory = (Session, @escaping () -> Void) -> any MiniTerminalWindowControlling
 
-    private var controllers: [String: any MiniTerminalWindowControlling] = [:]
+    private struct Entry {
+        let id: UUID
+        let controller: any MiniTerminalWindowControlling
+    }
+
+    private var controllers: [String: [Entry]] = [:]
     private let makeController: ControllerFactory
-    /// The working directory whose session workspace is currently on screen in Pass.
-    /// Mini terminals stay alive when their session is left, but only this directory's window
-    /// may be visible. A nil/missing controller means the current session has no mini terminal.
     private var activeKey: String?
+    private var isPanelVisible = true
 
     init() {
         makeController = { session, onClose in
@@ -34,43 +37,67 @@ final class MiniTerminalManager {
         self.makeController = makeController
     }
 
+    var isKey: Bool {
+        controllers.values.joined().contains { $0.controller.isKey }
+    }
+
+    /// Reuse the latest shell; adding another window is an explicit, separate action.
     func open(for session: Session) {
-        let key = session.cwd
-        if let existing = controllers[key] {
-            existing.show()
-            return
+        activate(for: session)
+        if let existing = controllers[session.cwd]?.last {
+            if isPanelVisible { existing.controller.show() }
+        } else {
+            openNew(for: session)
         }
+    }
+
+    func openNew(for session: Session) {
+        activate(for: session)
+        let key = session.cwd
+        let id = UUID()
         let controller = makeController(session) { [weak self] in
-            self?.controllers.removeValue(forKey: key)
+            guard let self else { return }
+            self.controllers[key]?.removeAll { $0.id == id }
+            if self.controllers[key]?.isEmpty == true {
+                self.controllers.removeValue(forKey: key)
+            }
         }
-        controllers[key] = controller
-        controller.show()
+        controllers[key, default: []].append(Entry(id: id, controller: controller))
+        if isPanelVisible { controller.show() }
     }
 
-    /// Open this project's independent shell and execute the selected terminal output there.
+    /// Send selected output to the latest project shell, reusing its environment and processes.
     func run(_ command: String, for session: Session) {
-        let key = session.cwd
-        if controllers[key] == nil {
-            open(for: session)
-        }
-        controllers[key]?.run(command)
+        open(for: session)
+        controllers[session.cwd]?.last?.controller.run(command)
     }
 
-    /// Follow Pass's visible session without terminating shells or stealing keyboard focus.
-    /// Sessions in the same working directory intentionally share one project shell.
+    /// Sessions in the same directory share their collection of project shells.
     func activate(for session: Session?) {
         activeKey = session?.cwd
-        for (key, controller) in controllers {
-            if key == activeKey {
-                controller.showForActiveSession()
-            } else {
-                controller.hideForInactiveSession()
+        updateVisibility()
+    }
+
+    /// Hiding Pass hides windows only. The PTYs and their running commands stay alive.
+    func setPanelVisible(_ visible: Bool) {
+        isPanelVisible = visible
+        updateVisibility()
+    }
+
+    private func updateVisibility() {
+        for (key, entries) in controllers {
+            for entry in entries {
+                if isPanelVisible && key == activeKey {
+                    entry.controller.showForActiveSession()
+                } else {
+                    entry.controller.hideForInactiveSession()
+                }
             }
         }
     }
 
     func closeAll() {
-        let open = Array(controllers.values)
+        let open = controllers.values.flatMap { $0.map(\.controller) }
         controllers.removeAll()
         open.forEach { $0.close() }
     }
@@ -87,6 +114,10 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
     private let onClose: () -> Void
     private var themeObserver: (any NSObjectProtocol)?
     private var closed = false
+    private var hasBeenPositioned = false
+    private static var nextWindowTopLeft = NSPoint.zero
+
+    var isKey: Bool { window.isKeyWindow }
 
     init(session: Session, onClose: @escaping () -> Void) {
         self.session = session
@@ -140,7 +171,13 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
     }
 
     func show() {
-        if !window.isVisible { window.center() }
+        guard !closed else { return }
+        if !hasBeenPositioned {
+            window.center()
+            Self.nextWindowTopLeft = window.cascadeTopLeft(from: Self.nextWindowTopLeft)
+            hasBeenPositioned = true
+        }
+        if window.isMiniaturized { window.deminiaturize(nil) }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         focus()
@@ -160,7 +197,6 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
 
     func run(_ command: String) {
         guard !closed else { return }
-        show()
         terminalView.send(
             source: terminalView,
             data: ArraySlice(Array((command + "\r").utf8))
@@ -326,17 +362,25 @@ struct MiniTerminalButton: View {
     @Environment(AppModel.self) private var appModel
 
     var body: some View {
-        Button { appModel.miniTerminals.open(for: session) } label: {
-            if showLabel {
-                Label("Mini Terminal", systemImage: "terminal.fill")
-            } else {
-                Image(systemName: "terminal.fill")
+        HStack(spacing: 6) {
+            Button { appModel.miniTerminals.open(for: session) } label: {
+                if showLabel {
+                    Label("Mini Terminal", systemImage: "terminal.fill")
+                } else {
+                    Image(systemName: "terminal.fill")
+                }
             }
+            .help("Open a project shell in \(session.cwd)")
+            .accessibilityLabel("Open Mini Terminal")
+
+            Button { appModel.miniTerminals.openNew(for: session) } label: {
+                Image(systemName: "plus")
+            }
+            .help("New Mini Terminal")
+            .accessibilityLabel("New Mini Terminal")
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .font(.system(size: 11))
-        .help("Open a project shell in \(session.cwd)")
-        .accessibilityLabel("Open Mini Terminal")
     }
 }

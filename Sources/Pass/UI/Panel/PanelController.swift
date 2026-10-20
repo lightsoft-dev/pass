@@ -128,7 +128,11 @@ final class PanelController {
         if !isVisible { show(preselecting: nil); return }
         // Visible but not focused (buried behind other windows in normal mode, or the user is
         // in another app) → the hotkey means "get me to pass": raise it instead of hiding.
-        if panel?.isKeyWindow == true { hide() } else { raise() }
+        if panel?.isKeyWindow == true || appModel.miniTerminals?.isKey == true {
+            hide()
+        } else {
+            raise()
+        }
     }
 
     /// Bring the already-visible panel to the front and give it the keyboard — WITHOUT

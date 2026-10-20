@@ -1650,6 +1650,7 @@ struct FocusedSessionCard: View {
             Button("New Session in Worktree...") { onNewWorktree() }
         }
         Button("Open Mini Terminal") { appModel.miniTerminals.open(for: session) }
+        Button("New Mini Terminal") { appModel.miniTerminals.openNew(for: session) }
         ConfigURLContextMenu(session: session)
         if onDelete != nil { Divider() }
         if let onDelete {
@@ -1816,6 +1817,7 @@ struct CompactSessionCard: View {
             Button("New Session in Worktree...") { onNewWorktree() }
         }
         Button("Open Mini Terminal") { appModel.miniTerminals.open(for: session) }
+        Button("New Mini Terminal") { appModel.miniTerminals.openNew(for: session) }
         ConfigURLContextMenu(session: session)
         if onDelete != nil { Divider() }
         if let onDelete {

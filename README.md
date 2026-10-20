@@ -23,6 +23,9 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
 - **Interactive terminal** — opening a session embeds a real terminal attached to its tmux
   session: type straight into Claude (keys, arrows, permission answers), full color and sizing.
   `⌘[` steps back to the home; `⌘⏎` opens it in Ghostty.
+- **Mini terminals** — open a project shell with the terminal button, or add independent shells
+  with the adjacent `+`. Hiding Pass also hides its mini terminals; summoning it restores the
+  selected project's windows with their shell state and running commands intact.
 - **Agentic embedded browser** — the page beside a session is both human-visible and controllable
   through `passcli`. An agent can `open`, take a compact interactive `snapshot`, then use stable
   `@eN` references to `click`, `fill`, `type`, `select`, `press`, and `scroll`; `screenshot` and
