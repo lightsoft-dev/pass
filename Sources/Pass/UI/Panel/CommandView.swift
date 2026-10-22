@@ -2139,16 +2139,6 @@ private struct SessionProjectHeader: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Button(action: onToggle) {
-                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                    .font(PassFont.ui(size: 9, weight: .bold))
-                    .frame(width: 12, height: 26)
-                    .padding(.horizontal, 5)
-                    .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
-            }
-            .buttonStyle(.plain)
-            .help(collapsed ? "Expand \(name)" : "Collapse \(name)")
-            .accessibilityLabel(collapsed ? "Expand \(name)" : "Collapse \(name)")
             Button(action: onSelectProject ?? onToggle) {
                 HStack(spacing: 7) {
                     if let emoji {
@@ -2189,6 +2179,16 @@ private struct SessionProjectHeader: View {
                     onPick: { appModel.projects?.setEmoji(rootPath: root, $0) },
                     onClose: { editingIcon = false })
             }
+            Button(action: onToggle) {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .font(PassFont.ui(size: 9, weight: .bold))
+                    .frame(width: 12, height: 26)
+                    .padding(.horizontal, 5)
+                    .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
+            }
+            .buttonStyle(.plain)
+            .help(collapsed ? "Expand \(name)" : "Collapse \(name)")
+            .accessibilityLabel(collapsed ? "Expand \(name)" : "Collapse \(name)")
         }
         .padding(.top, 5)
     }
