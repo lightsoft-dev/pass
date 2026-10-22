@@ -278,18 +278,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         [.banner, .sound]
     }
 
-    /// Clicking a notification summons the panel and selects the session/project that emitted it.
+    /// Clicking a worker notification opens its project's Pa and asks Pa to explain the update.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
         let sessionName = response.notification.request.content.userInfo["session"] as? String
         let projectRoot = response.notification.request.content.userInfo["projectRoot"] as? String
+        let kind = response.notification.request.content.userInfo["kind"] as? String ?? "unknown"
+        let content = response.notification.request.content
+        let notificationID = response.notification.request.identifier
+        let title = String(content.title.prefix(200))
+        let summary = String(content.body.prefix(1_500))
         Log.app.debug(
             "notification clicked, session=\(sessionName ?? "-", privacy: .public), project=\(projectRoot ?? "-", privacy: .public)"
         )
         await MainActor.run {
-            panelController.show(preselecting: sessionName, projectRoot: projectRoot)
+            let root = projectRoot ?? sessionName.flatMap { appModel.sessions?.session(named: $0)?.projectRoot }
+            if let root, let sessionName, !root.isEmpty {
+                let request = ProjectAgentNotificationRequest(
+                    id: notificationID,
+                    sessionName: sessionName,
+                    kind: kind,
+                    title: title,
+                    summary: summary
+                )
+                appModel.enqueueProjectAgentNotification(request, for: root)
+            }
+            panelController.show(preselecting: sessionName, projectRoot: root,
+                                 focusProjectAgent: true)
         }
     }
 

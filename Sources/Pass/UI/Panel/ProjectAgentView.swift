@@ -6,6 +6,7 @@ struct ProjectAgentView: View {
     let projectRoot: String
     let sessions: [Session]
     let initialDraft: String
+    let focusToken: Int
     let onBack: () -> Void
     let onOpenWorker: (String) -> Void
 
@@ -17,6 +18,7 @@ struct ProjectAgentView: View {
     @State private var status: String?
     @State private var pendingLoginMessage: String?
     @State private var conversation: ProjectAgentConversation?
+    @FocusState private var messageFocused: Bool
 
     private var projectName: String { URL(fileURLWithPath: projectRoot).lastPathComponent }
     private var workers: [Session] {
@@ -65,6 +67,10 @@ struct ProjectAgentView: View {
                 status = nil
             }
         }
+        .onChange(of: focusToken, initial: true) { _, _ in
+            messageFocused = false
+            DispatchQueue.main.async { messageFocused = true }
+        }
         .task(id: projectRoot) {
             while !Task.isCancelled {
                 if !PiAuthentication.needsLogin() {
@@ -72,6 +78,12 @@ struct ProjectAgentView: View {
                     if let pendingLoginMessage, conversation?.isReady == true {
                         self.pendingLoginMessage = nil
                         if message == pendingLoginMessage { sendMessage() }
+                    }
+                    if let conversation, conversation.canSendMessage,
+                       let request = appModel.pendingProjectAgentNotification(for: projectRoot) {
+                        let sent = conversation.send(request.prompt)
+                        appModel.markProjectAgentNotificationSent(request.id, for: projectRoot)
+                        if !sent { status = "알림 내용을 Pa에게 전달하지 못했습니다." }
                     }
                 }
                 try? await Task.sleep(for: .seconds(1))
@@ -136,6 +148,7 @@ struct ProjectAgentView: View {
                 }
                 TextField("Pa에게 할 일을 알려주세요…", text: $message, axis: .vertical)
                     .textFieldStyle(.plain)
+                    .focused($messageFocused)
                     .font(PassFont.ui(size: 13))
                     .lineLimit(4...8)
                     .padding(.horizontal, 14)

@@ -290,8 +290,10 @@ struct CommandView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.08)))
             .onChange(of: appModel.panelPresentation, initial: true) { _, request in
+                let currentProjectRoot = activeProjectRoot ?? workspaceSession?.projectRoot
+                    ?? selectedSession?.projectRoot
                 query = ""
-                showQuickCommand = false // fresh summon lands in the terminal, not the bar
+                showQuickCommand = false
                 newSessionMode = false
                 newProjectMode = false
                 if appModel.pendingOpenFeatures {
@@ -300,6 +302,16 @@ struct CommandView: View {
                 } else if appModel.pendingOpenSpecs {
                     appModel.pendingOpenSpecs = false // menu bar asked for the specs screen
                     route = .specs(selectedSession?.projectRoot) // land on the current project
+                } else if request.focusProjectAgent,
+                          let root = PanelProjectSelection.resolve(
+                            preselectedSession: request.preselectedSession,
+                            preselectedProjectRoot: request.preselectedProjectRoot,
+                            currentProjectRoot: currentProjectRoot,
+                            availableProjectRoots: projectGroups.map(\.id),
+                            orderedSessions: orderedSessions
+                          ) {
+                    projectAgentDraft = ""
+                    route = .projectAgent(root)
                 } else {
                     route = .list
                     focusSoon(
@@ -651,6 +663,7 @@ struct CommandView: View {
             projectWorkspace {
                 ProjectAgentView(projectRoot: root, sessions: sessions,
                                  initialDraft: projectAgentDraft,
+                                 focusToken: appModel.panelPresentation.revision,
                                  onBack: { route = .list; focusSoon() },
                                  onOpenWorker: { route = .projectWorker($0, root) })
                     .id(root)
@@ -1878,6 +1891,31 @@ enum PanelSessionSelection {
         }
         if let waiting = orderedSessions.first(where: { $0.needsUser }) { return waiting.name }
         return orderedSessions.first?.name
+    }
+}
+
+/// Finds the project to show in Pa when a shortcut or notification summons Pass.
+enum PanelProjectSelection {
+    static func resolve(
+        preselectedSession: String?,
+        preselectedProjectRoot: String?,
+        currentProjectRoot: String?,
+        availableProjectRoots: [String],
+        orderedSessions: [Session]
+    ) -> String? {
+        let available = Set(availableProjectRoots)
+        if let preselectedProjectRoot, available.contains(preselectedProjectRoot) {
+            return preselectedProjectRoot
+        }
+        if let preselectedSession,
+           let session = orderedSessions.first(where: { $0.name == preselectedSession }),
+           available.contains(session.projectRoot) {
+            return session.projectRoot
+        }
+        if let currentProjectRoot, available.contains(currentProjectRoot) {
+            return currentProjectRoot
+        }
+        return availableProjectRoots.first
     }
 }
 

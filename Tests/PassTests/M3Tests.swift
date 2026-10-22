@@ -108,13 +108,15 @@ final class PanelPresentationRequestTests: XCTestCase {
 
     func testOrdinaryPresentationClearsPreviousDeepLink() {
         var request = PanelPresentationRequest()
-        request.advance(preselecting: "pass-target", projectRoot: "/repos/target")
+        request.advance(preselecting: "pass-target", projectRoot: "/repos/target",
+                        focusProjectAgent: true)
 
         request.advance()
 
         XCTAssertEqual(request.revision, 2)
         XCTAssertNil(request.preselectedSession)
         XCTAssertNil(request.preselectedProjectRoot)
+        XCTAssertFalse(request.focusProjectAgent)
     }
 
     func testProjectFallbackWinsOverAnotherProjectsWaitingSession() {
@@ -135,5 +137,57 @@ final class PanelPresentationRequestTests: XCTestCase {
         )
 
         XCTAssertEqual(selected, target.name)
+    }
+
+    func testShortcutOpensPaForCurrentProjectDespiteOtherWaitingSession() {
+        let other = Session(name: "pass-other", projectRoot: "/repos/other", cwd: "/repos/other",
+                            agent: .claude, lastActivity: .now, isAttached: false)
+        let target = Session(name: "pass-target", projectRoot: "/repos/target", cwd: "/repos/target",
+                             agent: .codex, lastActivity: .now, isAttached: false)
+
+        let root = PanelProjectSelection.resolve(
+            preselectedSession: nil, preselectedProjectRoot: nil,
+            currentProjectRoot: "/repos/target",
+            availableProjectRoots: ["/repos/other", "/repos/target"],
+            orderedSessions: [other, target]
+        )
+
+        XCTAssertEqual(root, "/repos/target")
+    }
+
+    func testNotificationProjectWinsOverCurrentProject() {
+        let root = PanelProjectSelection.resolve(
+            preselectedSession: "pass-ended", preselectedProjectRoot: "/repos/notified",
+            currentProjectRoot: "/repos/current",
+            availableProjectRoots: ["/repos/current", "/repos/notified"],
+            orderedSessions: []
+        )
+
+        XCTAssertEqual(root, "/repos/notified")
+    }
+}
+
+final class ProjectAgentNotificationTests: XCTestCase {
+    @MainActor func testNotificationQueueKeepsContextUntilMarkedSent() {
+        let model = AppModel()
+        let request = ProjectAgentNotificationRequest(
+            id: "worker:finished", sessionName: "worker", kind: "finished",
+            title: "Build finished", summary: "Tests passed"
+        )
+
+        model.enqueueProjectAgentNotification(request, for: "/repos/project")
+        let updated = ProjectAgentNotificationRequest(
+            id: request.id, sessionName: "worker", kind: "finished",
+            title: "Build finished", summary: "All checks passed"
+        )
+        model.enqueueProjectAgentNotification(updated, for: "/repos/project")
+
+        XCTAssertEqual(model.pendingProjectAgentNotification(for: "/repos/project"), updated)
+        XCTAssertNil(model.pendingProjectAgentNotification(for: "/repos/other"))
+        XCTAssertTrue(updated.prompt.contains("All checks passed"))
+        XCTAssertTrue(updated.prompt.contains("worker"))
+
+        model.markProjectAgentNotificationSent(request.id, for: "/repos/project")
+        XCTAssertNil(model.pendingProjectAgentNotification(for: "/repos/project"))
     }
 }
