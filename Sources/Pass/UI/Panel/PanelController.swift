@@ -128,13 +128,14 @@ final class PanelController {
     var isKey: Bool { panel?.isKeyWindow ?? false }
 
     func toggle() {
-        if !isVisible { show(preselecting: nil); return }
+        if !isVisible { show(preselecting: nil, focusProjectAgent: true); return }
         // Visible but not focused (buried behind other windows in normal mode, or the user is
         // in another app) → the hotkey means "get me to pass": raise it instead of hiding.
         if panel?.isKeyWindow == true || appModel.miniTerminals?.isKey == true {
             hide()
         } else {
             raise()
+            appModel.requestPanelPresentation(focusProjectAgent: true)
         }
     }
 
@@ -148,7 +149,8 @@ final class PanelController {
         appModel.scheduleProjectDirectorySyncForVisibilityChange()
     }
 
-    func show(preselecting session: String?, projectRoot: String? = nil) {
+    func show(preselecting session: String?, projectRoot: String? = nil,
+              focusProjectAgent: Bool = false) {
         let panel = panel ?? makePanel()
         self.panel = panel
 
@@ -163,7 +165,8 @@ final class PanelController {
         appModel.panelVisible = true  // home attaches its live terminal only while visible
         // Tell the view to reset its route/focus and carry any notification deep-link in the
         // same observable change. The view also handles the current request on first mount.
-        appModel.requestPanelPresentation(preselecting: session, projectRoot: projectRoot)
+        appModel.requestPanelPresentation(preselecting: session, projectRoot: projectRoot,
+                                          focusProjectAgent: focusProjectAgent)
         appModel.scheduleProjectDirectorySyncForVisibilityChange()
     }
 
