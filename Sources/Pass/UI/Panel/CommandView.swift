@@ -19,6 +19,7 @@ struct CommandView: View {
     @State private var confirmHookDismissal = false   // acknowledge degraded core functionality
     @State private var showQuickCommand = false       // ⌘P quick command (hidden by default)
     @State private var newSessionMode = false         // ⌘N: results are PROJECTS, ⏎ starts a session
+    @State private var newProjectMode = false         // New project button: show creation choices only
     @State private var isCloningRepository = false    // keep the palette stable while git clone runs
     @State private var githubBrowseMode = false       // connected-account repository search
     @State private var githubBrowserState: GitHubBrowserState = .idle
@@ -156,10 +157,10 @@ struct CommandView: View {
                     return []
                 }
             }
-            var items: [PaletteItem] = projects
+            var items: [PaletteItem] = newProjectMode ? [] : projects
                 .filter { needle.isEmpty || Fuzzy.matches(needle, $0.name) }
                 .map { .project($0) }
-            items.append(contentsOf: matchingRemoteProjects(needle))
+            if !newProjectMode { items.append(contentsOf: matchingRemoteProjects(needle)) }
             let exactMatch = projects.contains {
                 $0.name.compare(needle, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
             }
@@ -292,6 +293,7 @@ struct CommandView: View {
                 query = ""
                 showQuickCommand = false // fresh summon lands in the terminal, not the bar
                 newSessionMode = false
+                newProjectMode = false
                 if appModel.pendingOpenFeatures {
                     appModel.pendingOpenFeatures = false
                     route = .features
@@ -433,13 +435,7 @@ struct CommandView: View {
             return true
         case .newSession:
             // ⌘N — pick a project, ⏎ starts a session in it.
-            status = nil
-            query = ""
-            githubBrowseMode = false
-            newSessionMode = true
-            showQuickCommand = true
-            jumpSelection = 0
-            refocusField()
+            beginNewSession()
             return true
         case .newWorktree:
             // ⌘T — worktree session off the selected session, branch name prefilled: just ⏎.
@@ -704,6 +700,14 @@ struct CommandView: View {
     }
 
     private var projectSidebar: some View {
+        VStack(spacing: 0) {
+            projectListToolbar
+            Divider()
+            projectSidebarRows
+        }
+    }
+
+    private var projectSidebarRows: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 4) {
@@ -742,6 +746,34 @@ struct CommandView: View {
         }
     }
 
+    private var projectListToolbar: some View {
+        HStack(spacing: 8) {
+            Text("Projects")
+                .font(PassFont.ui(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button {
+                beginNewProject()
+            } label: {
+                Label("New project", systemImage: "folder.badge.plus")
+                    .font(PassFont.ui(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .help("Create a new project")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var projectList: some View {
+        VStack(spacing: 0) {
+            projectListToolbar
+            Divider()
+            listBody
+        }
+    }
+
     private var listMode: some View {
         GeometryReader { geo in
             VStack(spacing: 0) {
@@ -751,7 +783,7 @@ struct CommandView: View {
                 if homeMode == .sidebar {
                     // Rows on the LEFT, the live terminal filling the right side.
                     HStack(spacing: 0) {
-                        listBody
+                        projectList
                             .frame(width: min(max(geo.size.width * 0.34, 210), 320))
                         Divider()
                         if selectedSession != nil {
@@ -761,7 +793,7 @@ struct CommandView: View {
                         }
                     }
                 } else {
-                    listBody
+                    projectList
                     // List mode: rows on TOP, the selected session's live terminal below,
                     // chat-style (stack mode embeds it in the focused card instead).
                     if homeMode == .list && selectedSession != nil {
@@ -815,7 +847,8 @@ struct CommandView: View {
     private var commandBar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: newSessionMode ? "plus.circle"
+                Image(systemName: newProjectMode ? "folder.badge.plus"
+                        : newSessionMode ? "plus.circle"
                         : query.hasPrefix("+") ? "arrow.triangle.branch"
                         : isCommandMode ? "puzzlepiece.extension" : "magnifyingglass")
                     .font(PassFont.ui(size: 16))
@@ -834,6 +867,18 @@ struct CommandView: View {
                         return .ignored
                     }
                     .onAppear { refocusField() } // grab focus the instant this field mounts
+                if !newSessionMode {
+                    Button {
+                        beginNewProject()
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                            .font(PassFont.ui(size: 14))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .help("New project")
+                    .accessibilityLabel("New project")
+                }
                 if newSessionMode {
                     if isCloningRepository {
                         ProgressView().controlSize(.small)
@@ -962,6 +1007,7 @@ struct CommandView: View {
 
     private var placeholder: String {
         if newSessionMode, githubBrowseMode { return "search accessible GitHub repositories" }
+        if newProjectMode { return "new project name or GitHub URL" }
         return newSessionMode ? "project name or GitHub URL" : "search — session name, then your message"
     }
 
@@ -970,6 +1016,16 @@ struct CommandView: View {
             return "No extension commands — install & enable extensions in Settings."
         }
         if newSessionMode {
+            if newProjectMode, query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !githubBrowseMode {
+                return "Enter a project name or paste a GitHub URL."
+            }
+            if newProjectMode, !githubBrowseMode, projects.contains(where: {
+                $0.name.compare(query.trimmingCharacters(in: .whitespacesAndNewlines),
+                                options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }) {
+                return "A project with this name already exists."
+            }
             if githubBrowseMode {
                 switch githubBrowserState {
                 case .idle, .loading:
@@ -1016,7 +1072,9 @@ struct CommandView: View {
                     return "GitHub account repositories · Esc local projects"
                 }
             }
-            return "select a project · create by name · or paste a GitHub URL · Esc close"
+            return newProjectMode
+                ? "type a project name or paste a GitHub URL · Esc close"
+                : "select a project · create by name · or paste a GitHub URL · Esc close"
         }
         if query.hasPrefix("+") {
             let branch = String(query.dropFirst()).trimmingCharacters(in: .whitespaces)
@@ -1432,9 +1490,30 @@ struct CommandView: View {
         else { status = nil; showQuickCommand = true; refocusField() }
     }
 
+    private func beginNewSession() {
+        beginProjectEntry(creatingProject: false)
+    }
+
+    private func beginNewProject() {
+        beginProjectEntry(creatingProject: true)
+    }
+
+    private func beginProjectEntry(creatingProject: Bool) {
+        guard !isCloningRepository else { return }
+        status = nil
+        query = ""
+        githubBrowseMode = false
+        newSessionMode = true
+        newProjectMode = creatingProject
+        showQuickCommand = true
+        jumpSelection = 0
+        refocusField()
+    }
+
     private func hideQuickCommand() {
         showQuickCommand = false
         newSessionMode = false
+        newProjectMode = false
         githubBrowseMode = false
         query = ""
         omniboxFocused = false
@@ -1561,6 +1640,7 @@ struct CommandView: View {
             if let error = await appModel.createProject(named: name, agent: newSessionAgent) {
                 status = "⚠ project: \(error)"
                 newSessionMode = true
+                newProjectMode = true
                 showQuickCommand = true
                 query = name
                 refocusField()
