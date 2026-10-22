@@ -26,6 +26,9 @@ packages:
   WebRTC:
     url: https://github.com/stasel/WebRTC
     exactVersion: "154.0.0"
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    exactVersion: "2.4.1"
 
 targets:
   Pass:
@@ -50,6 +53,7 @@ targets:
       - package: SwiftTerm
       - package: Sparkle
       - package: WebRTC
+      - package: MarkdownUI
       - target: PassShare
       # Build ordering only — passcli is copied into Contents/MacOS by the script below
       # (a tool target can't be linked or framework-embedded).

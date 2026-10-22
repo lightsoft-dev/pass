@@ -503,8 +503,7 @@ private struct ProjectAgentChatView: View {
             }
         case .assistant:
             if !entry.text.isEmpty {
-                Text(entry.text)
-                    .textSelection(.enabled)
+                AgentMarkdownView(source: entry.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 13).padding(.vertical, 10)
                     .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))

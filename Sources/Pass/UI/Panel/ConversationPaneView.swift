@@ -162,10 +162,7 @@ private struct ConversationBlockView: View {
                     .frame(width: 20, height: 20)
                     .background(accent.opacity(0.1), in: Circle())
                     .accessibilityHidden(true)
-                Text(markdown(block.text))
-                    .font(PassFont.ui(size: 14))
-                    .lineSpacing(4)
-                    .textSelection(.enabled)
+                AgentMarkdownView(source: block.text, fontSize: 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         case .tool:
