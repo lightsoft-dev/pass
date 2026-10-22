@@ -122,7 +122,7 @@ struct ProjectAgentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12).padding(.top, 6)
             }
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 10) {
                 if !attachedFiles.isEmpty {
                     ScrollView(.horizontal) {
                         HStack(spacing: 6) {
@@ -134,23 +134,49 @@ struct ProjectAgentView: View {
                         }
                     }
                 }
+                TextField("Pa에게 할 일을 알려주세요…", text: $message, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(PassFont.ui(size: 13))
+                    .lineLimit(4...8)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.045),
+                                in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(Color.primary.opacity(0.12)))
+                    .focusEffectDisabled()
                 HStack(spacing: 8) {
                     Button(action: chooseFiles) {
                         Image(systemName: "paperclip")
+                            .font(PassFont.ui(size: 13))
+                            .frame(width: 30, height: 30)
+                            .background(Color.primary.opacity(0.06),
+                                        in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
                     .help("파일 첨부")
                     .accessibilityLabel("파일 첨부")
-                    TextField("Pa에게 할 일을 알려주세요…", text: $message)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit(sendMessage)
-                    Button("Send", action: sendMessage)
-                        .disabled(conversation?.canSendMessage != true
-                                  || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                      && attachedFiles.isEmpty)
+                    Spacer()
+                    Text("Return 줄바꿈 · ⌃Return 보내기")
+                        .font(PassFont.ui(size: 10))
+                        .foregroundStyle(.tertiary)
+                    Button(action: sendMessage) {
+                        Label("Send", systemImage: "arrow.up")
+                            .font(PassFont.ui(size: 11, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .frame(height: 30)
+                            .background(Color.primary.opacity(0.08), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.return, modifiers: .control)
+                    .disabled(conversation?.canSendMessage != true
+                              || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                  && attachedFiles.isEmpty)
                 }
             }
-            .padding(10)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .background(isDropTargeted ? Color.accentColor.opacity(0.12) : .clear)
             .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted,
                     perform: acceptDroppedFiles)
