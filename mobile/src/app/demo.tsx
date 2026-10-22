@@ -149,11 +149,21 @@ function DemoPage({
 }
 
 function InboxDemo({ onOpen }: { onOpen: (section: DemoSection) => void }) {
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => new Set());
+  const projectNames = [...new Set(DEMO_SESSIONS.map((session) => session.project)), "Pass Desktop"];
+  const toggleProject = (name: string) => {
+    setCollapsedProjects((current) => {
+      const next = new Set(current);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
   return (
     <DemoPage
-      description="See what needs attention across development sessions at a glance."
+      description="See each project's workers and what needs your attention at a glance."
       eyebrow="REMOTE WORKSPACE"
-      title="Session inbox"
+      title="Projects"
     >
       <View style={styles.onlineRow}>
         <View style={styles.onlineDot} />
@@ -161,31 +171,65 @@ function InboxDemo({ onOpen }: { onOpen: (section: DemoSection) => void }) {
         <Text style={styles.syncedText}>Synced just now</Text>
       </View>
       <View style={styles.sectionHeading}>
-        <Text style={styles.sectionTitle}>Needs you</Text>
-        <Text style={styles.countBadge}>1</Text>
+        <Text style={styles.sectionTitle}>Your projects</Text>
+        <Text style={styles.countBadge}>{projectNames.length}</Text>
       </View>
-      {DEMO_SESSIONS.map((session) => (
-        <Pressable
-          accessibilityLabel={`Open sample session ${session.title}`}
-          accessibilityRole="button"
-          key={session.id}
-          onPress={() => onOpen(session.section)}
-          style={({ pressed }) => [
-            styles.sessionCard,
-            session.status === "Needs decision" && styles.sessionCardAttention,
-            pressed && styles.pressed,
-          ]}
-        >
-          <View style={styles.sessionTop}>
-            <Text numberOfLines={1} style={styles.sessionTitle}>{session.title}</Text>
-            <Text style={[styles.sessionStatus, { color: statusColor[session.status] }]}>
-              {session.status.toUpperCase()}
-            </Text>
+      {projectNames.map((name) => {
+        const sessions = DEMO_SESSIONS.filter((session) => session.project === name);
+        const attentionCount = sessions.filter((session) => session.status === "Needs decision").length;
+        const collapsed = collapsedProjects.has(name);
+        return (
+          <View key={name} style={styles.demoProject}>
+            <Pressable
+              accessibilityLabel={`${collapsed ? "Expand" : "Collapse"} ${name} workers`}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: !collapsed }}
+              onPress={() => toggleProject(name)}
+              style={({ pressed }) => [styles.demoProjectHeader, pressed && styles.pressed]}
+            >
+              <Text style={styles.demoProjectGlyph}>▣</Text>
+              <View style={styles.demoProjectIdentity}>
+                <Text style={styles.demoProjectName}>{name}</Text>
+                <Text style={styles.demoProjectMeta}>
+                  {sessions.length} {sessions.length === 1 ? "worker" : "workers"}
+                </Text>
+              </View>
+              {attentionCount > 0 ? <Text style={styles.demoAttention}>{attentionCount} needs you</Text> : null}
+              <Text style={styles.demoCollapse}>{collapsed ? "⌄" : "⌃"}</Text>
+            </Pressable>
+            {!collapsed ? (
+              <View style={styles.demoProjectSessions}>
+                {sessions.length === 0 ? (
+                  <Text style={styles.demoNoWorkers}>No workers yet</Text>
+                ) : (
+                  sessions.map((session) => (
+                    <Pressable
+                      accessibilityLabel={`Open sample session ${session.title}`}
+                      accessibilityRole="button"
+                      key={session.id}
+                      onPress={() => onOpen(session.section)}
+                      style={({ pressed }) => [
+                        styles.sessionCard,
+                        session.status === "Needs decision" && styles.sessionCardAttention,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <View style={styles.sessionTop}>
+                        <Text numberOfLines={1} style={styles.sessionTitle}>{session.title}</Text>
+                        <Text style={[styles.sessionStatus, { color: statusColor[session.status] }]}>
+                          {session.status.toUpperCase()}
+                        </Text>
+                      </View>
+                      <Text style={styles.sessionMeta}>{session.agent} · {session.branch}</Text>
+                      <Text numberOfLines={2} style={styles.sessionPreview}>{session.preview}</Text>
+                    </Pressable>
+                  ))
+                )}
+              </View>
+            ) : null}
           </View>
-          <Text style={styles.sessionMeta}>{session.project} · {session.agent} · {session.branch}</Text>
-          <Text numberOfLines={2} style={styles.sessionPreview}>{session.preview}</Text>
-        </Pressable>
-      ))}
+        );
+      })}
     </DemoPage>
   );
 }
@@ -420,6 +464,16 @@ const styles = StyleSheet.create({
   sectionHeading: { marginTop: spacing.sm, flexDirection: "row", alignItems: "center", gap: spacing.sm },
   sectionTitle: { color: colors.text, fontSize: 15, fontWeight: "800" },
   countBadge: { color: colors.muted, fontSize: 11, borderRadius: radius.pill, backgroundColor: colors.raised, paddingHorizontal: 7, paddingVertical: 2 },
+  demoProject: { borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, overflow: "hidden" },
+  demoProjectHeader: { minHeight: 66, flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.md },
+  demoProjectGlyph: { color: colors.accent, fontSize: 20, width: 25 },
+  demoProjectIdentity: { flex: 1, minWidth: 0, gap: 3 },
+  demoProjectName: { color: colors.text, fontSize: 15, fontWeight: "800" },
+  demoProjectMeta: { color: colors.muted, fontSize: 11 },
+  demoAttention: { color: colors.warning, fontSize: 10, fontWeight: "800" },
+  demoCollapse: { color: colors.muted, fontSize: 20 },
+  demoProjectSessions: { gap: spacing.sm, padding: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  demoNoWorkers: { color: colors.muted, fontSize: 12, padding: spacing.sm },
   sessionCard: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, padding: spacing.md, gap: 8 },
   sessionCardAttention: { borderColor: "#70572f", backgroundColor: "#211d17" },
   sessionTop: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },

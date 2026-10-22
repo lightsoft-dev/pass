@@ -340,6 +340,8 @@ Known commands are:
 - `session.terminal.open`
 - `session.terminal.input` (mutating)
 - `session.terminal.close`
+- `project.agent.get` (`sessions:read`; registered project's bounded Pa conversation snapshot)
+- `project.agent.send` (`sessions:write`, mutating; send up to 8 KiB of text to that project's Pa)
 
 Public mobile credentials can send only known commands allowed by their scopes. Legacy development
 clients retain forward-compatible unknown-command behavior. The relay caps complete frames at 1 MiB
@@ -352,7 +354,8 @@ invalid calendar date are rejected.
 
 The desktop publishes the exact event envelope below, with event types `ack`, `error`,
 `session.snapshot`, `message.delivered`, or the streaming events `session.message.started`,
-`session.message.updated`, `session.message.completed`, and `session.terminal.snapshot`:
+`session.message.updated`, `session.message.completed`, `session.terminal.snapshot`, and the
+correlated `project.agent.snapshot` response:
 
 ```json
 {

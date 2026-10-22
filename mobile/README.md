@@ -17,7 +17,9 @@ Implemented:
 - v1 shared-token pairing as an explicit development fallback when OIDC is not configured
 - versioned protocol-v1 parsing with runtime DTO validation
 - one authenticated WebSocket, relay presence/receipts/resume, heartbeat, and jittered reconnect
-- session inbox ordered with decision/input requests first
+- project-grouped inbox with attention counts, including registered projects without live sessions
+- project workspace with a Pa conversation and direct access to its worker sessions; Pa text
+  messages are limited to 8 KiB, and the latest conversation refreshes while the workspace is open
 - parsed session conversation, delivery activity, message sending, and structured decisions
 - per-session live assistant responses with reconnect recovery and ordered update handling
 - in-app reporting for completed AI responses with an editable, bounded excerpt and anonymous

@@ -99,6 +99,8 @@ interface RemoteContextValue {
   reconnect: () => void;
   refresh: () => CommandResult;
   sendMessage: (session: string, text: string) => CommandResult;
+  getProjectAgent: (projectRoot: string) => CommandResult;
+  sendProjectAgent: (projectRoot: string, text: string) => CommandResult;
   createSession: (
     projectRoot: string,
     agent: LaunchableAgent,
@@ -568,6 +570,10 @@ export function RemoteProvider({ children }: PropsWithChildren) {
       },
       sendMessage: (session, text) =>
         send("session.sendMessage", { session, text }),
+      getProjectAgent: (projectRoot) =>
+        send("project.agent.get", { projectRoot }),
+      sendProjectAgent: (projectRoot, text) =>
+        send("project.agent.send", { projectRoot, text }),
       createSession: (projectRoot, agent, initialPrompt) =>
         send("session.create", {
           projectRoot,

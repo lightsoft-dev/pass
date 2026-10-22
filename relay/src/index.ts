@@ -274,14 +274,16 @@ function parseInternalScopes(raw: string | null): string[] | null {
   }
 }
 
-function requiredCommandScope(commandType: string): string | null {
+export function requiredCommandScope(commandType: string): string | null {
   switch (commandType) {
     case "session.list":
+    case "project.agent.get":
       return "sessions:read";
     case "project.list":
       return "projects:read";
     case "session.create":
     case "session.sendMessage":
+    case "project.agent.send":
       return "sessions:write";
     case "session.answerDecision":
       return "decisions:answer";
@@ -354,6 +356,7 @@ function commandStatusForEvent(
       return "rejected";
     case "message.delivered":
     case "session.snapshot":
+    case "project.agent.snapshot":
       return "completed";
     default:
       return null;

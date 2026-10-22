@@ -213,7 +213,7 @@ final class RemoteControllerConnection: Identifiable {
             send(.sessionList)
         case .error(let failure):
             lastCommandError = failure.message
-        case .unsupported:
+        case .projectAgentSnapshot, .unsupported:
             break
         }
     }

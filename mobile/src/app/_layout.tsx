@@ -33,6 +33,7 @@ function AppStack() {
         <Stack.Screen name="pair" options={{ headerShown: false }} />
         <Stack.Screen name="pair-deck" options={{ title: "Pair Steam Deck" }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="project" options={{ title: "Project" }} />
         <Stack.Screen name="session/[name]" options={{ title: "Session" }} />
         <Stack.Screen
           name="create"

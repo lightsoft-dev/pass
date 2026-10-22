@@ -18,6 +18,8 @@ export const COMMAND_TYPES = [
   "session.terminal.input",
   "session.terminal.close",
   "project.list",
+  "project.agent.get",
+  "project.agent.send",
 ] as const;
 
 export type KnownCommandType = (typeof COMMAND_TYPES)[number];
@@ -27,6 +29,7 @@ export const MUTATING_COMMAND_TYPES = [
   "session.sendMessage",
   "session.answerDecision",
   "session.terminal.input",
+  "project.agent.send",
 ] as const satisfies readonly KnownCommandType[];
 
 export const DESKTOP_EVENT_TYPES = [
@@ -38,6 +41,7 @@ export const DESKTOP_EVENT_TYPES = [
   "session.message.updated",
   "session.message.completed",
   "session.terminal.snapshot",
+  "project.agent.snapshot",
 ] as const;
 
 export type DesktopEventType = (typeof DESKTOP_EVENT_TYPES)[number];
@@ -73,6 +77,23 @@ export type DesktopEvent = {
   sentAt: string;
   replyTo?: string;
   payload: unknown;
+};
+
+// The relay routes this payload without rewriting it. Keep the shape aligned with Swift
+// so history loss remains visible to mobile after either desktop or transport trimming.
+export type ProjectAgentSnapshotPayload = {
+  projectRoot: string;
+  messages: {
+    id: string;
+    role: "user" | "assistant" | "activity" | "error";
+    text: string;
+    truncated: boolean;
+  }[];
+  truncated: boolean;
+  isReady: boolean;
+  isResponding: boolean;
+  status: string;
+  modelLabel: string;
 };
 
 export type ResumeRequest = {
