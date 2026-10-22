@@ -29,7 +29,7 @@ struct SessionPresentationPicker: View {
     ) -> some View {
         Button(action: action) {
             Label(label, systemImage: icon)
-                .font(.system(size: 10, weight: .medium))
+                .font(PassFont.ui(size: 10, weight: .medium))
                 .foregroundStyle(selected ? .primary : .secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
@@ -45,6 +45,7 @@ struct SessionPresentationPicker: View {
 /// attached in the background and is always one click away for precise keyboard interaction.
 struct ConversationPaneView: View {
     let session: Session
+    private let bottomID = "worker-conversation-bottom"
 
     @State private var blocks: [AgentConversationBlock] = []
     @State private var hasCaptured = false
@@ -52,36 +53,42 @@ struct ConversationPaneView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
-                    if blocks.isEmpty {
-                        emptyState
-                    } else {
-                        ForEach(blocks) { block in
-                            ConversationBlockView(block: block, agent: session.agent)
-                                .id(block.id)
+                VStack(spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 22) {
+                        if blocks.isEmpty {
+                            emptyState
+                        } else {
+                            ForEach(blocks) { block in
+                                ConversationBlockView(block: block, agent: session.agent)
+                                    .id(block.id)
+                            }
                         }
                     }
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 28)
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    Color.clear.frame(height: 1).id(bottomID)
                 }
-                .frame(maxWidth: 760, alignment: .leading)
-                .padding(.horizontal, 32)
-                .padding(.vertical, 28)
-                .frame(maxWidth: .infinity, alignment: .top)
             }
             .background(Color(nsColor: .textBackgroundColor))
+            .onAppear { scrollToBottom(proxy) }
             .task(id: session.name) {
                 while !Task.isCancelled {
                     let pane = await TmuxClient.shared.capturePaneHistory(session.name)
                     let next = AgentConversationParser.parse(pane, agent: session.agent)
-                    let previousLast = blocks.last?.id
+                    let changedAtBottom = blocks.last != next.last || blocks.count != next.count
                     blocks = next
                     hasCaptured = true
-                    if previousLast != next.last?.id, let last = next.last?.id {
-                        withAnimation(.easeOut(duration: 0.16)) { proxy.scrollTo(last, anchor: .bottom) }
-                    }
+                    if changedAtBottom { scrollToBottom(proxy) }
                     try? await Task.sleep(for: .seconds(1))
                 }
             }
         }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async { proxy.scrollTo(bottomID, anchor: .bottom) }
     }
 
     private var emptyState: some View {
@@ -89,17 +96,31 @@ struct ConversationPaneView: View {
             Rectangle()
                 .fill(agentAccent)
                 .frame(width: 42, height: 3)
-            Text(hasCaptured ? "No conversation detected" : "Reading the session…")
-                .font(.custom("New York", size: 19).weight(.semibold))
-            Text(hasCaptured
-                 ? "This provider has not emitted a recognizable message yet. Switch to Terminal for the unfiltered view."
-                 : "Recent agent output will be arranged into messages and tool activity.")
-                .font(.system(size: 12))
+            Text(emptyTitle)
+                .font(PassFont.ui(size: 19, weight: .semibold))
+            Text(emptyDescription)
+                .font(PassFont.ui(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 36)
         .frame(maxWidth: 420, alignment: .leading)
+    }
+
+    private var emptyTitle: String {
+        if session.isProjectAgent {
+            return hasCaptured ? "Pa에게 요청하세요" : "Pa 대화를 여는 중…"
+        }
+        return hasCaptured ? "No conversation detected" : "Reading the session…"
+    }
+
+    private var emptyDescription: String {
+        if session.isProjectAgent {
+            return "아래에 할 일을 적으면 이 프로젝트의 작업 세션에 전달하고 진행 상황을 알려줍니다. 로그인이 필요하면 위의 Pi 계정 연결을 누르세요."
+        }
+        return hasCaptured
+            ? "This provider has not emitted a recognizable message yet. Switch to Terminal for the unfiltered view."
+            : "Recent agent output will be arranged into messages and tool activity."
     }
 
     private var agentAccent: Color {
@@ -123,7 +144,7 @@ private struct ConversationBlockView: View {
             HStack {
                 Spacer(minLength: 72)
                 Text(markdown(block.text))
-                    .font(.system(size: 13, weight: .medium))
+                    .font(PassFont.ui(size: 13, weight: .medium))
                     .textSelection(.enabled)
                     .padding(.horizontal, 15)
                     .padding(.vertical, 11)
@@ -136,13 +157,13 @@ private struct ConversationBlockView: View {
         case .assistant:
             HStack(alignment: .top, spacing: 13) {
                 Text(agent.glyph)
-                    .font(.system(size: 11, weight: .bold))
+                    .font(PassFont.ui(size: 11, weight: .bold))
                     .foregroundStyle(accent)
                     .frame(width: 20, height: 20)
                     .background(accent.opacity(0.1), in: Circle())
                     .accessibilityHidden(true)
                 Text(markdown(block.text))
-                    .font(.custom("New York", size: 14))
+                    .font(PassFont.ui(size: 14))
                     .lineSpacing(4)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -188,25 +209,25 @@ private struct ToolConversationBlock: View {
             Button { expanded.toggle() } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "wrench.and.screwdriver")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(PassFont.ui(size: 10, weight: .semibold))
                         .foregroundStyle(accent)
                         .frame(width: 22, height: 22)
                         .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 5))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(block.title ?? "Tool output")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(PassFont.ui(size: 11, weight: .semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         if !expanded, let summary = block.text.split(separator: "\n").first {
                             Text(summary)
-                                .font(.system(size: 10))
+                                .font(PassFont.ui(size: 10))
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                         }
                     }
                     Spacer()
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(PassFont.ui(size: 9, weight: .semibold))
                         .foregroundStyle(.tertiary)
                 }
                 .contentShape(Rectangle())

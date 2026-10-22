@@ -169,6 +169,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         if !completedOnboarding || Shell.resolveViaLoginShell("tmux") == nil {
             DispatchQueue.main.async { onboardingController.show() }
+        } else if Shell.resolveViaLoginShell("pi") != nil && PiAuthentication.needsLogin() {
+            DispatchQueue.main.async { [appModel] in
+                appModel.miniTerminals.openPiLogin()
+            }
         }
         Log.app.info("pass launched (\(appPresence.rawValue, privacy: .public), hook port \(PassConfig.hookPort))")
     }
@@ -239,6 +243,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 send: { body in await ShareAPI.send(appModel, body: body) }
             )
             let cli = CLIHandlers(
+                projectSessions: { body in await MainActor.run { CLIAPI.projectSessions(appModel, body: body) } },
+                startProjectSession: { body in await CLIAPI.startProjectSession(appModel, body: body) },
+                sendProjectSession: { body in await CLIAPI.sendProjectSession(appModel, body: body) },
+                tailProjectSession: { body in await CLIAPI.tailProjectSession(appModel, body: body) },
                 open: { body in await CLIAPI.open(appModel, body: body) },
                 close: { body in await MainActor.run { CLIAPI.close(appModel, body: body) } },
                 tabs: { await MainActor.run { CLIAPI.tabs(appModel) } },

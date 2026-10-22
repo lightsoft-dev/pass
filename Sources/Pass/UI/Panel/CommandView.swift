@@ -12,6 +12,7 @@ struct CommandView: View {
     @State private var route: Route = .list
     @State private var query: String = ""
     @State private var selectedSessionName: String?   // stable home cursor across automatic reordering
+    @State private var projectAgentDraft = ""
     @State private var jumpSelection: Int = 0         // cursor inside the @ jump results
     @State private var status: String?
     @State private var pendingKill: Session?          // session awaiting a kill confirmation
@@ -28,6 +29,7 @@ struct CommandView: View {
     @State private var remoteSelection: RemoteSessionSelection?
     @FocusState private var omniboxFocused: Bool
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
+    @AppStorage("collapsedSessionProjectRoots") private var collapsedProjectRootsJSON = "[]"
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
     @AppStorage("sessionDetailReadableMode") private var readableMode = false
     // Which agent ⌘N starts. Chosen from the dropdown in the new-session bar; remembered so the
@@ -37,6 +39,8 @@ struct CommandView: View {
     enum Route: Equatable {
         case list
         case detail(String)                  // a session's full-height terminal (back → list)
+        case projectAgent(String)            // permanent Pi coordinator for a project
+        case projectWorker(String, String)   // worker opened from its coordinator
         case specs(String?)                  // spec documents, optionally pinned to a project
         case specSession(String, String)     // session opened FROM specs (name, projectRoot)
         case features
@@ -57,7 +61,9 @@ struct CommandView: View {
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
     private var newSessionAgent: AgentKind { AgentKind(rawValue: newSessionAgentRaw) ?? .claude }
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
-    private var hasAnySessions: Bool { !sessions.isEmpty || appModel.remoteControllers.sessionCount > 0 }
+    private var hasAnySessions: Bool {
+        !sessions.isEmpty || !projects.isEmpty || appModel.remoteControllers.sessionCount > 0
+    }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
     /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
     /// and is simply stripped). `+branch` starts a worktree; `>command` narrows to extensions.
@@ -95,15 +101,15 @@ struct CommandView: View {
 
     private var selectedSession: Session? {
         if let selectedSessionName,
-           let session = orderedSessions.first(where: { $0.name == selectedSessionName }) {
+           let session = visibleSessions.first(where: { $0.name == selectedSessionName }) {
             return session
         }
-        return orderedSessions.first
+        return visibleSessions.first
     }
 
     private var selectedIndex: Int? {
         guard let name = selectedSession?.name else { return nil }
-        return orderedSessions.firstIndex(where: { $0.name == name })
+        return visibleSessions.firstIndex(where: { $0.name == name })
     }
 
     /// The jump result list and its own selection — kept separate from the home cursor so
@@ -167,9 +173,78 @@ struct CommandView: View {
     /// mode so they are immediately visible. Newer requests lead that group; the rest follow in
     /// their existing recency order.
     private var orderedSessions: [Session] {
-        let waiting = sessions.filter { $0.needsUser }.sorted { pendingSince($0) > pendingSince($1) }
-        let rest = sessions.filter { !$0.needsUser }
+        let workers = sessions.filter { !$0.isProjectAgent }
+        let waiting = workers.filter { $0.needsUser }.sorted { pendingSince($0) > pendingSince($1) }
+        let rest = workers.filter { !$0.needsUser }
         return waiting + rest
+    }
+
+    private var projectGroups: [SessionProjectGroup] {
+        SessionProjectGrouping.groups(orderedSessions, projects: projects, includeEmptyProjects: true)
+    }
+
+    private var collapsedProjectRoots: Set<String> {
+        guard let data = collapsedProjectRootsJSON.data(using: .utf8),
+              let roots = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(roots)
+    }
+
+    private var visibleSessions: [Session] {
+        let collapsed = collapsedProjectRoots
+        return projectGroups.filter { !collapsed.contains($0.id) }.flatMap(\.sessions)
+    }
+
+    private func expandProject(containing session: Session) {
+        var collapsed = collapsedProjectRoots
+        guard collapsed.remove(session.projectRoot) != nil else { return }
+        saveCollapsedProjects(collapsed)
+    }
+
+    private func toggleProject(_ root: String) {
+        var collapsed = collapsedProjectRoots
+        if collapsed.contains(root) {
+            collapsed.remove(root)
+        } else {
+            collapsed.insert(root)
+            if selectedSession?.projectRoot == root {
+                selectedSessionName = projectGroups
+                    .first { !collapsed.contains($0.id) }?.sessions.first?.name
+            }
+        }
+        saveCollapsedProjects(collapsed)
+    }
+
+    private func toggleRemoteProject(_ key: String) {
+        var collapsed = collapsedProjectRoots
+        if !collapsed.insert(key).inserted { collapsed.remove(key) }
+        saveCollapsedProjects(collapsed)
+    }
+
+    private func remoteProjectGroups(for connection: RemoteControllerConnection) -> [RemoteSessionProjectGroup] {
+        var groups: [RemoteSessionProjectGroup] = []
+        var indexByRoot: [String: Int] = [:]
+        for session in connection.sessions {
+            let root = session.projectRoot
+            if let index = indexByRoot[root] {
+                groups[index].sessions.append(session)
+            } else {
+                indexByRoot[root] = groups.count
+                let project = connection.projects.first { $0.rootPath == root }
+                groups.append(RemoteSessionProjectGroup(
+                    id: root,
+                    name: project?.name ?? URL(fileURLWithPath: root).lastPathComponent,
+                    emoji: project?.emoji,
+                    sessions: [session]
+                ))
+            }
+        }
+        return groups
+    }
+
+    private func saveCollapsedProjects(_ roots: Set<String>) {
+        guard let data = try? JSONEncoder().encode(roots.sorted()),
+              let json = String(data: data, encoding: .utf8) else { return }
+        collapsedProjectRootsJSON = json
     }
 
     private func pendingSince(_ s: Session) -> Date {
@@ -218,6 +293,8 @@ struct CommandView: View {
             }
             .onChange(of: appModel.backToken) { _, _ in
                 switch route {
+                case .projectWorker(_, let root): route = .projectAgent(root)
+                case .projectAgent: route = .list; focusSoon()
                 case .specSession(_, let root): route = .specs(root) // ⌘[ steps back one level
                 case .feature(let root, let id), .featureSession(_, let root, let id):
                     route = .feature(projectRoot: root, id: id)
@@ -329,14 +406,14 @@ struct CommandView: View {
         default:
             break
         }
-        guard route == .list else { return false }
+        guard route == .list || activeProjectRoot != nil else { return false }
         switch e.key {
         case .toggleInput:
             toggleQuickCommand()
             return true
         case .openSpecs:
             // ⌘D — the selected session's project document.
-            guard let s = selectedSession else { return true }
+            guard let s = workspaceSession ?? selectedSession else { return true }
             route = .specs(s.projectRoot)
             return true
         case .newSession:
@@ -351,7 +428,7 @@ struct CommandView: View {
             return true
         case .newWorktree:
             // ⌘T — worktree session off the selected session, branch name prefilled: just ⏎.
-            guard let s = selectedSession else { return true }
+            guard let s = workspaceSession ?? selectedSession else { return true }
             beginWorktreeSession(from: s)
             return true
         case .up:
@@ -409,11 +486,9 @@ struct CommandView: View {
                     else if jumpMessageIsReady { sendJumpMessage(to: s) } // "name msg" ⏎ → send
                     else { jumpToSession(s) }                        // "name" ⏎ → focus its terminal
                 case .project(let p):
-                    // Agent choice lives in the menu bar (New session ▸) — rarely needed, so the
-                    // fast path here always starts the default agent.
-                    appModel.createSession(projectDir: p.rootPath) // ⏎ start it
-                    query = ""
-                    hideQuickCommand() // action done — watch the new session arrive
+                    openProjectAgent(p.rootPath)
+                case .projectAgent(let p):
+                    openProjectAgent(p.rootPath, draft: jumpMessage ?? "")
                 case .newProject(let name, _):
                     createProjectFromInput(name)
                 case .githubRepository(let repository, _):
@@ -434,7 +509,7 @@ struct CommandView: View {
             return true
         case .delete:
             // ⌘⌫ → confirm killing the selected session.
-            if let s = selectedSession { pendingKill = s }
+            if let s = workspaceSession ?? selectedSession { pendingKill = s }
             return true
         case .markChecked:
             return true // handled before the route guard
@@ -463,8 +538,11 @@ struct CommandView: View {
     /// The session whose workspace (terminal │ browser) is on screen — browser keys target it.
     private var workspaceSessionName: String? {
         switch route {
-        case .detail(let name), .specSession(let name, _), .featureSession(let name, _, _):
+        case .detail(let name), .projectWorker(let name, _),
+             .specSession(let name, _), .featureSession(let name, _, _):
             return name
+        case .projectAgent(let root):
+            return sessions.first { $0.projectRoot == root && $0.isProjectAgent }?.name
         case .list: return selectedSession?.name
         case .specs, .features, .feature: return nil
         }
@@ -474,8 +552,11 @@ struct CommandView: View {
     /// actually on screen; the home targets its selected card; specs have no session context.
     private var workspaceSession: Session? {
         switch route {
-        case .detail(let name), .specSession(let name, _), .featureSession(let name, _, _):
+        case .detail(let name), .projectWorker(let name, _),
+             .specSession(let name, _), .featureSession(let name, _, _):
             return sessions.first { $0.name == name }
+        case .projectAgent(let root):
+            return sessions.first { $0.projectRoot == root && $0.isProjectAgent }
         case .list:
             return selectedSession
         case .specs, .features, .feature:
@@ -488,6 +569,18 @@ struct CommandView: View {
     private var miniTerminalContextKey: String? { workspaceSession?.cwd }
 
     private var extensionContextSession: Session? { workspaceSession }
+
+    private var activeProjectRoot: String? {
+        switch route {
+        case .projectAgent(let root), .projectWorker(_, let root): return root
+        default: return nil
+        }
+    }
+
+    private var selectedProjectWorkerName: String? {
+        if case .projectWorker(let name, _) = route { return name }
+        return nil
+    }
 
     @ViewBuilder
     private var content: some View {
@@ -539,6 +632,22 @@ struct CommandView: View {
                 // session vanished while open
                 listMode.onAppear { route = .list }
             }
+        case .projectAgent(let root):
+            projectWorkspace {
+                ProjectAgentView(projectRoot: root, sessions: sessions,
+                                 initialDraft: projectAgentDraft,
+                                 onBack: { route = .list; focusSoon() },
+                                 onOpenWorker: { route = .projectWorker($0, root) })
+                    .id(root)
+            }
+        case .projectWorker(let name, let root):
+            if let session = sessions.first(where: { $0.name == name }) {
+                projectWorkspace {
+                    SessionDetailView(session: session) { route = .projectAgent(root) }
+                }
+            } else {
+                Color.clear.onAppear { route = .projectAgent(root) }
+            }
         case .specs(let root):
             SpecsView(
                 initialRoot: root,
@@ -555,6 +664,64 @@ struct CommandView: View {
     }
 
     // MARK: List mode
+
+    private func projectWorkspace<Content: View>(@ViewBuilder content: @escaping () -> Content) -> some View {
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                projectSidebar
+                    .frame(width: min(max(geo.size.width * 0.28, 220), 300))
+                Divider()
+                content()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .overlay {
+                if showsCommandBar {
+                    commandBarOverlay(maxWidth: geo.size.width)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: showsCommandBar)
+        }
+    }
+
+    private var projectSidebar: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(projectGroups) { group in
+                        SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
+                                             sessionCount: group.sessions.count,
+                                             waitingCount: group.waitingCount,
+                                             collapsed: collapsedProjectRoots.contains(group.id),
+                                             onSelectProject: { openProjectAgent(group.id) }) {
+                            toggleProject(group.id)
+                        }
+                        .id(group.id)
+                        if !collapsedProjectRoots.contains(group.id) {
+                            ForEach(group.sessions) { session in
+                                CompactSessionCard(
+                                    session: session,
+                                    selected: selectedProjectWorkerName == session.name,
+                                    onSelect: { route = .projectWorker(session.name, session.projectRoot) },
+                                    onMarkChecked: { appModel.markSessionChecked(session.name) },
+                                    onNewWorktree: { beginWorktreeSession(from: session) },
+                                    onDelete: { pendingKill = session },
+                                    browserUnseen: appModel.browser?.hasUnseen(session.name) ?? false
+                                )
+                            }
+                        }
+                    }
+                }
+                .padding(8)
+            }
+            .onAppear {
+                if let root = activeProjectRoot { proxy.scrollTo(root, anchor: .center) }
+            }
+            .onChange(of: activeProjectRoot) { _, root in
+                if let root { withAnimation { proxy.scrollTo(root, anchor: .center) } }
+            }
+        }
+    }
 
     private var listMode: some View {
         GeometryReader { geo in
@@ -632,12 +799,12 @@ struct CommandView: View {
                 Image(systemName: newSessionMode ? "plus.circle"
                         : query.hasPrefix("+") ? "arrow.triangle.branch"
                         : isCommandMode ? "puzzlepiece.extension" : "magnifyingglass")
-                    .font(.system(size: 16))
+                    .font(PassFont.ui(size: 16))
                     .foregroundStyle(newSessionMode || isJumpMode || isCommandMode || query.hasPrefix("+")
                                      ? Color.accentColor : .secondary)
                 TextField(placeholder, text: $query)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 17))
+                    .font(PassFont.ui(size: 17))
                     .focused($omniboxFocused)
                     .disabled(isCloningRepository)
                     .onChange(of: query) { old, new in handleQueryChange(old: old, new: new) }
@@ -671,7 +838,7 @@ struct CommandView: View {
                     Text(hint).foregroundStyle(.tertiary)
                 }
             }
-            .font(.system(size: 10))
+            .font(PassFont.ui(size: 10))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16).padding(.vertical, 6)
 
@@ -702,8 +869,8 @@ struct CommandView: View {
         } label: {
             HStack(spacing: 4) {
                 Text(newSessionAgent.glyph)
-                Text(newSessionAgent.rawValue).font(.system(size: 12, weight: .medium))
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                Text(newSessionAgent.rawValue).font(PassFont.ui(size: 12, weight: .medium))
+                Image(systemName: "chevron.down").font(PassFont.ui(size: 8, weight: .semibold))
             }
             .foregroundStyle(Color.accentColor)
             .padding(.horizontal, 9).padding(.vertical, 4)
@@ -724,9 +891,9 @@ struct CommandView: View {
                 if githubBrowserState == .loading || githubBrowserState == .connecting {
                     ProgressView().controlSize(.mini)
                 }
-                Text(githubAccountLabel).font(.system(size: 11, weight: .semibold))
+                Text(githubAccountLabel).font(PassFont.ui(size: 11, weight: .semibold))
                 Image(systemName: githubBrowseMode ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(PassFont.ui(size: 8, weight: .bold))
             }
             .foregroundStyle(githubBrowseMode ? Color.accentColor : .secondary)
             .padding(.horizontal, 8).padding(.vertical, 4)
@@ -749,7 +916,7 @@ struct CommandView: View {
     private var jumpResults: some View {
         if jumpItems.isEmpty {
             Text(emptyResultsMessage)
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16).padding(.vertical, 10)
         } else {
@@ -802,7 +969,7 @@ struct CommandView: View {
                 ? "Use a repository URL like https://github.com/owner/repository."
                 : "No matching projects — type a project name or paste a GitHub URL."
         }
-        return selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
+        return (workspaceSession ?? selectedSession).map { "No matches — ⏎ sends this to \($0.displayName)" }
             ?? "No matches — try a different name."
     }
 
@@ -841,10 +1008,11 @@ struct CommandView: View {
             return "extension commands · ⏎ run · Esc close"
         }
         if isJumpMode {
-            if jumpItems.isEmpty, let s = selectedSession {
+            if jumpItems.isEmpty, let s = workspaceSession ?? selectedSession {
                 return "no matches — ⏎ sends this to \(s.displayName)"
             }
             if case .command(let c)? = jumpSelectedItem { return commandHint(c) }
+            if case .projectAgent(let p)? = jumpSelectedItem { return "⏎ open \(p.name)'s Pa" }
             if case .project(let p)? = jumpSelectedItem { return "⏎ new session in \(p.name)" }
             if jumpMessageIsReady, case .session(let s)? = jumpSelectedItem {
                 return "⏎ send to \(s.displayName)"
@@ -859,7 +1027,7 @@ struct CommandView: View {
         if appModel.sessions?.tmuxMissing == true {
             message("exclamationmark.triangle", "tmux not found",
                     "Install tmux (brew install tmux) and reopen pass.")
-        } else if orderedSessions.isEmpty && appModel.remoteControllers.sessionCount == 0 {
+        } else if projectGroups.isEmpty && appModel.remoteControllers.sessionCount == 0 {
             message("bubble.left.and.bubble.right", "No sessions yet",
                     "@ to start one, or use New session… from the menu bar.")
         } else if homeMode != .stack {
@@ -872,14 +1040,25 @@ struct CommandView: View {
                         if !appModel.remoteControllers.connections.isEmpty, !orderedSessions.isEmpty {
                             SessionMachineHeader.local
                         }
-                        ForEach(orderedSessions) { s in
-                            CompactSessionCard(session: s, selected: s.name == selectedSession?.name,
-                                               onSelect: { selectedSessionName = s.name },
-                                               onMarkChecked: { appModel.markSessionChecked(s.name) },
-                                               onNewWorktree: { beginWorktreeSession(from: s) },
-                                               onDelete: { pendingKill = s },
-                                               browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
-                                .transition(rowTransition)
+                        ForEach(projectGroups) { group in
+                            SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
+                                                 sessionCount: group.sessions.count,
+                                                 waitingCount: group.waitingCount,
+                                                 collapsed: collapsedProjectRoots.contains(group.id),
+                                                 onSelectProject: { openProjectAgent(group.id) }) {
+                                toggleProject(group.id)
+                            }
+                            if !collapsedProjectRoots.contains(group.id) {
+                                ForEach(group.sessions) { s in
+                                    CompactSessionCard(session: s, selected: s.name == selectedSession?.name,
+                                                       onSelect: { selectedSessionName = s.name },
+                                                       onMarkChecked: { appModel.markSessionChecked(s.name) },
+                                                       onNewWorktree: { beginWorktreeSession(from: s) },
+                                                       onDelete: { pendingKill = s },
+                                                       browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
+                                        .transition(rowTransition)
+                                }
+                            }
                         }
                         remoteSessionRows
                     }
@@ -901,24 +1080,35 @@ struct CommandView: View {
                         if !appModel.remoteControllers.connections.isEmpty, !orderedSessions.isEmpty {
                             SessionMachineHeader.local
                         }
-                        ForEach(orderedSessions) { s in
-                            Group {
-                                if s.name == selectedSession?.name {
-                                    FocusedSessionCard(
-                                        session: s,
-                                        terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
-                                        onMarkChecked: { appModel.markSessionChecked(s.name) },
-                                        onNewWorktree: { beginWorktreeSession(from: s) },
-                                        onDelete: { pendingKill = s }
-                                    )
-                                } else {
-                                    CompactSessionCard(session: s, onSelect: { selectedSessionName = s.name },
-                                                       onMarkChecked: { appModel.markSessionChecked(s.name) },
-                                                       onNewWorktree: { beginWorktreeSession(from: s) },
-                                                       browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
+                        ForEach(projectGroups) { group in
+                            SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
+                                                 sessionCount: group.sessions.count,
+                                                 waitingCount: group.waitingCount,
+                                                 collapsed: collapsedProjectRoots.contains(group.id),
+                                                 onSelectProject: { openProjectAgent(group.id) }) {
+                                toggleProject(group.id)
+                            }
+                            if !collapsedProjectRoots.contains(group.id) {
+                                ForEach(group.sessions) { s in
+                                    Group {
+                                        if s.name == selectedSession?.name {
+                                            FocusedSessionCard(
+                                                session: s,
+                                                terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
+                                                onMarkChecked: { appModel.markSessionChecked(s.name) },
+                                                onNewWorktree: { beginWorktreeSession(from: s) },
+                                                onDelete: { pendingKill = s }
+                                            )
+                                        } else {
+                                            CompactSessionCard(session: s, onSelect: { selectedSessionName = s.name },
+                                                               onMarkChecked: { appModel.markSessionChecked(s.name) },
+                                                               onNewWorktree: { beginWorktreeSession(from: s) },
+                                                               browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
+                                        }
+                                    }
+                                    .transition(rowTransition)
                                 }
                             }
-                            .transition(rowTransition)
                         }
                         remoteSessionRows
                     }
@@ -941,11 +1131,23 @@ struct CommandView: View {
             if connection.sessions.isEmpty {
                 RemoteMachineEmptyRow(connection: connection)
             } else {
-                ForEach(connection.sessions, id: \.name) { session in
-                    RemoteSessionCard(connection: connection, session: session) {
-                        remoteSelection = .init(connection: connection, sessionName: session.name)
+                ForEach(remoteProjectGroups(for: connection)) { group in
+                    let collapseKey = "remote:\(connection.id):\(group.id)"
+                    SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
+                                         sessionCount: group.sessions.count,
+                                         waitingCount: group.waitingCount,
+                                         collapsed: collapsedProjectRoots.contains(collapseKey),
+                                         onSelectProject: nil) {
+                        toggleRemoteProject(collapseKey)
                     }
-                    .transition(rowTransition)
+                    if !collapsedProjectRoots.contains(collapseKey) {
+                        ForEach(group.sessions, id: \.name) { session in
+                            RemoteSessionCard(connection: connection, session: session) {
+                                remoteSelection = .init(connection: connection, sessionName: session.name)
+                            }
+                            .transition(rowTransition)
+                        }
+                    }
                 }
             }
         }
@@ -954,9 +1156,9 @@ struct CommandView: View {
     private func message(_ icon: String, _ title: String, _ subtitle: String) -> some View {
         VStack(spacing: 10) {
             Spacer()
-            Image(systemName: icon).font(.system(size: 30)).foregroundStyle(.secondary)
-            Text(title).font(.system(size: 15, weight: .medium))
-            Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Image(systemName: icon).font(PassFont.ui(size: 30)).foregroundStyle(.secondary)
+            Text(title).font(PassFont.ui(size: 15, weight: .medium))
+            Text(subtitle).font(PassFont.ui(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).padding()
@@ -1024,7 +1226,7 @@ struct CommandView: View {
             if let live = displayedTerminal, let s = selectedSession {
                 HStack {
                     Text(s.displayName)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(PassFont.ui(size: 11, weight: .semibold))
                         .lineLimit(1)
                     ConfigURLAddButton(session: s)
                     ConfigURLChips(session: s)
@@ -1059,7 +1261,7 @@ struct CommandView: View {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("starting \(selectedSession?.agent.rawValue ?? "agent")…")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -1069,7 +1271,7 @@ struct CommandView: View {
             Text(readableMode
                  ? "select text · tools expand on click · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand"
                  : "drag select · ⌘C copy · ⌥drag tmux · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .font(PassFont.ui(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 8).padding(.vertical, 3)
         }
     }
@@ -1079,16 +1281,14 @@ struct CommandView: View {
     private func filteredItems(_ needleRaw: String) -> [PaletteItem] {
         let needle = needleRaw.trimmingCharacters(in: .whitespaces)
 
-        var out: [PaletteItem] = sessions.compactMap { s in
+        var out: [PaletteItem] = projects
+            .filter { Fuzzy.matches(needle, $0.name) }
+            .map { .projectAgent($0) }
+        out.append(contentsOf: sessions.filter { !$0.isProjectAgent }.compactMap { s in
             guard needle.isEmpty || Fuzzy.matches(needle, s.displayName) || Fuzzy.matches(needle, s.name)
             else { return nil }
             return .session(s)
-        }
-        // Also offer registered projects without a live session (jump / create).
-        let liveRoots = Set(sessions.map(\.projectRoot))
-        for p in projects where !liveRoots.contains(p.rootPath) {
-            if needle.isEmpty || Fuzzy.matches(needle, p.name) { out.append(.project(p)) }
-        }
+        })
         out.append(contentsOf: matchingExtensionCommands(needle).map { .command($0) })
         return out
     }
@@ -1126,9 +1326,11 @@ struct CommandView: View {
     /// session; in @ jump / > command mode, keep the filter text (plain arrows move the cursor).
     private func navMove(_ delta: Int) {
         if !isJumpMode && !isCommandMode { query = "" }
-        guard !orderedSessions.isEmpty else { return }
+        guard !visibleSessions.isEmpty else { return }
         let current = selectedIndex ?? 0
-        selectedSessionName = orderedSessions[max(0, min(orderedSessions.count - 1, current + delta))].name
+        let session = visibleSessions[max(0, min(visibleSessions.count - 1, current + delta))]
+        selectedSessionName = session.name
+        if activeProjectRoot != nil { route = .projectWorker(session.name, session.projectRoot) }
     }
 
     /// ⇧⇧: cycle to the next session that needs input (downward, wrapping). Returns false
@@ -1136,11 +1338,15 @@ struct CommandView: View {
     private func jumpToNextWaiting() -> Bool {
         let list = orderedSessions
         guard !list.isEmpty else { return false }
-        let current = selectedIndex ?? 0
+        let current = list.firstIndex(where: { $0.name == selectedSession?.name })
         for offset in 1...list.count {
-            let idx = (current + offset) % list.count
+            let idx = ((current ?? -1) + offset) % list.count
             if list[idx].needsUser, idx != current {
+                expandProject(containing: list[idx])
                 selectedSessionName = list[idx].name
+                if activeProjectRoot != nil {
+                    route = .projectWorker(list[idx].name, list[idx].projectRoot)
+                }
                 return true
             }
         }
@@ -1181,8 +1387,10 @@ struct CommandView: View {
 
     /// Leave the quick command and land on the chosen session — its live terminal takes over.
     private func jumpToSession(_ s: Session) {
+        expandProject(containing: s)
         selectedSessionName = s.name
         hideQuickCommand()
+        if activeProjectRoot != nil { route = .projectWorker(s.name, s.projectRoot) }
     }
 
     /// Tab: replace the '@' token with the top match's name, keep any typed message, add a
@@ -1193,6 +1401,7 @@ struct CommandView: View {
         switch top {
         case .session(let s): token = jumpCompletionToken(s)
         case .project(let p): token = Slug.make(p.name)
+        case .projectAgent(let p): token = Slug.make(p.name)
         case .newProject(let name, _): token = name
         case .githubRepository(let repository, _): token = repository.cloneURL
         case .githubRemoteRepository(let repository, _): token = repository.fullName
@@ -1218,6 +1427,7 @@ struct CommandView: View {
     private func sendJumpMessage(to s: Session) {
         let text = (jumpMessage ?? "").trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { jumpToSession(s); return }
+        expandProject(containing: s)
         selectedSessionName = s.name
         hideQuickCommand()
         Task {
@@ -1233,7 +1443,8 @@ struct CommandView: View {
     /// ⏎ on a plain message → send and close the quick command (reopens with a warning if the
     /// send was refused).
     private func sendReplyToSelected(_ text: String) {
-        guard let s = selectedSession, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        guard let s = workspaceSession ?? selectedSession,
+              !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         hideQuickCommand()
         Task {
             let r = await appModel.reply(to: s.name, text: text)
@@ -1404,9 +1615,14 @@ struct CommandView: View {
         case .session(let s):
             jumpToSession(s)
         case .project(let p):
-            // In ⌘N the dropdown chooses the agent; a project tap in @-jump uses the default.
-            appModel.createSession(projectDir: p.rootPath, agent: newSessionMode ? newSessionAgent : .claude)
-            query = ""
+            if newSessionMode {
+                appModel.createSession(projectDir: p.rootPath, agent: newSessionAgent)
+                query = ""
+            } else {
+                openProjectAgent(p.rootPath)
+            }
+        case .projectAgent(let p):
+            openProjectAgent(p.rootPath, draft: jumpMessage ?? "")
         case .newProject(let name, _):
             createProjectFromInput(name)
         case .githubRepository(let repository, _):
@@ -1418,6 +1634,12 @@ struct CommandView: View {
         case .command(let c):
             runExtensionCommand(c)
         }
+    }
+
+    private func openProjectAgent(_ root: String, draft: String = "") {
+        projectAgentDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        hideQuickCommand()
+        route = .projectAgent(root)
     }
 
     /// Run an extension's `/command` against the selected session. The bar closes on success
@@ -1438,9 +1660,9 @@ struct CommandView: View {
         HStack(spacing: 10) {
             Image(systemName: "bolt.badge.a").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Agent hooks not installed").font(.system(size: 12, weight: .medium))
+                Text("Agent hooks not installed").font(PassFont.ui(size: 12, weight: .medium))
                 Text("Pass can't hear from Claude, Codex, Grok, or pi until you install them.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
             Button("Dismiss") { confirmHookDismissal = true }
@@ -1453,11 +1675,15 @@ struct CommandView: View {
     }
 
     private func focusSoon(preselecting session: String? = nil, projectRoot: String? = nil) {
-        selectedSessionName = PanelSessionSelection.resolve(
+        let target = PanelSessionSelection.resolve(
             preselectedSession: session,
             projectRoot: projectRoot,
             orderedSessions: orderedSessions
         )
+        if let target, let match = orderedSessions.first(where: { $0.name == target }) {
+            expandProject(containing: match)
+        }
+        selectedSessionName = target
         syncTerminalTarget()
         refocusField()
     }
@@ -1534,7 +1760,7 @@ struct FocusedSessionCard: View {
             Text(readableMode
                  ? "select text · tools expand on click · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions"
                  : "keys go to the session · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .font(PassFont.ui(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 12).padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1555,7 +1781,7 @@ struct FocusedSessionCard: View {
         if session.launching {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("starting \(session.agent.rawValue)…").font(.system(size: 13)).foregroundStyle(.secondary)
+                Text("starting \(session.agent.rawValue)…").font(PassFont.ui(size: 13)).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 120, alignment: .leading)
@@ -1589,20 +1815,14 @@ struct FocusedSessionCard: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 6) {
-            EmojiBadgeButton(session: session, size: 17)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(session.displayName).font(.system(size: 14, weight: .semibold))
+                    Text(session.groupedDisplayName).font(PassFont.ui(size: 14, weight: .semibold))
                     ConfigURLAddButton(session: session)
                     ConfigURLChips(session: session)
                 }
                 HStack(spacing: 6) {
                     AgentTag(agent: session.agent)
-                    if session.customName != nil {
-                        // Aliased → keep the real repo · branch visible as context.
-                        Text(session.defaultDisplayName)
-                            .font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1)
-                    }
                 }
             }
             Spacer()
@@ -1617,20 +1837,20 @@ struct FocusedSessionCard: View {
             if let onDelete {
                 Button(action: onDelete) { Image(systemName: "trash") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .font(.system(size: 11)).help("Kill session (⌘⌫)")
+                    .font(PassFont.ui(size: 11)).help("Kill session (⌘⌫)")
             }
-            Text(RelativeTime.short(waitTime)).font(.system(size: 11)).foregroundStyle(.secondary)
+            Text(RelativeTime.short(waitTime)).font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder
     private var attentionBadge: some View {
         switch session.attention {
-        case .working: Text("● working").font(.system(size: 11)).foregroundStyle(.blue)
+        case .working: Text("● working").font(PassFont.ui(size: 11)).foregroundStyle(.blue)
         case .idle: EmptyView()
         case .pending(let a):
             Text(a.kind == .decision ? "⚡ needs decision" : a.kind == .input ? "✎ needs input" : "✓ finished")
-                .font(.system(size: 11)).foregroundStyle(.orange)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.orange)
         }
     }
 
@@ -1676,17 +1896,17 @@ struct SessionRenameButton: View {
             show = true
         } label: { Image(systemName: "pencil") }
         .buttonStyle(.plain).foregroundStyle(.secondary)
-        .font(.system(size: 11))
+        .font(PassFont.ui(size: 11))
         .help("Rename (display only)")
         .onChange(of: show) { _, visible in
             if visible { text = session.customName ?? "" }
         }
         .popover(isPresented: $show, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Display name").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                Text("Display name").font(PassFont.ui(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                 TextField(session.defaultDisplayName, text: $text)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13))
+                    .font(PassFont.ui(size: 13))
                     .frame(width: 230)
                     .onChange(of: text) { _, new in appModel.renameSession(session.name, to: new) } // live
                     .onSubmit { show = false }
@@ -1698,7 +1918,7 @@ struct SessionRenameButton: View {
                     }.controlSize(.small)
                     Spacer()
                     Text("pass에서만 표시 · 폴더/tmux 그대로")
-                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                        .font(PassFont.ui(size: 9)).foregroundStyle(.tertiary)
                 }
             }
             .padding(12)
@@ -1706,7 +1926,7 @@ struct SessionRenameButton: View {
     }
 }
 
-/// A collapsed session row — title + one-line summary + agent tag. Used both as an unfocused
+/// A collapsed session row — title, then summary with an agent tag at its right edge. Used both as an unfocused
 /// row in stack mode and as every row in compact-list mode (where `selected` highlights one).
 struct CompactSessionCard: View {
     let session: Session
@@ -1724,16 +1944,23 @@ struct CompactSessionCard: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            EmojiBadgeButton(session: session, size: 14)
-            // Focus-on-tap covers only the text/time area — the badge (a button) owns its own
-            // tap, so clicking the emoji opens the picker instead of also moving focus.
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.displayName).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                    secondLine
-                    AgentTag(agent: session.agent)
+                    HStack(spacing: 6) {
+                        Text(session.groupedDisplayName)
+                            .font(PassFont.ui(size: 12, weight: .medium)).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text(RelativeTime.short(waitTime))
+                            .font(PassFont.ui(size: 10)).foregroundStyle(urgencyColor)
+                    }
+                    HStack(spacing: 6) {
+                        secondLine
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        AgentTag(agent: session.agent)
+                            .fixedSize()
+                    }
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
                 // Keep the buttons mounted while the rename popover is open — otherwise moving
                 // the mouse onto the popover ends the hover and tears the popover down.
                 if hovering || renaming {
@@ -1742,14 +1969,13 @@ struct CompactSessionCard: View {
                     if let onDelete {
                         Button(action: onDelete) { Image(systemName: "trash") }
                             .buttonStyle(.plain).foregroundStyle(.secondary)
-                            .font(.system(size: 11)).help("Kill session (⌘⌫)")
+                            .font(PassFont.ui(size: 11)).help("Kill session (⌘⌫)")
                     }
                 }
                 if browserUnseen {
-                    Image(systemName: "globe").font(.system(size: 10)).foregroundStyle(.blue)
+                    Image(systemName: "globe").font(PassFont.ui(size: 10)).foregroundStyle(.blue)
                         .help("Agent opened a page — select the session to view it")
                 }
-                Text(RelativeTime.short(waitTime)).font(.system(size: 10)).foregroundStyle(urgencyColor)
             }
             .contentShape(Rectangle())
             .onTapGesture { onSelect() }
@@ -1775,25 +2001,25 @@ struct CompactSessionCard: View {
         if session.launching {
             HStack(spacing: 5) {
                 ProgressView().controlSize(.mini).scaleEffect(0.7)
-                Text("starting \(session.agent.rawValue)…").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text("starting \(session.agent.rawValue)…").font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
             }
         } else if case .pending(let a) = session.attention, !isGenericPreview(a.preview) {
-            Text(oneLine(a.preview)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            Text(oneLine(a.preview)).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         } else if case .pending = session.attention, let tail = session.paneTail, !tail.isEmpty {
             // Generic "needs your input" → show the actual question from the transcript.
-            Text(oneLine(tail)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            Text(oneLine(tail)).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         } else if let tail = session.liveTail, !tail.isEmpty {
             // Streaming right now — show what it's doing (dimmed + a spinner glyph).
             HStack(spacing: 4) {
-                Image(systemName: "ellipsis").font(.system(size: 9)).foregroundStyle(.blue)
-                Text(oneLine(tail)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                Image(systemName: "ellipsis").font(PassFont.ui(size: 9)).foregroundStyle(.blue)
+                Text(oneLine(tail)).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             }
         } else if let msg = session.lastMessage, !msg.isEmpty {
-            Text(oneLine(msg)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            Text(oneLine(msg)).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         } else if let tail = session.paneTail, !tail.isEmpty {
-            Text(oneLine(tail)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            Text(oneLine(tail)).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         } else {
-            Text("waiting for input").font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1)
+            Text("waiting for input").font(PassFont.ui(size: 10)).foregroundStyle(.tertiary).lineLimit(1)
         }
     }
 
@@ -1899,6 +2125,88 @@ private struct SessionMachineHeader: View {
     }
 }
 
+private struct SessionProjectHeader: View {
+    let root: String
+    let name: String
+    let emoji: String?
+    let sessionCount: Int
+    let waitingCount: Int
+    let collapsed: Bool
+    let onSelectProject: (() -> Void)?
+    let onToggle: () -> Void
+    @Environment(AppModel.self) private var appModel
+    @State private var editingIcon = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Button(action: onSelectProject ?? onToggle) {
+                HStack(spacing: 7) {
+                    if let emoji {
+                        Text(emoji).font(PassFont.ui(size: 12))
+                    } else {
+                        Circle().fill(ProjectColor.color(for: root))
+                            .frame(width: 8, height: 8)
+                    }
+                    Text(name)
+                        .font(PassFont.ui(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                    Text("\(sessionCount)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                    Spacer(minLength: 4)
+                    if waitingCount > 0 {
+                        Text("\(waitingCount) waiting")
+                            .font(PassFont.ui(size: 10, weight: .medium))
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding(.horizontal, 9).padding(.vertical, 7)
+                .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(root)
+            .accessibilityLabel("\(name), \(sessionCount) sessions, \(waitingCount) waiting")
+            .accessibilityHint(onSelectProject == nil ? "Collapse or expand project" : "Open Pa, the project agent")
+            .contextMenu {
+                if onSelectProject != nil {
+                    Button("프로젝트 아이콘 변경…") { editingIcon = true }
+                }
+            }
+            .popover(isPresented: $editingIcon, arrowEdge: .bottom) {
+                EmojiPickerPopover(
+                    current: appModel.projects?.emoji(forRoot: root) ?? emoji ?? "",
+                    onPick: { appModel.projects?.setEmoji(rootPath: root, $0) },
+                    onClose: { editingIcon = false })
+            }
+            Button(action: onToggle) {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .font(PassFont.ui(size: 9, weight: .bold))
+                    .frame(width: 12, height: 26)
+                    .padding(.horizontal, 5)
+                    .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
+            }
+            .buttonStyle(.plain)
+            .help(collapsed ? "Expand \(name)" : "Collapse \(name)")
+            .accessibilityLabel(collapsed ? "Expand \(name)" : "Collapse \(name)")
+        }
+        .padding(.top, 5)
+    }
+}
+
+private struct RemoteSessionProjectGroup: Identifiable {
+    let id: String
+    let name: String
+    let emoji: String?
+    var sessions: [RemoteSessionDTO]
+
+    var waitingCount: Int {
+        sessions.filter {
+            $0.attention.status == .decision || $0.attention.status == .input || $0.unacknowledged
+        }.count
+    }
+}
+
 private struct RemoteMachineEmptyRow: View {
     let connection: RemoteControllerConnection
 
@@ -1928,26 +2236,39 @@ private struct RemoteSessionCard: View {
         return value.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
     }
 
+    private var groupedName: String {
+        guard session.displayName == session.defaultDisplayName else { return session.displayName }
+        let project = URL(fileURLWithPath: session.projectRoot).lastPathComponent
+        if session.displayName == project { return session.gitBranch ?? "session" }
+        let prefix = project + " · "
+        return session.displayName.hasPrefix(prefix)
+            ? String(session.displayName.dropFirst(prefix.count)) : session.displayName
+    }
+
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 8) {
                 Image(systemName: "network")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(PassFont.ui(size: 11, weight: .semibold))
                     .foregroundStyle(.orange)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text(session.displayName)
-                            .font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        Text(groupedName)
+                            .font(PassFont.ui(size: 12, weight: .medium)).lineLimit(1)
                         Text(connection.profile.desktopName.uppercased())
                             .font(.system(size: 7, weight: .black, design: .monospaced))
                             .foregroundStyle(.orange)
                             .padding(.horizontal, 4).padding(.vertical, 2)
                             .overlay(RoundedRectangle(cornerRadius: 2).stroke(.orange.opacity(0.45)))
+                        Spacer(minLength: 0)
+                        Text(RelativeTime.short(session.attention.receivedAt ?? session.lastActivity))
+                            .font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
                     }
-                    Text(preview)
-                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                     HStack(spacing: 6) {
+                        Text(preview)
+                            .font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         AgentTag(agent: session.agent.localKind)
                         Text("REMOTE")
                             .font(.system(size: 8, weight: .bold, design: .monospaced))
@@ -1957,10 +2278,8 @@ private struct RemoteSessionCard: View {
                 Spacer()
                 if needsUser {
                     Image(systemName: session.attention.status == .decision ? "bolt.fill" : "pencil.line")
-                        .font(.system(size: 10)).foregroundStyle(.orange)
+                        .font(PassFont.ui(size: 10)).foregroundStyle(.orange)
                 }
-                Text(RelativeTime.short(session.attention.receivedAt ?? session.lastActivity))
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
             }
             .contentShape(Rectangle())
         }
@@ -2029,7 +2348,7 @@ private struct RemoteSessionDetailView: View {
                 SessionMachineHeader.remote(connection)
                     .padding(.horizontal, -8)
                 Text(session?.displayName ?? sessionName)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(PassFont.ui(size: 18, weight: .semibold))
                 Text("\(session?.agent.rawValue.uppercased() ?? "AGENT") · \(session?.cwd ?? "")")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary).lineLimit(1)
@@ -2047,7 +2366,7 @@ private struct RemoteSessionDetailView: View {
         HStack(spacing: 8) {
             Image(systemName: "bolt.fill").foregroundStyle(.orange)
             Text(session.attention.preview ?? "This session needs a decision.")
-                .font(.system(size: 11)).lineLimit(2)
+                .font(PassFont.ui(size: 11)).lineLimit(2)
             Spacer()
             Button("Once") { connection.answerDecision(session: sessionName, decision: .allowOnce) }
             Button("Always") { connection.answerDecision(session: sessionName, decision: .allowAll) }
@@ -2067,7 +2386,7 @@ private struct RemoteSessionDetailView: View {
             Button("Send") { submit() }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            if let result { Text(result).font(.system(size: 9)).foregroundStyle(.secondary) }
+            if let result { Text(result).font(PassFont.ui(size: 9)).foregroundStyle(.secondary) }
         }
         .padding(12)
     }
@@ -2163,6 +2482,7 @@ enum GitHubPaletteAction: String {
 enum PaletteItem: Identifiable {
     case session(Session)
     case project(Project)
+    case projectAgent(Project)
     case newProject(name: String, parentDirectory: String?)
     case githubRepository(ProjectCreationService.GitHubRepository, parentDirectory: String?)
     case githubRemoteRepository(GitHubRemoteRepository, parentDirectory: String?)
@@ -2173,6 +2493,7 @@ enum PaletteItem: Identifiable {
         switch self {
         case .session(let s): return "s:" + s.name
         case .project(let p): return "p:" + p.rootPath
+        case .projectAgent(let p): return "pa:" + p.rootPath
         case .newProject(let name, _): return "n:" + name
         case .githubRepository(let repository, _): return "g:" + repository.cloneURL
         case .githubRemoteRepository(let repository, _): return "gr:\(repository.id)"
@@ -2191,6 +2512,7 @@ struct PaletteRow: View {
             switch item {
             case .session(let s): sessionRow(s)
             case .project(let p): projectRow(p)
+            case .projectAgent(let p): projectAgentRow(p)
             case .newProject(let name, let parent): newProjectRow(name, parent: parent)
             case .githubRepository(let repository, let parent):
                 githubRepositoryRow(repository, parent: parent)
@@ -2209,16 +2531,16 @@ struct PaletteRow: View {
     private func sessionRow(_ s: Session) -> some View {
         HStack(spacing: 10) {
             Circle().fill(ProjectColor.color(for: s.projectRoot)).frame(width: 8, height: 8)
-            Text(s.agent.glyph).font(.system(size: 13)).frame(width: 16).foregroundStyle(.secondary)
+            Text(s.agent.glyph).font(PassFont.ui(size: 13)).frame(width: 16).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
-                Text(s.displayName).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                Text(s.displayName).font(PassFont.ui(size: 13, weight: .medium)).lineLimit(1)
                 secondLine(s)
             }
             Spacer()
             if s.isAttached {
-                Image(systemName: "link").font(.system(size: 10)).foregroundStyle(.secondary)
+                Image(systemName: "link").font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
             }
-            Text(RelativeTime.short(waitTime(s))).font(.system(size: 11)).foregroundStyle(urgencyColor(s))
+            Text(RelativeTime.short(waitTime(s))).font(PassFont.ui(size: 11)).foregroundStyle(urgencyColor(s))
         }
     }
 
@@ -2226,19 +2548,19 @@ struct PaletteRow: View {
     private func secondLine(_ s: Session) -> some View {
         if case .pending(let a) = s.attention, !isGenericPreview(a.preview) {
             Text(oneLine(a.preview))
-                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(2)
         } else if case .pending = s.attention, let tail = s.paneTail, !tail.isEmpty {
             Text(oneLine(tail))
-                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(2)
         } else if let msg = s.lastMessage, !msg.isEmpty {
             Text(oneLine(msg))
-                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(2)
         } else if let tail = s.paneTail, !tail.isEmpty {
             Text(oneLine(tail))
-                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(2)
         } else {
             Text("waiting for input")
-                .font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
         }
     }
 
@@ -2262,32 +2584,43 @@ struct PaletteRow: View {
     private func projectRow(_ p: Project) -> some View {
         HStack(spacing: 10) {
             Circle().fill(ProjectColor.color(for: p.rootPath)).frame(width: 8, height: 8)
-            Image(systemName: "plus.circle").font(.system(size: 12)).frame(width: 16).foregroundStyle(.secondary)
-            Text(p.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+            Image(systemName: "plus.circle").font(PassFont.ui(size: 12)).frame(width: 16).foregroundStyle(.secondary)
+            Text(p.name).font(PassFont.ui(size: 13, weight: .medium)).lineLimit(1)
             Spacer()
-            Text("new session").font(.system(size: 11)).foregroundStyle(.tertiary)
+            Text("new session").font(PassFont.ui(size: 11)).foregroundStyle(.tertiary)
+        }
+    }
+
+    private func projectAgentRow(_ p: Project) -> some View {
+        HStack(spacing: 10) {
+            Circle().fill(ProjectColor.color(for: p.rootPath)).frame(width: 8, height: 8)
+            Text("Pa").font(PassFont.ui(size: 11, weight: .bold))
+                .frame(width: 16).foregroundStyle(.indigo)
+            Text(p.name).font(PassFont.ui(size: 13, weight: .medium)).lineLimit(1)
+            Spacer()
+            Text("project").font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
         }
     }
 
     private func newProjectRow(_ name: String, parent: String?) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "folder.badge.plus")
-                .font(.system(size: 13, weight: .semibold))
+                .font(PassFont.ui(size: 13, weight: .semibold))
                 .frame(width: 24)
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Create “\(name)”")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(PassFont.ui(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text(parentPreview(name, parent: parent))
-                    .font(.system(size: 10))
+                    .font(PassFont.ui(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
             }
             Spacer()
             Text("new project")
-                .font(.system(size: 11, weight: .medium))
+                .font(PassFont.ui(size: 11, weight: .medium))
                 .foregroundStyle(Color.accentColor)
         }
     }
@@ -2298,12 +2631,12 @@ struct PaletteRow: View {
     ) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "arrow.down.circle.fill")
-                .font(.system(size: 15, weight: .semibold))
+                .font(PassFont.ui(size: 15, weight: .semibold))
                 .frame(width: 24)
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Clone \(repository.displayName)")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(PassFont.ui(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text(parentPreview(repository.name, parent: parent))
                     .font(.system(size: 10, design: .monospaced))
@@ -2313,7 +2646,7 @@ struct PaletteRow: View {
             }
             Spacer()
             Text("GitHub ↓")
-                .font(.system(size: 11, weight: .semibold))
+                .font(PassFont.ui(size: 11, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
         }
     }
@@ -2321,15 +2654,15 @@ struct PaletteRow: View {
     private func githubRemoteRepositoryRow(_ repository: GitHubRemoteRepository, parent: String?) -> some View {
         HStack(spacing: 10) {
             Image(systemName: repository.isPrivate ? "lock.fill" : "shippingbox.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .font(PassFont.ui(size: 12, weight: .semibold))
                 .frame(width: 24)
                 .foregroundStyle(repository.isPrivate ? Color.orange : Color.accentColor)
             VStack(alignment: .leading, spacing: 2) {
                 Text(repository.fullName)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(PassFont.ui(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text(repository.description ?? parentPreview(repository.name, parent: parent))
-                    .font(.system(size: 10))
+                    .font(PassFont.ui(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -2345,12 +2678,12 @@ struct PaletteRow: View {
     private func githubActionRow(_ action: GitHubPaletteAction) -> some View {
         HStack(spacing: 10) {
             Image(systemName: action == .installCLI ? "arrow.down.app.fill" : "person.crop.circle.badge.plus")
-                .font(.system(size: 14, weight: .semibold))
+                .font(PassFont.ui(size: 14, weight: .semibold))
                 .frame(width: 24)
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 2) {
-                Text(action.title).font(.system(size: 13, weight: .semibold))
-                Text(action.subtitle).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                Text(action.title).font(PassFont.ui(size: 13, weight: .semibold))
+                Text(action.subtitle).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             Text("ENTER")
@@ -2376,13 +2709,13 @@ struct PaletteRow: View {
     private func commandRow(_ c: ExtensionStore.PaletteCommand) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "puzzlepiece.extension")
-                .font(.system(size: 12)).frame(width: 16).foregroundStyle(.secondary)
+                .font(PassFont.ui(size: 12)).frame(width: 16).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
-                Text(c.token).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                Text(c.command.title).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                Text(c.token).font(PassFont.ui(size: 13, weight: .medium)).lineLimit(1)
+                Text(c.command.title).font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            Text(c.extensionName).font(.system(size: 11)).foregroundStyle(.tertiary)
+            Text(c.extensionName).font(PassFont.ui(size: 11)).foregroundStyle(.tertiary)
         }
     }
 }

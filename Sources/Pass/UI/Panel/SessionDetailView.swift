@@ -41,7 +41,7 @@ struct SessionDetailView: View {
                 }.buttonStyle(.plain).help("Back to list (⌘[ or ⌘W)")
                 Circle().fill(ProjectColor.color(for: session.projectRoot)).frame(width: 8, height: 8)
                 Text(session.agent.glyph).foregroundStyle(.secondary)
-                Text(session.displayName).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                Text(session.displayName).font(PassFont.ui(size: 14, weight: .semibold)).lineLimit(1)
                 ConfigURLAddButton(session: session)
                 ConfigURLChips(session: session)
                 Spacer()
@@ -66,11 +66,11 @@ struct SessionDetailView: View {
     @ViewBuilder
     private var attentionBadge: some View {
         switch session.attention {
-        case .working: Text("● working").font(.system(size: 11)).foregroundStyle(.blue)
-        case .idle: Text("○ idle").font(.system(size: 11)).foregroundStyle(.secondary)
+        case .working: Text("● working").font(PassFont.ui(size: 11)).foregroundStyle(.blue)
+        case .idle: Text("○ idle").font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
         case .pending(let a):
             Text(a.kind == .decision ? "⚡ needs decision" : a.kind == .input ? "✎ needs input" : "✓ finished")
-                .font(.system(size: 11)).foregroundStyle(.orange)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.orange)
         }
     }
 
@@ -84,7 +84,7 @@ struct SessionDetailView: View {
             Text("⌘[ or ⌘W  back to list").foregroundStyle(.secondary)
             Text("⌘⏎  open in Ghostty").foregroundStyle(.tertiary)
         }
-        .font(.system(size: 10))
+        .font(PassFont.ui(size: 10))
         .padding(.horizontal, 14).padding(.vertical, 6)
     }
 

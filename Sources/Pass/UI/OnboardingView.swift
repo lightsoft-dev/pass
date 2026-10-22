@@ -55,7 +55,7 @@ struct OnboardingView: View {
                     .frame(width: 36, height: 36)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 Text("PASS")
-                    .font(.custom("Avenir Next", size: 14).weight(.heavy))
+                    .font(PassFont.ui(size: 14, weight: .heavy))
                     .tracking(2.8)
             }
             .padding(.bottom, 48)
@@ -95,7 +95,7 @@ struct OnboardingView: View {
                     .fill(active ? signal : (complete ? lavender : Color.white.opacity(0.10)))
                 if complete {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 9, weight: .black))
+                        .font(PassFont.ui(size: 9, weight: .black))
                         .foregroundStyle(ink)
                 } else {
                     Text("0\(index + 1)")
@@ -105,7 +105,7 @@ struct OnboardingView: View {
             }
             .frame(width: 25, height: 25)
             Text(labels[index])
-                .font(.custom("Avenir Next", size: 12).weight(active ? .bold : .medium))
+                .font(PassFont.ui(size: 12, weight: active ? .bold : .medium))
                 .foregroundStyle(active ? paper : .secondary)
         }
     }
@@ -130,12 +130,12 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             eyebrow("MISSION BRIEF")
             Text("Every coding agent.\nOne mission control.")
-                .font(.custom("Avenir Next", size: 39).weight(.heavy))
+                .font(PassFont.ui(size: 39, weight: .heavy))
                 .foregroundStyle(paper)
                 .lineSpacing(-2)
                 .padding(.top, 14)
             Text("Pass runs coding agents on tmux. Their work continues when the app closes, and only surfaces when a response or approval needs you.")
-                .font(.custom("Avenir Next", size: 15))
+                .font(PassFont.ui(size: 15))
                 .foregroundStyle(paper.opacity(0.72))
                 .lineSpacing(5)
                 .frame(maxWidth: 470, alignment: .leading)
@@ -167,7 +167,7 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     eyebrow("PRE-FLIGHT  /  REQUIRED")
                     Text("Check the essentials")
-                        .font(.custom("Avenir Next", size: 28).weight(.heavy))
+                        .font(PassFont.ui(size: 28, weight: .heavy))
                         .foregroundStyle(paper)
                 }
                 Spacer()
@@ -175,7 +175,7 @@ struct OnboardingView: View {
                     Label("Scan again", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.plain)
-                .font(.custom("Avenir Next", size: 12).weight(.semibold))
+                .font(PassFont.ui(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .disabled(model.isScanning)
             }
@@ -196,7 +196,7 @@ struct OnboardingView: View {
                 Text(model.homebrewPath == nil
                      ? "Homebrew is not available. Install it, then choose “Scan again.”"
                      : "Pass can install tmux with Homebrew. No administrator password is requested.")
-                    .font(.custom("Avenir Next", size: 12))
+                    .font(PassFont.ui(size: 12))
                     .foregroundStyle(.secondary)
                     .padding(.top, 14)
             }
@@ -227,11 +227,11 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             eyebrow("PROJECTS  /  PICK YOUR WORKSPACE")
             Text("Where do your projects live?")
-                .font(.custom("Avenir Next", size: 28).weight(.heavy))
+                .font(PassFont.ui(size: 28, weight: .heavy))
                 .foregroundStyle(paper)
                 .padding(.top, 8)
             Text("Choose any project folder—Git is optional—or a parent folder. Pass finds Git repositories one level inside and keeps the list in sync.")
-                .font(.custom("Avenir Next", size: 13))
+                .font(PassFont.ui(size: 13))
                 .foregroundStyle(.secondary)
                 .lineSpacing(3)
                 .frame(maxWidth: 500, alignment: .leading)
@@ -241,13 +241,13 @@ struct OnboardingView: View {
                 if model.projectDirectories.isEmpty {
                     VStack(spacing: 13) {
                         Image(systemName: "folder.badge.plus")
-                            .font(.system(size: 28, weight: .light))
+                            .font(PassFont.ui(size: 28, weight: .light))
                             .foregroundStyle(signal)
                         Text("No project directories selected")
-                            .font(.custom("Avenir Next", size: 13).weight(.bold))
+                            .font(PassFont.ui(size: 13, weight: .bold))
                             .foregroundStyle(paper)
                         Text("You can skip this and add directories later in Settings.")
-                            .font(.custom("Avenir Next", size: 11))
+                            .font(PassFont.ui(size: 11))
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, minHeight: 190)
@@ -298,12 +298,12 @@ struct OnboardingView: View {
     private func projectDirectoryRow(_ path: String) -> some View {
         HStack(spacing: 13) {
             Image(systemName: "folder.fill")
-                .font(.system(size: 16))
+                .font(PassFont.ui(size: 16))
                 .foregroundStyle(lavender)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 3) {
                 Text(URL(fileURLWithPath: path).lastPathComponent)
-                    .font(.custom("Avenir Next", size: 12).weight(.bold))
+                    .font(PassFont.ui(size: 12, weight: .bold))
                     .foregroundStyle(paper)
                 Text(path)
                     .font(.custom("Menlo", size: 9))
@@ -314,7 +314,7 @@ struct OnboardingView: View {
             Spacer()
             Button { model.removeProjectDirectory(path) } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(PassFont.ui(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
                     .frame(width: 24, height: 24)
             }
@@ -329,11 +329,11 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             eyebrow("CONNECT  /  CHOOSE YOUR CREW")
             Text("Connect your agents")
-                .font(.custom("Avenir Next", size: 28).weight(.heavy))
+                .font(PassFont.ui(size: 28, weight: .heavy))
                 .foregroundStyle(paper)
                 .padding(.top, 8)
             Text("One is enough to begin. You can add the others later in Settings.")
-                .font(.custom("Avenir Next", size: 13))
+                .font(PassFont.ui(size: 13))
                 .foregroundStyle(.secondary)
                 .padding(.top, 7)
 
@@ -409,11 +409,11 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 0) {
             eyebrow("APP MODE  /  CHOOSE YOUR SIGNAL")
             Text("How should Pass appear?")
-                .font(.custom("Avenir Next", size: 28).weight(.heavy))
+                .font(PassFont.ui(size: 28, weight: .heavy))
                 .foregroundStyle(paper)
                 .padding(.top, 8)
             Text("Choose whether Pass stays tucked away or behaves like a regular Mac app. Both modes keep the menu bar controls and your sessions running.")
-                .font(.custom("Avenir Next", size: 13))
+                .font(PassFont.ui(size: 13))
                 .foregroundStyle(.secondary)
                 .lineSpacing(3)
                 .frame(maxWidth: 500, alignment: .leading)
@@ -441,7 +441,7 @@ struct OnboardingView: View {
                 "You can change this later by running onboarding again from Settings.",
                 systemImage: "arrow.triangle.2.circlepath"
             )
-            .font(.custom("Avenir Next", size: 11))
+            .font(PassFont.ui(size: 11))
             .foregroundStyle(.tertiary)
             .padding(.top, 16)
 
@@ -502,13 +502,13 @@ struct OnboardingView: View {
                     RoundedRectangle(cornerRadius: 9)
                         .fill(selected ? signal : Color.white.opacity(0.07))
                     Image(systemName: icon)
-                        .font(.system(size: 18, weight: .medium))
+                        .font(PassFont.ui(size: 18, weight: .medium))
                         .foregroundStyle(selected ? ink : paper)
                 }
                 .frame(width: 42, height: 42)
                 Spacer()
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(PassFont.ui(size: 17, weight: .semibold))
                     .foregroundStyle(selected ? signal : Color.white.opacity(0.28))
             }
 
@@ -518,11 +518,11 @@ struct OnboardingView: View {
                 .foregroundStyle(selected ? signal : paper.opacity(0.38))
                 .padding(.top, 20)
             Text(title)
-                .font(.custom("Avenir Next", size: 16).weight(.bold))
+                .font(PassFont.ui(size: 16, weight: .bold))
                 .foregroundStyle(paper)
                 .padding(.top, 6)
             Text(detail)
-                .font(.custom("Avenir Next", size: 11))
+                .font(PassFont.ui(size: 11))
                 .foregroundStyle(.secondary)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
@@ -539,14 +539,14 @@ struct OnboardingView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(installed ? lavender.opacity(0.13) : signal.opacity(0.13))
                 Image(systemName: installed ? "checkmark" : "exclamationmark")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(PassFont.ui(size: 13, weight: .bold))
                     .foregroundStyle(installed ? lavender : signal)
             }
             .frame(width: 36, height: 36)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
                     Text(dependency?.name ?? kind.rawValue)
-                        .font(.custom("Avenir Next", size: 14).weight(.bold))
+                        .font(PassFont.ui(size: 14, weight: .bold))
                         .foregroundStyle(paper)
                     Text(isTmux ? "REQUIRED" : "RECOMMENDED")
                         .font(.custom("Menlo", size: 8))
@@ -555,7 +555,7 @@ struct OnboardingView: View {
                         .background(Color.white.opacity(0.07), in: Capsule())
                 }
                 Text(dependency?.purpose ?? "Checking…")
-                    .font(.custom("Avenir Next", size: 11))
+                    .font(PassFont.ui(size: 11))
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -587,13 +587,13 @@ struct OnboardingView: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(glyph)
-                    .font(.custom("Avenir Next", size: 20).weight(.bold))
+                    .font(PassFont.ui(size: 20, weight: .bold))
                     .foregroundStyle(installed ? lavender : paper)
                 Spacer()
                 Circle().fill(installed ? lavender : signal).frame(width: 7, height: 7)
             }
             Text(dependency?.name ?? kind.rawValue)
-                .font(.custom("Avenir Next", size: 13).weight(.bold))
+                .font(PassFont.ui(size: 13, weight: .bold))
                 .foregroundStyle(paper)
             if installed {
                 Text("INSTALLED")
@@ -639,10 +639,10 @@ struct OnboardingView: View {
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.custom("Avenir Next", size: 12).weight(.bold))
+                    .font(PassFont.ui(size: 12, weight: .bold))
                     .foregroundStyle(paper)
                 Text(detail)
-                    .font(.custom("Avenir Next", size: 10))
+                    .font(PassFont.ui(size: 10))
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -668,7 +668,7 @@ struct OnboardingView: View {
                 .font(.custom("Menlo", size: 13).weight(.bold))
                 .foregroundStyle(signal)
             Text(label)
-                .font(.custom("Avenir Next", size: 10))
+                .font(PassFont.ui(size: 10))
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -691,7 +691,7 @@ struct OnboardingView: View {
                 Text(title)
                 if let icon { Image(systemName: icon) }
             }
-            .font(.custom("Avenir Next", size: 13).weight(.bold))
+            .font(PassFont.ui(size: 13, weight: .bold))
             .foregroundStyle(ink)
             .padding(.horizontal, 18)
             .frame(height: 38)

@@ -19,12 +19,15 @@ final class PanelController {
         let rect = NSRect(origin: .zero, size: savedSize)
         let panel = SummonPanel(contentRect: rect)
         let root = CommandView()
+            .font(PassFont.ui(size: 12))
             .environment(appModel)
         panel.contentView = NSHostingView(rootView: root)
         let titlebarAccessory = NSTitlebarAccessoryViewController()
         titlebarAccessory.layoutAttribute = .right
         let titlebarControls = NSHostingView(
-            rootView: PanelTitlebarControls().environment(appModel)
+            rootView: PanelTitlebarControls()
+                .font(PassFont.ui(size: 12))
+                .environment(appModel)
         )
         let titlebarSize = titlebarControls.fittingSize
         titlebarControls.frame = NSRect(origin: .zero, size: titlebarSize)

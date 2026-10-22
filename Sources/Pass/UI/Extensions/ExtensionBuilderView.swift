@@ -51,9 +51,9 @@ struct ExtensionBuilderView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "wand.and.stars")
-                .font(.system(size: 19, weight: .semibold)).foregroundStyle(.purple)
+                .font(PassFont.ui(size: 19, weight: .semibold)).foregroundStyle(.purple)
             VStack(alignment: .leading, spacing: 1) {
-                Text("AI Extension Builder").font(.system(size: 16, weight: .semibold))
+                Text("AI Extension Builder").font(PassFont.ui(size: 16, weight: .semibold))
                 Text("An agent writes the files; you review and enable them.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -73,7 +73,7 @@ struct ExtensionBuilderView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("BUILDS")
-                .font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+                .font(PassFont.ui(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 12).padding(.top, 12)
             ScrollView {
                 LazyVStack(spacing: 4) {
@@ -97,7 +97,7 @@ struct ExtensionBuilderView: View {
                                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                                         .lineLimit(1)
                                     Text(build.status.label)
-                                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                                        .font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                             }
@@ -121,13 +121,13 @@ struct ExtensionBuilderView: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Describe the extension")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(PassFont.ui(size: 20, weight: .semibold))
                     Text("Claude receives the extension API, works in a disabled folder, and returns the result for review.")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Extension ID").font(.system(size: 12, weight: .medium))
+                    Text("Extension ID").font(PassFont.ui(size: 12, weight: .medium))
                     TextField("optional — generated automatically", text: $extensionId)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12, design: .monospaced))
@@ -136,9 +136,9 @@ struct ExtensionBuilderView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("What should it do?").font(.system(size: 12, weight: .medium))
+                    Text("What should it do?").font(PassFont.ui(size: 12, weight: .medium))
                     TextEditor(text: $goal)
-                        .font(.system(size: 13))
+                        .font(PassFont.ui(size: 13))
                         .frame(minHeight: 150)
                         .scrollContentBackground(.hidden)
                         .padding(8)
@@ -174,7 +174,7 @@ struct ExtensionBuilderView: View {
                         Text(build.extensionId)
                             .font(.system(size: 20, weight: .semibold, design: .monospaced))
                         Label(build.status.label, systemImage: statusIcon(build.status))
-                            .font(.system(size: 11, weight: .medium))
+                            .font(PassFont.ui(size: 11, weight: .medium))
                             .foregroundStyle(statusColor(build.status))
                     }
                     Spacer()
@@ -185,7 +185,7 @@ struct ExtensionBuilderView: View {
                     }
                 }
 
-                Text(build.goal).font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(build.goal).font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
                     .textSelection(.enabled)
 
                 if let session = build.sessionName {
@@ -193,7 +193,7 @@ struct ExtensionBuilderView: View {
                         Text(session).font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.secondary).textSelection(.enabled)
                     }
-                    .font(.system(size: 11))
+                    .font(PassFont.ui(size: 11))
                 }
 
                 if build.status == .generating || build.status == .reworking {
@@ -202,7 +202,7 @@ struct ExtensionBuilderView: View {
                         Text(build.status == .generating
                              ? "The agent is creating and validating the extension."
                              : "The agent is applying your feedback.")
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
                     }
                     .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.purple.opacity(0.08))
@@ -211,7 +211,7 @@ struct ExtensionBuilderView: View {
 
                 if let summary = build.summary, !summary.isEmpty {
                     reviewSection("Agent summary") {
-                        Text(summary).font(.system(size: 12)).textSelection(.enabled)
+                        Text(summary).font(PassFont.ui(size: 12)).textSelection(.enabled)
                     }
                 }
 
@@ -232,7 +232,7 @@ struct ExtensionBuilderView: View {
                     HStack(spacing: 9) {
                         Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
                         Text("Enabled with the reviewed content fingerprint. Any later file change disables it on Reload.")
-                            .font(.system(size: 12))
+                            .font(PassFont.ui(size: 12))
                         Spacer()
                         Button("Remove from builder") {
                             builder.forget(extensionId: build.extensionId)
@@ -269,7 +269,7 @@ struct ExtensionBuilderView: View {
                                     .multilineTextAlignment(.trailing)
                                     .textSelection(.enabled)
                             }
-                            .font(.system(size: 11))
+                            .font(PassFont.ui(size: 11))
                         }
                     }
                 }
@@ -280,7 +280,7 @@ struct ExtensionBuilderView: View {
     private func permissionsSection(_ review: ExtensionBuildReview) -> some View {
         reviewSection("Requested permissions") {
             if review.permissions.isEmpty {
-                Text("None").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("None").font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
             } else {
                 FlowLayout(spacing: 6) {
                     ForEach(review.permissions, id: \.self) { permission in
@@ -302,7 +302,7 @@ struct ExtensionBuilderView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     ForEach(review.problems, id: \.self) { problem in
                         Label(problem, systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: 11)).foregroundStyle(.orange)
+                            .font(PassFont.ui(size: 11)).foregroundStyle(.orange)
                     }
                 }
             }
@@ -335,10 +335,10 @@ struct ExtensionBuilderView: View {
                             Text(file.path).font(.system(size: 11, design: .monospaced))
                             Spacer()
                             Text(ByteCountFormatter.string(fromByteCount: Int64(file.byteCount), countStyle: .file))
-                                .font(.system(size: 9)).foregroundStyle(.tertiary)
+                                .font(PassFont.ui(size: 9)).foregroundStyle(.tertiary)
                         }
                     }
-                    .font(.system(size: 11))
+                    .font(PassFont.ui(size: 11))
                 }
             }
         }
@@ -348,7 +348,7 @@ struct ExtensionBuilderView: View {
         reviewSection("Request changes") {
             VStack(alignment: .leading, spacing: 8) {
                 TextEditor(text: $feedback)
-                    .font(.system(size: 12)).frame(minHeight: 70)
+                    .font(PassFont.ui(size: 12)).frame(minHeight: 70)
                     .scrollContentBackground(.hidden).padding(6)
                     .background(Color.primary.opacity(0.05))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -366,7 +366,7 @@ struct ExtensionBuilderView: View {
         return HStack(alignment: .center, spacing: 12) {
             Image(systemName: "hand.raised.fill").foregroundStyle(.orange)
             Text("Enabling allows the declared scripts, session actions, events, URLs, notifications, and UI windows to run with your user account.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
             Spacer()
             Button("Approve & Enable") { approve(build) }
                 .buttonStyle(.borderedProminent)
@@ -378,7 +378,7 @@ struct ExtensionBuilderView: View {
 
     private var emptyView: some View {
         VStack(spacing: 10) {
-            Image(systemName: "puzzlepiece.extension").font(.system(size: 34)).foregroundStyle(.secondary)
+            Image(systemName: "puzzlepiece.extension").font(PassFont.ui(size: 34)).foregroundStyle(.secondary)
             Text("Choose a build or create a new extension.").foregroundStyle(.secondary)
         }
     }
@@ -386,7 +386,7 @@ struct ExtensionBuilderView: View {
     private func reviewSection<Content: View>(_ title: String,
                                               @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.system(size: 12, weight: .semibold))
+            Text(title).font(PassFont.ui(size: 12, weight: .semibold))
             content()
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
@@ -396,7 +396,7 @@ struct ExtensionBuilderView: View {
 
     private func statusMessage(_ text: String) -> some View {
         Label(text, systemImage: text.hasPrefix("✓") ? "checkmark.circle" : "exclamationmark.circle")
-            .font(.system(size: 11))
+            .font(PassFont.ui(size: 11))
             .foregroundStyle(text.hasPrefix("✓") ? Color.green : Color.orange)
             .textSelection(.enabled)
     }

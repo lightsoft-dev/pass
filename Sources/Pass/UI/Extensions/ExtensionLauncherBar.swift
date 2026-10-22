@@ -16,7 +16,7 @@ struct ExtensionLauncherBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "puzzlepiece.extension")
-                .font(.system(size: 11, weight: .semibold))
+                .font(PassFont.ui(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .help("Enabled extensions")
 
@@ -30,12 +30,12 @@ struct ExtensionLauncherBar: View {
 
             if let error {
                 Text(error)
-                    .font(.system(size: 9))
+                    .font(PassFont.ui(size: 9))
                     .foregroundStyle(.orange)
                     .lineLimit(1)
                     .help(error)
                 Button { self.error = nil } label: {
-                    Image(systemName: "xmark").font(.system(size: 8, weight: .semibold))
+                    Image(systemName: "xmark").font(PassFont.ui(size: 8, weight: .semibold))
                 }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
             }
@@ -77,10 +77,10 @@ struct ExtensionLauncherBar: View {
         HStack(spacing: 4) {
             Text(name).lineLimit(1)
             if showsDisclosure {
-                Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+                Image(systemName: "chevron.down").font(PassFont.ui(size: 7, weight: .bold))
             }
         }
-        .font(.system(size: 10, weight: .medium))
+        .font(PassFont.ui(size: 10, weight: .medium))
         .foregroundStyle(.primary)
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(Color.primary.opacity(0.07), in: Capsule())

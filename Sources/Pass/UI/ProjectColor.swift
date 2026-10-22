@@ -21,7 +21,7 @@ struct SessionBadge: View {
 
     var body: some View {
         if let emoji, !emoji.isEmpty {
-            Text(emoji).font(.system(size: size))
+            Text(emoji).font(PassFont.ui(size: size))
         } else {
             Circle().fill(ProjectColor.color(for: projectRoot))
                 .frame(width: max(7, size * 0.6), height: max(7, size * 0.6))
@@ -39,7 +39,7 @@ struct AgentTag: View {
             Text(agent.glyph)
             Text(agent.rawValue)
         }
-        .font(.system(size: 9, weight: .medium))
+        .font(PassFont.ui(size: 9, weight: .medium))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 5).padding(.vertical, 1)
         .background(Color.primary.opacity(0.06))
