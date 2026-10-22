@@ -162,6 +162,19 @@ struct Session: Identifiable, Hashable, Sendable {
         return defaultDisplayName
     }
 
+    /// The project header already names the repository, so session rows show only their
+    /// branch or worktree. Keep user-assigned names intact.
+    var groupedDisplayName: String {
+        if let customName, !customName.isEmpty { return customName + gitSuffix }
+        let suffix = gitSuffix.trimmingCharacters(in: .whitespaces)
+        if !suffix.isEmpty {
+            return suffix.hasPrefix("· ") ? String(suffix.dropFirst(2)) : suffix
+        }
+        let directory = URL(fileURLWithPath: cwd).lastPathComponent
+        return directory == URL(fileURLWithPath: projectRoot).lastPathComponent
+            ? "session" : directory
+    }
+
     /// The derived (git/path-based) name, ignoring any alias — shown as secondary context when
     /// an alias is set, and as the rename field's placeholder.
     var defaultDisplayName: String {

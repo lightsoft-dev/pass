@@ -20,6 +20,29 @@ final class ProjectAgentIdentityTests: XCTestCase {
                           ProjectAgentIdentity.piSessionID(for: first))
     }
 
+    func testWorkerMemoryIsSeparateAndPreservedForEachProject() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let template = directory.appendingPathComponent("template.md")
+        try "Project: {{PROJECT_ROOT}}\nFile: {{MEMORY_PATH}}\n".write(
+            to: template, atomically: true, encoding: .utf8)
+
+        let first = try ProjectAgentWorkerMemory.ensureFile(
+            for: "/repos/first", baseDirectory: directory, templateURL: template)
+        XCTAssertTrue(try String(contentsOf: first).contains("/repos/first"))
+        try "Remember Codex".write(to: first, atomically: true, encoding: .utf8)
+        let same = try ProjectAgentWorkerMemory.ensureFile(
+            for: "/repos/first", baseDirectory: directory, templateURL: template)
+        XCTAssertEqual(try String(contentsOf: same), "Remember Codex")
+
+        let second = try ProjectAgentWorkerMemory.ensureFile(
+            for: "/repos/second", baseDirectory: directory, templateURL: template)
+        XCTAssertNotEqual(first, second)
+        XCTAssertTrue(try String(contentsOf: second).contains("/repos/second"))
+    }
+
     func testPiLoginIsRequiredWhenSelectedOAuthCredentialExpires() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

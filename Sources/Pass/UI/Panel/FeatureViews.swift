@@ -52,7 +52,7 @@ struct FeatureLibraryView: View {
                     .padding(10)
             } else if let message {
                 Divider()
-                Text(message).font(.system(size: 10)).foregroundStyle(.orange).padding(10)
+                Text(message).font(PassFont.ui(size: 10)).foregroundStyle(.orange).padding(10)
             }
         }
         .onAppear { selectInitialProject() }
@@ -72,7 +72,7 @@ struct FeatureLibraryView: View {
                 .buttonStyle(.plain)
                 .help("Back to sessions (⌘[ or ⌘W)")
             Image(systemName: "doc.text.magnifyingglass").foregroundStyle(.secondary)
-            Text("Features").font(.system(size: 15, weight: .semibold))
+            Text("Features").font(PassFont.ui(size: 15, weight: .semibold))
             if !projects.isEmpty {
                 Picker("Project", selection: $selectedProjectRoot) {
                     ForEach(projects) { project in
@@ -126,9 +126,9 @@ struct FeatureLibraryView: View {
     private func emptyState(icon: String, title: String, subtitle: String) -> some View {
         VStack(spacing: 9) {
             Spacer()
-            Image(systemName: icon).font(.system(size: 30)).foregroundStyle(.secondary)
-            Text(title).font(.system(size: 15, weight: .medium))
-            Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Image(systemName: icon).font(PassFont.ui(size: 30)).foregroundStyle(.secondary)
+            Text(title).font(PassFont.ui(size: 15, weight: .medium))
+            Text(subtitle).font(PassFont.ui(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if !selectedProjectRoot.isEmpty {
                 Button("Create feature") { createFeature() }.buttonStyle(.borderedProminent)
             }
@@ -149,18 +149,18 @@ private struct FeatureDocumentRow: View {
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(document.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(document.title).font(PassFont.ui(size: 13, weight: .semibold)).lineLimit(1)
                     Spacer()
                     Text(document.status.label)
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(PassFont.ui(size: 9, weight: .semibold))
                         .foregroundStyle(document.status.color)
                 }
                 Text(document.summary.isEmpty ? "No summary yet" : document.summary)
-                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                    .font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(2)
                 Text("\(document.acceptanceCriteria.count) acceptance criteria · \(document.implementation.checks.filter { $0.status == .passed }.count) checks passed")
-                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .font(PassFont.ui(size: 9)).foregroundStyle(.tertiary)
             }
-            Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(PassFont.ui(size: 10)).foregroundStyle(.tertiary)
         }
         .padding(11)
         .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 9))
@@ -227,7 +227,7 @@ struct FeatureDetailView: View {
             if let actionMessage {
                 Divider()
                 Text(actionMessage)
-                    .font(.system(size: 10))
+                    .font(PassFont.ui(size: 10))
                     .foregroundStyle(actionMessage.hasPrefix("Error") ? .red : .secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14).padding(.vertical, 7)
@@ -250,12 +250,12 @@ struct FeatureDetailView: View {
                 .buttonStyle(.plain).help("Back to features")
             Image(systemName: document.status.symbol).foregroundStyle(document.status.color)
             VStack(alignment: .leading, spacing: 1) {
-                Text(document.title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                Text(document.title).font(PassFont.ui(size: 14, weight: .semibold)).lineLimit(1)
                 Text(document.id).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
             }
             Spacer()
             Text(document.status.label)
-                .font(.system(size: 9, weight: .semibold)).foregroundStyle(document.status.color)
+                .font(PassFont.ui(size: 9, weight: .semibold)).foregroundStyle(document.status.color)
             Button {
                 appModel.revealFeatureFile(projectRoot: projectRoot, featureID: document.id)
             } label: { Image(systemName: "doc.text") }
@@ -273,7 +273,7 @@ struct FeatureDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 if !document.summary.isEmpty {
-                    Text(document.summary).font(.system(size: 13)).textSelection(.enabled)
+                    Text(document.summary).font(PassFont.ui(size: 13)).textSelection(.enabled)
                 }
 
                 FeatureSection(title: "Requirements", icon: "list.bullet.rectangle") {
@@ -297,7 +297,7 @@ struct FeatureDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 if document.development.command.isEmpty {
                     Text("Add a development command to make this feature runnable.")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
                 } else {
                     HStack {
                         Text(document.development.command)
@@ -305,7 +305,7 @@ struct FeatureDetailView: View {
                         Spacer()
                         if let preview {
                             Label("Running", systemImage: "circle.fill")
-                                .font(.system(size: 9)).foregroundStyle(.green)
+                                .font(PassFont.ui(size: 9)).foregroundStyle(.green)
                             Button("Terminal") { onOpenSession(preview.name) }.controlSize(.small)
                             Button("Stop") {
                                 appModel.stopFeaturePreview(projectRoot: projectRoot, featureID: document.id)
@@ -336,7 +336,7 @@ struct FeatureDetailView: View {
         FeatureSection(title: "Implementation status", icon: "wrench.and.screwdriver") {
             VStack(alignment: .leading, spacing: 7) {
                 if !document.implementation.summary.isEmpty {
-                    Text(document.implementation.summary).font(.system(size: 11))
+                    Text(document.implementation.summary).font(PassFont.ui(size: 11))
                 }
                 if !document.implementation.files.isEmpty {
                     Text(document.implementation.files.joined(separator: "\n"))
@@ -346,18 +346,18 @@ struct FeatureDetailView: View {
                 if !missingFiles.isEmpty {
                     Label("Missing claimed files: \(missingFiles.joined(separator: ", "))",
                           systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 10)).foregroundStyle(.orange)
+                        .font(PassFont.ui(size: 10)).foregroundStyle(.orange)
                 }
                 if document.implementation.checks.isEmpty {
-                    Text("No checks recorded yet.").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("No checks recorded yet.").font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
                 } else {
                     ForEach(document.implementation.checks) { check in
                         HStack(alignment: .top, spacing: 7) {
                             Image(systemName: check.status.symbol).foregroundStyle(check.status.color)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(check.name).font(.system(size: 11, weight: .medium))
+                                Text(check.name).font(PassFont.ui(size: 11, weight: .medium))
                                 if !check.details.isEmpty {
-                                    Text(check.details).font(.system(size: 10)).foregroundStyle(.secondary)
+                                    Text(check.details).font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
                                 }
                             }
                         }
@@ -381,7 +381,7 @@ struct FeatureDetailView: View {
                 Spacer()
                 if busy { ProgressView().controlSize(.small) }
                 Text(document.implementation.preferredAgent.glyph + " " + document.implementation.preferredAgent.rawValue)
-                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .font(PassFont.ui(size: 9)).foregroundStyle(.tertiary)
             }
         }
     }
@@ -391,9 +391,9 @@ struct FeatureDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(document.reviews.suffix(3)) { review in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(review.feedback).font(.system(size: 11))
+                        Text(review.feedback).font(PassFont.ui(size: 11))
                         Text(review.createdAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.system(size: 9)).foregroundStyle(.tertiary)
+                            .font(PassFont.ui(size: 9)).foregroundStyle(.tertiary)
                     }
                 }
                 HStack {
@@ -414,7 +414,7 @@ struct FeatureDetailView: View {
                 EditField("Title", text: $title)
                 EditArea("Summary", text: $summary, height: 58)
                 HStack {
-                    Text("Status").font(.system(size: 11, weight: .semibold)).frame(width: 110, alignment: .leading)
+                    Text("Status").font(PassFont.ui(size: 11, weight: .semibold)).frame(width: 110, alignment: .leading)
                     Picker("Status", selection: $status) {
                         ForEach(FeatureStatus.allCases, id: \.self) { Text($0.label).tag($0) }
                     }.labelsHidden()
@@ -425,14 +425,14 @@ struct FeatureDetailView: View {
                 EditArea("Requirements", text: $requirementsText, height: 82, hint: "One per line")
                 EditArea("Acceptance", text: $criteriaText, height: 82, hint: "One observable result per line")
                 Divider()
-                Text("Local development").font(.system(size: 12, weight: .semibold))
+                Text("Local development").font(PassFont.ui(size: 12, weight: .semibold))
                 EditField("Run command", text: $devCommand, placeholder: "npm run dev")
                 EditField("Working directory", text: $workingDirectory, placeholder: ".")
                 EditField("Local URL", text: $localURL, placeholder: "http://localhost:3000/login")
                 EditField("Test command", text: $testCommand, placeholder: "npm test -- login")
                 EditArea("Test guide", text: $guideText, height: 82, hint: "One human step per line")
                 HStack {
-                    Text("Agent").font(.system(size: 11, weight: .semibold)).frame(width: 110, alignment: .leading)
+                    Text("Agent").font(PassFont.ui(size: 11, weight: .semibold)).frame(width: 110, alignment: .leading)
                     Picker("Agent", selection: $preferredAgent) {
                         ForEach(AgentKind.launchable, id: \.self) { Text($0.rawValue).tag($0) }
                     }.labelsHidden()
@@ -543,7 +543,7 @@ private struct FeatureSection<Content: View>: View {
         GroupBox {
             content.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2)
         } label: {
-            Label(title, systemImage: icon).font(.system(size: 11, weight: .semibold))
+            Label(title, systemImage: icon).font(PassFont.ui(size: 11, weight: .semibold))
         }
     }
 }
@@ -555,14 +555,14 @@ private struct BulletList: View {
 
     var body: some View {
         if items.isEmpty {
-            Text(empty).font(.system(size: 11)).foregroundStyle(.secondary)
+            Text(empty).font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .top, spacing: 7) {
                         Text(numbered ? "\(index + 1)." : "•")
-                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-                        Text(item).font(.system(size: 11)).textSelection(.enabled)
+                            .font(PassFont.ui(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                        Text(item).font(PassFont.ui(size: 11)).textSelection(.enabled)
                     }
                 }
             }
@@ -581,7 +581,7 @@ private struct EditField: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(label).font(.system(size: 11, weight: .semibold)).frame(width: 110, alignment: .leading)
+            Text(label).font(PassFont.ui(size: 11, weight: .semibold)).frame(width: 110, alignment: .leading)
             TextField(placeholder, text: $text).textFieldStyle(.roundedBorder)
         }
     }
@@ -600,11 +600,11 @@ private struct EditArea: View {
     var body: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.system(size: 11, weight: .semibold))
-                if !hint.isEmpty { Text(hint).font(.system(size: 8)).foregroundStyle(.tertiary) }
+                Text(label).font(PassFont.ui(size: 11, weight: .semibold))
+                if !hint.isEmpty { Text(hint).font(PassFont.ui(size: 8)).foregroundStyle(.tertiary) }
             }.frame(width: 110, alignment: .leading)
             TextEditor(text: $text)
-                .font(.system(size: 11))
+                .font(PassFont.ui(size: 11))
                 .frame(height: height)
                 .padding(4)
                 .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 5))

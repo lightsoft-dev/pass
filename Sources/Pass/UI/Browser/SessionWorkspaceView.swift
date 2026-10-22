@@ -176,7 +176,7 @@ struct ConfigURLChips: View {
                                     .lineLimit(1)
                                     .frame(maxWidth: 150, alignment: .leading)
                             }
-                            .font(.system(size: 10, weight: .medium))
+                            .font(PassFont.ui(size: 10, weight: .medium))
                             .padding(.horizontal, 7)
                             .padding(.vertical, 4)
                         }
@@ -207,7 +207,7 @@ private struct FaviconView: View {
                     .scaledToFit()
             } else {
                 Image(systemName: url.isFileURL ? "doc" : "globe")
-                    .font(.system(size: 9))
+                    .font(PassFont.ui(size: 9))
             }
         }
         .frame(width: 12, height: 12)

@@ -799,12 +799,12 @@ struct CommandView: View {
                 Image(systemName: newSessionMode ? "plus.circle"
                         : query.hasPrefix("+") ? "arrow.triangle.branch"
                         : isCommandMode ? "puzzlepiece.extension" : "magnifyingglass")
-                    .font(.system(size: 16))
+                    .font(PassFont.ui(size: 16))
                     .foregroundStyle(newSessionMode || isJumpMode || isCommandMode || query.hasPrefix("+")
                                      ? Color.accentColor : .secondary)
                 TextField(placeholder, text: $query)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 17))
+                    .font(PassFont.ui(size: 17))
                     .focused($omniboxFocused)
                     .disabled(isCloningRepository)
                     .onChange(of: query) { old, new in handleQueryChange(old: old, new: new) }
@@ -838,7 +838,7 @@ struct CommandView: View {
                     Text(hint).foregroundStyle(.tertiary)
                 }
             }
-            .font(.system(size: 10))
+            .font(PassFont.ui(size: 10))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16).padding(.vertical, 6)
 
@@ -869,8 +869,8 @@ struct CommandView: View {
         } label: {
             HStack(spacing: 4) {
                 Text(newSessionAgent.glyph)
-                Text(newSessionAgent.rawValue).font(.system(size: 12, weight: .medium))
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                Text(newSessionAgent.rawValue).font(PassFont.ui(size: 12, weight: .medium))
+                Image(systemName: "chevron.down").font(PassFont.ui(size: 8, weight: .semibold))
             }
             .foregroundStyle(Color.accentColor)
             .padding(.horizontal, 9).padding(.vertical, 4)
@@ -891,9 +891,9 @@ struct CommandView: View {
                 if githubBrowserState == .loading || githubBrowserState == .connecting {
                     ProgressView().controlSize(.mini)
                 }
-                Text(githubAccountLabel).font(.system(size: 11, weight: .semibold))
+                Text(githubAccountLabel).font(PassFont.ui(size: 11, weight: .semibold))
                 Image(systemName: githubBrowseMode ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(PassFont.ui(size: 8, weight: .bold))
             }
             .foregroundStyle(githubBrowseMode ? Color.accentColor : .secondary)
             .padding(.horizontal, 8).padding(.vertical, 4)
@@ -916,7 +916,7 @@ struct CommandView: View {
     private var jumpResults: some View {
         if jumpItems.isEmpty {
             Text(emptyResultsMessage)
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16).padding(.vertical, 10)
         } else {
@@ -1156,9 +1156,9 @@ struct CommandView: View {
     private func message(_ icon: String, _ title: String, _ subtitle: String) -> some View {
         VStack(spacing: 10) {
             Spacer()
-            Image(systemName: icon).font(.system(size: 30)).foregroundStyle(.secondary)
-            Text(title).font(.system(size: 15, weight: .medium))
-            Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Image(systemName: icon).font(PassFont.ui(size: 30)).foregroundStyle(.secondary)
+            Text(title).font(PassFont.ui(size: 15, weight: .medium))
+            Text(subtitle).font(PassFont.ui(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity).padding()
@@ -1226,7 +1226,7 @@ struct CommandView: View {
             if let live = displayedTerminal, let s = selectedSession {
                 HStack {
                     Text(s.displayName)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(PassFont.ui(size: 11, weight: .semibold))
                         .lineLimit(1)
                     ConfigURLAddButton(session: s)
                     ConfigURLChips(session: s)
@@ -1261,7 +1261,7 @@ struct CommandView: View {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("starting \(selectedSession?.agent.rawValue ?? "agent")…")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -1271,7 +1271,7 @@ struct CommandView: View {
             Text(readableMode
                  ? "select text · tools expand on click · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand"
                  : "drag select · ⌘C copy · ⌥drag tmux · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .font(PassFont.ui(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 8).padding(.vertical, 3)
         }
     }
@@ -1660,9 +1660,9 @@ struct CommandView: View {
         HStack(spacing: 10) {
             Image(systemName: "bolt.badge.a").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Agent hooks not installed").font(.system(size: 12, weight: .medium))
+                Text("Agent hooks not installed").font(PassFont.ui(size: 12, weight: .medium))
                 Text("Pass can't hear from Claude, Codex, Grok, or pi until you install them.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
             Button("Dismiss") { confirmHookDismissal = true }
@@ -1760,7 +1760,7 @@ struct FocusedSessionCard: View {
             Text(readableMode
                  ? "select text · tools expand on click · ⇧⇧ next waiting · ⌘P quick command · ⌘B browser · ⌘J/K sessions"
                  : "keys go to the session · ⇧⇧ next waiting · ⌘M checked · ⌘P quick command · ⌘B browser · ⌘J/K sessions · ⌘⏎ expand · ⌘⌫ kill")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .font(PassFont.ui(size: 10)).foregroundStyle(.tertiary)
                 .padding(.horizontal, 12).padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1781,7 +1781,7 @@ struct FocusedSessionCard: View {
         if session.launching {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("starting \(session.agent.rawValue)…").font(.system(size: 13)).foregroundStyle(.secondary)
+                Text("starting \(session.agent.rawValue)…").font(PassFont.ui(size: 13)).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 120, alignment: .leading)
@@ -1815,20 +1815,14 @@ struct FocusedSessionCard: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 6) {
-            EmojiBadgeButton(session: session, size: 17)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(session.displayName).font(.system(size: 14, weight: .semibold))
+                    Text(session.groupedDisplayName).font(PassFont.ui(size: 14, weight: .semibold))
                     ConfigURLAddButton(session: session)
                     ConfigURLChips(session: session)
                 }
                 HStack(spacing: 6) {
                     AgentTag(agent: session.agent)
-                    if session.customName != nil {
-                        // Aliased → keep the real repo · branch visible as context.
-                        Text(session.defaultDisplayName)
-                            .font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1)
-                    }
                 }
             }
             Spacer()
@@ -1843,20 +1837,20 @@ struct FocusedSessionCard: View {
             if let onDelete {
                 Button(action: onDelete) { Image(systemName: "trash") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .font(.system(size: 11)).help("Kill session (⌘⌫)")
+                    .font(PassFont.ui(size: 11)).help("Kill session (⌘⌫)")
             }
-            Text(RelativeTime.short(waitTime)).font(.system(size: 11)).foregroundStyle(.secondary)
+            Text(RelativeTime.short(waitTime)).font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder
     private var attentionBadge: some View {
         switch session.attention {
-        case .working: Text("● working").font(.system(size: 11)).foregroundStyle(.blue)
+        case .working: Text("● working").font(PassFont.ui(size: 11)).foregroundStyle(.blue)
         case .idle: EmptyView()
         case .pending(let a):
             Text(a.kind == .decision ? "⚡ needs decision" : a.kind == .input ? "✎ needs input" : "✓ finished")
-                .font(.system(size: 11)).foregroundStyle(.orange)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.orange)
         }
     }
 
@@ -1902,17 +1896,17 @@ struct SessionRenameButton: View {
             show = true
         } label: { Image(systemName: "pencil") }
         .buttonStyle(.plain).foregroundStyle(.secondary)
-        .font(.system(size: 11))
+        .font(PassFont.ui(size: 11))
         .help("Rename (display only)")
         .onChange(of: show) { _, visible in
             if visible { text = session.customName ?? "" }
         }
         .popover(isPresented: $show, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Display name").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                Text("Display name").font(PassFont.ui(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                 TextField(session.defaultDisplayName, text: $text)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13))
+                    .font(PassFont.ui(size: 13))
                     .frame(width: 230)
                     .onChange(of: text) { _, new in appModel.renameSession(session.name, to: new) } // live
                     .onSubmit { show = false }
@@ -1924,7 +1918,7 @@ struct SessionRenameButton: View {
                     }.controlSize(.small)
                     Spacer()
                     Text("pass에서만 표시 · 폴더/tmux 그대로")
-                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                        .font(PassFont.ui(size: 9)).foregroundStyle(.tertiary)
                 }
             }
             .padding(12)
@@ -1932,7 +1926,7 @@ struct SessionRenameButton: View {
     }
 }
 
-/// A collapsed session row — title + one-line summary + agent tag. Used both as an unfocused
+/// A collapsed session row — title, then summary with an agent tag at its right edge. Used both as an unfocused
 /// row in stack mode and as every row in compact-list mode (where `selected` highlights one).
 struct CompactSessionCard: View {
     let session: Session
@@ -1950,16 +1944,23 @@ struct CompactSessionCard: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            EmojiBadgeButton(session: session, size: 14)
-            // Focus-on-tap covers only the text/time area — the badge (a button) owns its own
-            // tap, so clicking the emoji opens the picker instead of also moving focus.
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.displayName).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                    secondLine
-                    AgentTag(agent: session.agent)
+                    HStack(spacing: 6) {
+                        Text(session.groupedDisplayName)
+                            .font(PassFont.ui(size: 12, weight: .medium)).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text(RelativeTime.short(waitTime))
+                            .font(PassFont.ui(size: 10)).foregroundStyle(urgencyColor)
+                    }
+                    HStack(spacing: 6) {
+                        secondLine
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        AgentTag(agent: session.agent)
+                            .fixedSize()
+                    }
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
                 // Keep the buttons mounted while the rename popover is open — otherwise moving
                 // the mouse onto the popover ends the hover and tears the popover down.
                 if hovering || renaming {
@@ -1968,14 +1969,13 @@ struct CompactSessionCard: View {
                     if let onDelete {
                         Button(action: onDelete) { Image(systemName: "trash") }
                             .buttonStyle(.plain).foregroundStyle(.secondary)
-                            .font(.system(size: 11)).help("Kill session (⌘⌫)")
+                            .font(PassFont.ui(size: 11)).help("Kill session (⌘⌫)")
                     }
                 }
                 if browserUnseen {
-                    Image(systemName: "globe").font(.system(size: 10)).foregroundStyle(.blue)
+                    Image(systemName: "globe").font(PassFont.ui(size: 10)).foregroundStyle(.blue)
                         .help("Agent opened a page — select the session to view it")
                 }
-                Text(RelativeTime.short(waitTime)).font(.system(size: 10)).foregroundStyle(urgencyColor)
             }
             .contentShape(Rectangle())
             .onTapGesture { onSelect() }
@@ -2001,25 +2001,25 @@ struct CompactSessionCard: View {
         if session.launching {
             HStack(spacing: 5) {
                 ProgressView().controlSize(.mini).scaleEffect(0.7)
-                Text("starting \(session.agent.rawValue)…").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text("starting \(session.agent.rawValue)…").font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
             }
         } else if case .pending(let a) = session.attention, !isGenericPreview(a.preview) {
-            Text(oneLine(a.preview)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            Text(oneLine(a.preview)).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         } else if case .pending = session.attention, let tail = session.paneTail, !tail.isEmpty {
             // Generic "needs your input" → show the actual question from the transcript.
-            Text(oneLine(tail)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            Text(oneLine(tail)).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         } else if let tail = session.liveTail, !tail.isEmpty {
             // Streaming right now — show what it's doing (dimmed + a spinner glyph).
             HStack(spacing: 4) {
-                Image(systemName: "ellipsis").font(.system(size: 9)).foregroundStyle(.blue)
-                Text(oneLine(tail)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                Image(systemName: "ellipsis").font(PassFont.ui(size: 9)).foregroundStyle(.blue)
+                Text(oneLine(tail)).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             }
         } else if let msg = session.lastMessage, !msg.isEmpty {
-            Text(oneLine(msg)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            Text(oneLine(msg)).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         } else if let tail = session.paneTail, !tail.isEmpty {
-            Text(oneLine(tail)).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            Text(oneLine(tail)).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
         } else {
-            Text("waiting for input").font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1)
+            Text("waiting for input").font(PassFont.ui(size: 10)).foregroundStyle(.tertiary).lineLimit(1)
         }
     }
 
@@ -2134,12 +2134,14 @@ private struct SessionProjectHeader: View {
     let collapsed: Bool
     let onSelectProject: (() -> Void)?
     let onToggle: () -> Void
+    @Environment(AppModel.self) private var appModel
+    @State private var editingIcon = false
 
     var body: some View {
         HStack(spacing: 4) {
             Button(action: onToggle) {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(PassFont.ui(size: 9, weight: .bold))
                     .frame(width: 12, height: 26)
                     .padding(.horizontal, 5)
                     .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
@@ -2150,13 +2152,13 @@ private struct SessionProjectHeader: View {
             Button(action: onSelectProject ?? onToggle) {
                 HStack(spacing: 7) {
                     if let emoji {
-                        Text(emoji).font(.system(size: 12))
+                        Text(emoji).font(PassFont.ui(size: 12))
                     } else {
                         Circle().fill(ProjectColor.color(for: root))
                             .frame(width: 8, height: 8)
                     }
                     Text(name)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(PassFont.ui(size: 11, weight: .semibold))
                         .lineLimit(1)
                     Text("\(sessionCount)")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -2164,7 +2166,7 @@ private struct SessionProjectHeader: View {
                     Spacer(minLength: 4)
                     if waitingCount > 0 {
                         Text("\(waitingCount) waiting")
-                            .font(.system(size: 10, weight: .medium))
+                            .font(PassFont.ui(size: 10, weight: .medium))
                             .foregroundStyle(.orange)
                     }
                 }
@@ -2176,6 +2178,17 @@ private struct SessionProjectHeader: View {
             .help(root)
             .accessibilityLabel("\(name), \(sessionCount) sessions, \(waitingCount) waiting")
             .accessibilityHint(onSelectProject == nil ? "Collapse or expand project" : "Open Pa, the project agent")
+            .contextMenu {
+                if onSelectProject != nil {
+                    Button("프로젝트 아이콘 변경…") { editingIcon = true }
+                }
+            }
+            .popover(isPresented: $editingIcon, arrowEdge: .bottom) {
+                EmojiPickerPopover(
+                    current: appModel.projects?.emoji(forRoot: root) ?? emoji ?? "",
+                    onPick: { appModel.projects?.setEmoji(rootPath: root, $0) },
+                    onClose: { editingIcon = false })
+            }
         }
         .padding(.top, 5)
     }
@@ -2223,26 +2236,39 @@ private struct RemoteSessionCard: View {
         return value.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
     }
 
+    private var groupedName: String {
+        guard session.displayName == session.defaultDisplayName else { return session.displayName }
+        let project = URL(fileURLWithPath: session.projectRoot).lastPathComponent
+        if session.displayName == project { return session.gitBranch ?? "session" }
+        let prefix = project + " · "
+        return session.displayName.hasPrefix(prefix)
+            ? String(session.displayName.dropFirst(prefix.count)) : session.displayName
+    }
+
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 8) {
                 Image(systemName: "network")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(PassFont.ui(size: 11, weight: .semibold))
                     .foregroundStyle(.orange)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text(session.displayName)
-                            .font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        Text(groupedName)
+                            .font(PassFont.ui(size: 12, weight: .medium)).lineLimit(1)
                         Text(connection.profile.desktopName.uppercased())
                             .font(.system(size: 7, weight: .black, design: .monospaced))
                             .foregroundStyle(.orange)
                             .padding(.horizontal, 4).padding(.vertical, 2)
                             .overlay(RoundedRectangle(cornerRadius: 2).stroke(.orange.opacity(0.45)))
+                        Spacer(minLength: 0)
+                        Text(RelativeTime.short(session.attention.receivedAt ?? session.lastActivity))
+                            .font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
                     }
-                    Text(preview)
-                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                     HStack(spacing: 6) {
+                        Text(preview)
+                            .font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         AgentTag(agent: session.agent.localKind)
                         Text("REMOTE")
                             .font(.system(size: 8, weight: .bold, design: .monospaced))
@@ -2252,10 +2278,8 @@ private struct RemoteSessionCard: View {
                 Spacer()
                 if needsUser {
                     Image(systemName: session.attention.status == .decision ? "bolt.fill" : "pencil.line")
-                        .font(.system(size: 10)).foregroundStyle(.orange)
+                        .font(PassFont.ui(size: 10)).foregroundStyle(.orange)
                 }
-                Text(RelativeTime.short(session.attention.receivedAt ?? session.lastActivity))
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
             }
             .contentShape(Rectangle())
         }
@@ -2324,7 +2348,7 @@ private struct RemoteSessionDetailView: View {
                 SessionMachineHeader.remote(connection)
                     .padding(.horizontal, -8)
                 Text(session?.displayName ?? sessionName)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(PassFont.ui(size: 18, weight: .semibold))
                 Text("\(session?.agent.rawValue.uppercased() ?? "AGENT") · \(session?.cwd ?? "")")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary).lineLimit(1)
@@ -2342,7 +2366,7 @@ private struct RemoteSessionDetailView: View {
         HStack(spacing: 8) {
             Image(systemName: "bolt.fill").foregroundStyle(.orange)
             Text(session.attention.preview ?? "This session needs a decision.")
-                .font(.system(size: 11)).lineLimit(2)
+                .font(PassFont.ui(size: 11)).lineLimit(2)
             Spacer()
             Button("Once") { connection.answerDecision(session: sessionName, decision: .allowOnce) }
             Button("Always") { connection.answerDecision(session: sessionName, decision: .allowAll) }
@@ -2362,7 +2386,7 @@ private struct RemoteSessionDetailView: View {
             Button("Send") { submit() }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            if let result { Text(result).font(.system(size: 9)).foregroundStyle(.secondary) }
+            if let result { Text(result).font(PassFont.ui(size: 9)).foregroundStyle(.secondary) }
         }
         .padding(12)
     }
@@ -2507,16 +2531,16 @@ struct PaletteRow: View {
     private func sessionRow(_ s: Session) -> some View {
         HStack(spacing: 10) {
             Circle().fill(ProjectColor.color(for: s.projectRoot)).frame(width: 8, height: 8)
-            Text(s.agent.glyph).font(.system(size: 13)).frame(width: 16).foregroundStyle(.secondary)
+            Text(s.agent.glyph).font(PassFont.ui(size: 13)).frame(width: 16).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
-                Text(s.displayName).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                Text(s.displayName).font(PassFont.ui(size: 13, weight: .medium)).lineLimit(1)
                 secondLine(s)
             }
             Spacer()
             if s.isAttached {
-                Image(systemName: "link").font(.system(size: 10)).foregroundStyle(.secondary)
+                Image(systemName: "link").font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
             }
-            Text(RelativeTime.short(waitTime(s))).font(.system(size: 11)).foregroundStyle(urgencyColor(s))
+            Text(RelativeTime.short(waitTime(s))).font(PassFont.ui(size: 11)).foregroundStyle(urgencyColor(s))
         }
     }
 
@@ -2524,19 +2548,19 @@ struct PaletteRow: View {
     private func secondLine(_ s: Session) -> some View {
         if case .pending(let a) = s.attention, !isGenericPreview(a.preview) {
             Text(oneLine(a.preview))
-                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(2)
         } else if case .pending = s.attention, let tail = s.paneTail, !tail.isEmpty {
             Text(oneLine(tail))
-                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(2)
         } else if let msg = s.lastMessage, !msg.isEmpty {
             Text(oneLine(msg))
-                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(2)
         } else if let tail = s.paneTail, !tail.isEmpty {
             Text(oneLine(tail))
-                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(2)
         } else {
             Text("waiting for input")
-                .font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+                .font(PassFont.ui(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
         }
     }
 
@@ -2560,43 +2584,43 @@ struct PaletteRow: View {
     private func projectRow(_ p: Project) -> some View {
         HStack(spacing: 10) {
             Circle().fill(ProjectColor.color(for: p.rootPath)).frame(width: 8, height: 8)
-            Image(systemName: "plus.circle").font(.system(size: 12)).frame(width: 16).foregroundStyle(.secondary)
-            Text(p.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+            Image(systemName: "plus.circle").font(PassFont.ui(size: 12)).frame(width: 16).foregroundStyle(.secondary)
+            Text(p.name).font(PassFont.ui(size: 13, weight: .medium)).lineLimit(1)
             Spacer()
-            Text("new session").font(.system(size: 11)).foregroundStyle(.tertiary)
+            Text("new session").font(PassFont.ui(size: 11)).foregroundStyle(.tertiary)
         }
     }
 
     private func projectAgentRow(_ p: Project) -> some View {
         HStack(spacing: 10) {
             Circle().fill(ProjectColor.color(for: p.rootPath)).frame(width: 8, height: 8)
-            Text("Pa").font(.system(size: 11, weight: .bold))
+            Text("Pa").font(PassFont.ui(size: 11, weight: .bold))
                 .frame(width: 16).foregroundStyle(.indigo)
-            Text(p.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+            Text(p.name).font(PassFont.ui(size: 13, weight: .medium)).lineLimit(1)
             Spacer()
-            Text("project").font(.system(size: 11)).foregroundStyle(.secondary)
+            Text("project").font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
         }
     }
 
     private func newProjectRow(_ name: String, parent: String?) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "folder.badge.plus")
-                .font(.system(size: 13, weight: .semibold))
+                .font(PassFont.ui(size: 13, weight: .semibold))
                 .frame(width: 24)
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Create “\(name)”")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(PassFont.ui(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text(parentPreview(name, parent: parent))
-                    .font(.system(size: 10))
+                    .font(PassFont.ui(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
             }
             Spacer()
             Text("new project")
-                .font(.system(size: 11, weight: .medium))
+                .font(PassFont.ui(size: 11, weight: .medium))
                 .foregroundStyle(Color.accentColor)
         }
     }
@@ -2607,12 +2631,12 @@ struct PaletteRow: View {
     ) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "arrow.down.circle.fill")
-                .font(.system(size: 15, weight: .semibold))
+                .font(PassFont.ui(size: 15, weight: .semibold))
                 .frame(width: 24)
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Clone \(repository.displayName)")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(PassFont.ui(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text(parentPreview(repository.name, parent: parent))
                     .font(.system(size: 10, design: .monospaced))
@@ -2622,7 +2646,7 @@ struct PaletteRow: View {
             }
             Spacer()
             Text("GitHub ↓")
-                .font(.system(size: 11, weight: .semibold))
+                .font(PassFont.ui(size: 11, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
         }
     }
@@ -2630,15 +2654,15 @@ struct PaletteRow: View {
     private func githubRemoteRepositoryRow(_ repository: GitHubRemoteRepository, parent: String?) -> some View {
         HStack(spacing: 10) {
             Image(systemName: repository.isPrivate ? "lock.fill" : "shippingbox.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .font(PassFont.ui(size: 12, weight: .semibold))
                 .frame(width: 24)
                 .foregroundStyle(repository.isPrivate ? Color.orange : Color.accentColor)
             VStack(alignment: .leading, spacing: 2) {
                 Text(repository.fullName)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(PassFont.ui(size: 13, weight: .semibold))
                     .lineLimit(1)
                 Text(repository.description ?? parentPreview(repository.name, parent: parent))
-                    .font(.system(size: 10))
+                    .font(PassFont.ui(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -2654,12 +2678,12 @@ struct PaletteRow: View {
     private func githubActionRow(_ action: GitHubPaletteAction) -> some View {
         HStack(spacing: 10) {
             Image(systemName: action == .installCLI ? "arrow.down.app.fill" : "person.crop.circle.badge.plus")
-                .font(.system(size: 14, weight: .semibold))
+                .font(PassFont.ui(size: 14, weight: .semibold))
                 .frame(width: 24)
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 2) {
-                Text(action.title).font(.system(size: 13, weight: .semibold))
-                Text(action.subtitle).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                Text(action.title).font(PassFont.ui(size: 13, weight: .semibold))
+                Text(action.subtitle).font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
             Text("ENTER")
@@ -2685,13 +2709,13 @@ struct PaletteRow: View {
     private func commandRow(_ c: ExtensionStore.PaletteCommand) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "puzzlepiece.extension")
-                .font(.system(size: 12)).frame(width: 16).foregroundStyle(.secondary)
+                .font(PassFont.ui(size: 12)).frame(width: 16).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {
-                Text(c.token).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                Text(c.command.title).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                Text(c.token).font(PassFont.ui(size: 13, weight: .medium)).lineLimit(1)
+                Text(c.command.title).font(PassFont.ui(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            Text(c.extensionName).font(.system(size: 11)).foregroundStyle(.tertiary)
+            Text(c.extensionName).font(PassFont.ui(size: 11)).foregroundStyle(.tertiary)
         }
     }
 }

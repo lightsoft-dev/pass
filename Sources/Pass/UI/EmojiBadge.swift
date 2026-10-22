@@ -46,7 +46,7 @@ struct EmojiBadgeButton: View {
 /// The SYSTEM emoji picker, not a bundled list: a tiny input field the macOS character
 /// palette types into. The palette (the ⌃⌘Space picker — full catalog, search, skin tones,
 /// recents) opens automatically; the first emoji that lands in the field is assigned.
-private struct EmojiPickerPopover: View {
+struct EmojiPickerPopover: View {
     let current: String
     let onPick: (String?) -> Void
     let onClose: () -> Void
@@ -58,7 +58,7 @@ private struct EmojiPickerPopover: View {
         VStack(spacing: 10) {
             TextField(current.isEmpty ? "🙂" : current, text: $input)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 20))
+                .font(PassFont.ui(size: 20))
                 .multilineTextAlignment(.center)
                 .frame(width: 110)
                 .focused($focused)
@@ -71,7 +71,7 @@ private struct EmojiPickerPopover: View {
                     }
                 }
             Text("pick from the system palette, or type one")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .font(PassFont.ui(size: 10)).foregroundStyle(.tertiary)
             HStack(spacing: 8) {
                 Button("Open palette") { openPalette() }.controlSize(.small)
                 Button("Remove", role: .destructive) { onPick(nil); onClose() }

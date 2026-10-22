@@ -6,6 +6,7 @@ struct ProjectAgentMessage: Identifiable {
     let id = UUID()
     let role: Role
     var text: String
+    var attachments: [URL] = []
 }
 
 /// Runs Pi as a headless conversation engine. Pass owns the chat UI; stdout is JSONL RPC,
@@ -41,6 +42,7 @@ final class ProjectAgentConversation {
     @ObservationIgnored private var started = false
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var activePrompt: String?
+    @ObservationIgnored private var activeImages: [[String: Any]] = []
     @ObservationIgnored private var toolStartedForPrompt = false
     @ObservationIgnored private var attemptedModels: Set<String> = []
     @ObservationIgnored private var blockedProviders: Set<String> = []
@@ -84,6 +86,7 @@ final class ProjectAgentConversation {
         availableModels = []
         assistantID = nil
         retryError = nil
+        activeImages = []
         waitingForModels = false
         waitingForAgentEnd = false
         settingModel = false
@@ -95,13 +98,30 @@ final class ProjectAgentConversation {
     }
 
     @discardableResult
-    func send(_ text: String) -> Bool {
+    func send(_ text: String, files: [URL] = []) -> Bool {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSendMessage, !body.isEmpty else { return false }
-        let entry = ProjectAgentMessage(role: .user, text: body)
+        guard canSendMessage, !body.isEmpty || !files.isEmpty else { return false }
+        let storedFiles: [URL]
+        let images: [[String: Any]]
+        do {
+            storedFiles = try ProjectAgentAttachments.copyFiles(files, for: projectRoot)
+            do { images = try ProjectAgentAttachments.imagePayloads(for: storedFiles) }
+            catch {
+                for file in storedFiles { try? FileManager.default.removeItem(at: file) }
+                throw error
+            }
+        } catch {
+            messages.append(ProjectAgentMessage(role: .error, text: error.localizedDescription))
+            status = "파일을 첨부할 수 없습니다"
+            return false
+        }
+        let prompt = ProjectAgentAttachments.prompt(body, files: storedFiles)
+        let entry = ProjectAgentMessage(role: .user, text: body.isEmpty ? "첨부 파일을 확인해 주세요." : body,
+                                        attachments: storedFiles)
         messages.append(entry)
         isResponding = true
-        activePrompt = body
+        activePrompt = prompt
+        activeImages = images
         toolStartedForPrompt = false
         attemptedModels = [modelLabel]
         blockedProviders = []
@@ -109,18 +129,21 @@ final class ProjectAgentConversation {
         waitingForAgentEnd = false
         modelError = false
         status = "생각하는 중…"
-        if !sendPrompt(body) {
+        if !sendPrompt(prompt, images: images) {
             messages.append(ProjectAgentMessage(role: .error, text: "메시지를 보낼 수 없습니다. 에이전트를 다시 열어 주세요."))
             isResponding = false
             activePrompt = nil
+            activeImages = []
             return false
         }
         return true
     }
 
-    private func sendPrompt(_ body: String) -> Bool {
-        write(["id": UUID().uuidString, "type": "prompt", "message": body,
-               "streamingBehavior": "followUp"])
+    private func sendPrompt(_ body: String, images: [[String: Any]]) -> Bool {
+        var command: [String: Any] = ["id": UUID().uuidString, "type": "prompt", "message": body,
+                                      "streamingBehavior": "followUp"]
+        if !images.isEmpty { command["images"] = images }
+        return write(command)
     }
 
     private var modelPreferenceKey: String {
@@ -228,6 +251,13 @@ final class ProjectAgentConversation {
             status = "Pi를 찾을 수 없습니다. Pi를 설치한 뒤 Pass를 다시 열어 주세요."
             return
         }
+        let memory: URL
+        do {
+            memory = try ProjectAgentWorkerMemory.ensureFile(for: projectRoot)
+        } catch {
+            status = "Pa 워커 메모리를 열 수 없습니다: \(error.localizedDescription)"
+            return
+        }
         let generation = self.generation
         let process = Process()
         let input = Pipe(), output = Pipe(), errorOutput = Pipe()
@@ -236,7 +266,8 @@ final class ProjectAgentConversation {
         process.arguments = ["--no-extensions", "--mode", "rpc", "--session-id",
                              ProjectAgentIdentity.rpcSessionID(for: projectRoot),
                              "--name", URL(fileURLWithPath: projectRoot).lastPathComponent + " · Pa",
-                             "--append-system-prompt", instructions]
+                             "--append-system-prompt", instructions,
+                             "--append-system-prompt", memory.path]
         if let selectedModel = preferredModelOnLaunch(),
            let slash = selectedModel.firstIndex(of: "/") {
             process.arguments! += ["--provider", String(selectedModel[..<slash]),
@@ -248,6 +279,7 @@ final class ProjectAgentConversation {
         var environment = ProcessInfo.processInfo.environment
         environment[PassConfig.sessionEnvVar] = ProjectAgentIdentity.sessionName(for: projectRoot)
         environment[PassConfig.cliEnvVar] = CLIInstaller.bundledBinaryPath ?? PassConfig.cliSymlinkPath
+        environment["PASS_PA_MEMORY"] = memory.path
         environment["PATH"] = URL(fileURLWithPath: pi).deletingLastPathComponent().path + ":" + (environment["PATH"] ?? "/usr/bin:/bin")
         process.environment = environment
         process.standardInput = input
@@ -341,7 +373,7 @@ final class ProjectAgentConversation {
                     pendingModel = nil
                     retryError = nil
                     status = "\(modelLabel)로 다시 시도하는 중…"
-                    if !sendPrompt(prompt) {
+                    if !sendPrompt(prompt, images: activeImages) {
                         finishModelFailure("Pa가 요청을 다시 보낼 수 없습니다.")
                     }
                 } else {
@@ -367,6 +399,7 @@ final class ProjectAgentConversation {
                     messages.append(ProjectAgentMessage(role: .error, text: Self.readableError(error)))
                     isResponding = false
                     activePrompt = nil
+                    activeImages = []
                     status = "응답 오류"
                 } else {
                     tryNextModel()
@@ -401,6 +434,7 @@ final class ProjectAgentConversation {
                         messages.append(ProjectAgentMessage(role: .error,
                                                             text: Self.readableError(error)))
                         activePrompt = nil
+                        activeImages = []
                         status = "응답 오류"
                     }
                 }
@@ -429,6 +463,7 @@ final class ProjectAgentConversation {
                     UserDefaults.standard.set(modelLabel, forKey: Self.lastWorkingModelKey)
                 }
                 activePrompt = nil
+                activeImages = []
                 isResponding = false
                 if !modelError { status = "준비됨" }
                 if restartWhenIdle { restartAfterPiUpdate() }
@@ -484,6 +519,7 @@ final class ProjectAgentConversation {
         pendingModel = nil
         settingModel = false
         activePrompt = nil
+        activeImages = []
         isResponding = false
         modelError = true
         status = "모델에 연결할 수 없습니다"
@@ -513,7 +549,10 @@ final class ProjectAgentConversation {
 
     private static func messageFromHistory(_ message: [String: Any]) -> ProjectAgentMessage? {
         guard let role = message["role"] as? String else { return nil }
-        if role == "user" { return ProjectAgentMessage(role: .user, text: textContent(message)) }
+        if role == "user" {
+            let display = ProjectAgentAttachments.displayContent(textContent(message))
+            return ProjectAgentMessage(role: .user, text: display.text, attachments: display.files)
+        }
         if role == "assistant" {
             let text = textContent(message)
             if !text.isEmpty { return ProjectAgentMessage(role: .assistant, text: text) }

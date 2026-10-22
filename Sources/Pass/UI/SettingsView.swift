@@ -186,16 +186,16 @@ struct SettingsView: View {
         Section("New projects") {
             HStack(spacing: 10) {
                 Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(PassFont.ui(size: 15, weight: .medium))
                     .foregroundStyle(.tint)
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Default location")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(PassFont.ui(size: 12, weight: .semibold))
                     Text(newProjectParentDirectory.isEmpty
                          ? "Choose where projects created with ⌘N should be saved"
                          : newProjectParentDirectory)
-                        .font(.system(size: 10))
+                        .font(PassFont.ui(size: 10))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.head)
@@ -293,7 +293,7 @@ struct SettingsView: View {
             }
             ForEach(store?.bundledInstallable ?? [], id: \.self) { id in
                 HStack {
-                    Text("\(id) (bundled example)").font(.system(size: 12))
+                    Text("\(id) (bundled example)").font(PassFont.ui(size: 12))
                     Spacer()
                     Button("Install") { try? store?.installBundled(id: id) }
                         .controlSize(.small)
@@ -323,7 +323,7 @@ struct SettingsView: View {
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(entry.ok ? Color.secondary : .orange)
                             if let detail = entry.detail {
-                                Text(detail).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(2)
+                                Text(detail).font(PassFont.ui(size: 9)).foregroundStyle(.tertiary).lineLimit(2)
                             }
                         }
                     }
@@ -426,7 +426,7 @@ struct SettingsView: View {
                                     Circle().fill(remoteControllerColor(connection.state))
                                         .frame(width: 6, height: 6)
                                     Text(connection.profile.desktopName)
-                                        .font(.system(size: 10, weight: .medium))
+                                        .font(PassFont.ui(size: 10, weight: .medium))
                                     Text("REMOTE")
                                         .font(.system(size: 8, weight: .bold, design: .monospaced))
                                         .foregroundStyle(.orange)
@@ -867,7 +867,7 @@ private struct SettingsSidebar: View {
                     selection = section
                 } label: {
                     Label(section.title, systemImage: section.systemImage)
-                        .font(.system(size: 13, weight: selection == section ? .semibold : .regular))
+                        .font(PassFont.ui(size: 13, weight: selection == section ? .semibold : .regular))
                         .foregroundStyle(selection == section ? Color.primary : .secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 10)
@@ -906,7 +906,7 @@ private struct SettingsHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(section.title)
-                .font(.system(size: 22, weight: .semibold))
+                .font(PassFont.ui(size: 22, weight: .semibold))
             Text(section.subtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -943,10 +943,10 @@ private struct TerminalThemePicker: View {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(theme.label)
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(PassFont.ui(size: 12, weight: .semibold))
                                     .foregroundStyle(.primary)
                                 Text(theme.detail)
-                                    .font(.system(size: 9))
+                                    .font(PassFont.ui(size: 9))
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
@@ -1013,7 +1013,7 @@ private struct AgentCommandRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(agent.glyph).frame(width: 16)
-            Text(agent.rawValue).font(.system(size: 12, weight: .medium)).frame(width: 56, alignment: .leading)
+            Text(agent.rawValue).font(PassFont.ui(size: 12, weight: .medium)).frame(width: 56, alignment: .leading)
             TextField(agent.defaultLaunchCommand ?? "command", text: $command)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12, design: .monospaced))
@@ -1042,13 +1042,13 @@ private struct ExtensionRow: View {
                 .foregroundStyle(.secondary).frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(ext.manifest.name).font(.system(size: 12, weight: .medium))
+                    Text(ext.manifest.name).font(PassFont.ui(size: 12, weight: .medium))
                     if let v = ext.manifest.version {
-                        Text(v).font(.system(size: 10)).foregroundStyle(.tertiary)
+                        Text(v).font(PassFont.ui(size: 10)).foregroundStyle(.tertiary)
                     }
                 }
                 if let desc = ext.manifest.description, !desc.isEmpty {
-                    Text(desc).font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(desc).font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
                 }
                 if let perms = ext.manifest.permissions, !perms.isEmpty {
                     Text("permissions: " + perms.sorted().joined(separator: ", "))
@@ -1056,13 +1056,13 @@ private struct ExtensionRow: View {
                 }
                 if appModel.extensions?.wasDisabledAfterChange(ext.id) == true {
                     Text("⚠ Files changed since approval — review and enable again")
-                        .font(.system(size: 10)).foregroundStyle(.orange)
+                        .font(PassFont.ui(size: 10)).foregroundStyle(.orange)
                 }
                 ForEach(ext.problems, id: \.self) { p in
-                    Text("⚠ \(p)").font(.system(size: 10)).foregroundStyle(.orange)
+                    Text("⚠ \(p)").font(PassFont.ui(size: 10)).foregroundStyle(.orange)
                 }
                 if let sharingMessage {
-                    Text(sharingMessage).font(.system(size: 10))
+                    Text(sharingMessage).font(PassFont.ui(size: 10))
                         .foregroundStyle(sharingMessage.hasPrefix("Updated") ? Color.secondary : Color.orange)
                 }
             }
@@ -1160,21 +1160,21 @@ private struct ProjectDirectoryRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "folder.fill")
-                .font(.system(size: 15, weight: .medium))
+                .font(PassFont.ui(size: 15, weight: .medium))
                 .foregroundStyle(.tint)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(displayName)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(PassFont.ui(size: 12, weight: .semibold))
                     Text(projectCountLabel)
-                        .font(.system(size: 9, weight: .medium))
+                        .font(PassFont.ui(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(.secondary.opacity(0.12), in: Capsule())
                 }
-                Text(path).font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(path).font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.head)
             }
             Spacer()

@@ -26,7 +26,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
             self?.dismissWindow()
         }
         onboardingModel = model
-        window.contentView = NSHostingView(rootView: OnboardingView(model: model))
+        window.contentView = NSHostingView(rootView: OnboardingView(model: model)
+            .font(PassFont.ui(size: 12)))
         self.window = window
     }
 

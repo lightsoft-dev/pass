@@ -32,12 +32,37 @@ enum ProjectAgentIdentity {
 
     static func launchCommand(for root: String) -> String? {
         guard let pi = Shell.resolveViaLoginShell("pi"),
-              let prompt = Bundle.main.path(forResource: "ProjectAgentInstructions", ofType: "md")
+              let prompt = Bundle.main.path(forResource: "ProjectAgentInstructions", ofType: "md"),
+              let memory = try? ProjectAgentWorkerMemory.ensureFile(for: root)
         else { return nil }
         let title = URL(fileURLWithPath: root).lastPathComponent + " · Pa"
-        return [Shell.singleQuoted(pi), "--no-extensions", "--session-id", piSessionID(for: root),
+        return ["PASS_PA_MEMORY=" + Shell.singleQuoted(memory.path),
+                Shell.singleQuoted(pi), "--no-extensions", "--session-id", piSessionID(for: root),
                 "--name", Shell.singleQuoted(title),
-                "--append-system-prompt", Shell.singleQuoted(prompt)].joined(separator: " ")
+                "--append-system-prompt", Shell.singleQuoted(prompt),
+                "--append-system-prompt", Shell.singleQuoted(memory.path)].joined(separator: " ")
+    }
+}
+
+enum ProjectAgentWorkerMemory {
+    static func ensureFile(for root: String, baseDirectory: URL? = nil,
+                           templateURL: URL? = nil) throws -> URL {
+        let support = baseDirectory ?? FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let directory = support.appendingPathComponent("Pass/Pa", isDirectory: true)
+            .appendingPathComponent(ProjectAgentIdentity.sessionName(for: root), isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("worker-memory.md")
+        if !FileManager.default.fileExists(atPath: file.path) {
+            guard let source = templateURL ?? Bundle.main.url(forResource: "PaWorkerMemory", withExtension: "md") else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            let contents = try String(contentsOf: source, encoding: .utf8)
+                .replacingOccurrences(of: "{{PROJECT_ROOT}}", with: root)
+                .replacingOccurrences(of: "{{MEMORY_PATH}}", with: file.path)
+            try contents.write(to: file, atomically: true, encoding: .utf8)
+        }
+        return file
     }
 }
 

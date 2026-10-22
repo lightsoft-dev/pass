@@ -360,7 +360,7 @@ private struct MiniTerminalContent: View {
                     .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(session.displayName)
-                        .font(.custom("New York", size: 12).weight(.semibold))
+                        .font(PassFont.ui(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Text(isPiLogin ? "모델 서비스를 선택해 로그인하세요" : session.cwd)
                         .font(.custom("SF Mono", size: 9))
@@ -428,6 +428,6 @@ struct MiniTerminalButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .font(.system(size: 11))
+        .font(PassFont.ui(size: 11))
     }
 }
