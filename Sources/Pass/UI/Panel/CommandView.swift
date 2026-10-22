@@ -28,6 +28,7 @@ struct CommandView: View {
     @State private var remoteSelection: RemoteSessionSelection?
     @FocusState private var omniboxFocused: Bool
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
+    @AppStorage("collapsedSessionProjectRoots") private var collapsedProjectRootsJSON = "[]"
     @AppStorage(TerminalTheme.storageKey) private var terminalThemeRaw = TerminalTheme.classic.rawValue
     @AppStorage("sessionDetailReadableMode") private var readableMode = false
     // Which agent ⌘N starts. Chosen from the dropdown in the new-session bar; remembered so the
@@ -95,15 +96,15 @@ struct CommandView: View {
 
     private var selectedSession: Session? {
         if let selectedSessionName,
-           let session = orderedSessions.first(where: { $0.name == selectedSessionName }) {
+           let session = visibleSessions.first(where: { $0.name == selectedSessionName }) {
             return session
         }
-        return orderedSessions.first
+        return visibleSessions.first
     }
 
     private var selectedIndex: Int? {
         guard let name = selectedSession?.name else { return nil }
-        return orderedSessions.firstIndex(where: { $0.name == name })
+        return visibleSessions.firstIndex(where: { $0.name == name })
     }
 
     /// The jump result list and its own selection — kept separate from the home cursor so
@@ -170,6 +171,74 @@ struct CommandView: View {
         let waiting = sessions.filter { $0.needsUser }.sorted { pendingSince($0) > pendingSince($1) }
         let rest = sessions.filter { !$0.needsUser }
         return waiting + rest
+    }
+
+    private var projectGroups: [SessionProjectGroup] {
+        SessionProjectGrouping.groups(orderedSessions, projects: projects)
+    }
+
+    private var collapsedProjectRoots: Set<String> {
+        guard let data = collapsedProjectRootsJSON.data(using: .utf8),
+              let roots = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(roots)
+    }
+
+    private var visibleSessions: [Session] {
+        let collapsed = collapsedProjectRoots
+        return projectGroups.filter { !collapsed.contains($0.id) }.flatMap(\.sessions)
+    }
+
+    private func expandProject(containing session: Session) {
+        var collapsed = collapsedProjectRoots
+        guard collapsed.remove(session.projectRoot) != nil else { return }
+        saveCollapsedProjects(collapsed)
+    }
+
+    private func toggleProject(_ root: String) {
+        var collapsed = collapsedProjectRoots
+        if collapsed.contains(root) {
+            collapsed.remove(root)
+        } else {
+            collapsed.insert(root)
+            if selectedSession?.projectRoot == root {
+                selectedSessionName = projectGroups
+                    .first { !collapsed.contains($0.id) }?.sessions.first?.name
+            }
+        }
+        saveCollapsedProjects(collapsed)
+    }
+
+    private func toggleRemoteProject(_ key: String) {
+        var collapsed = collapsedProjectRoots
+        if !collapsed.insert(key).inserted { collapsed.remove(key) }
+        saveCollapsedProjects(collapsed)
+    }
+
+    private func remoteProjectGroups(for connection: RemoteControllerConnection) -> [RemoteSessionProjectGroup] {
+        var groups: [RemoteSessionProjectGroup] = []
+        var indexByRoot: [String: Int] = [:]
+        for session in connection.sessions {
+            let root = session.projectRoot
+            if let index = indexByRoot[root] {
+                groups[index].sessions.append(session)
+            } else {
+                indexByRoot[root] = groups.count
+                let project = connection.projects.first { $0.rootPath == root }
+                groups.append(RemoteSessionProjectGroup(
+                    id: root,
+                    name: project?.name ?? URL(fileURLWithPath: root).lastPathComponent,
+                    emoji: project?.emoji,
+                    sessions: [session]
+                ))
+            }
+        }
+        return groups
+    }
+
+    private func saveCollapsedProjects(_ roots: Set<String>) {
+        guard let data = try? JSONEncoder().encode(roots.sorted()),
+              let json = String(data: data, encoding: .utf8) else { return }
+        collapsedProjectRootsJSON = json
     }
 
     private func pendingSince(_ s: Session) -> Date {
@@ -872,14 +941,24 @@ struct CommandView: View {
                         if !appModel.remoteControllers.connections.isEmpty, !orderedSessions.isEmpty {
                             SessionMachineHeader.local
                         }
-                        ForEach(orderedSessions) { s in
-                            CompactSessionCard(session: s, selected: s.name == selectedSession?.name,
-                                               onSelect: { selectedSessionName = s.name },
-                                               onMarkChecked: { appModel.markSessionChecked(s.name) },
-                                               onNewWorktree: { beginWorktreeSession(from: s) },
-                                               onDelete: { pendingKill = s },
-                                               browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
-                                .transition(rowTransition)
+                        ForEach(projectGroups) { group in
+                            SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
+                                                 sessionCount: group.sessions.count,
+                                                 waitingCount: group.waitingCount,
+                                                 collapsed: collapsedProjectRoots.contains(group.id)) {
+                                toggleProject(group.id)
+                            }
+                            if !collapsedProjectRoots.contains(group.id) {
+                                ForEach(group.sessions) { s in
+                                    CompactSessionCard(session: s, selected: s.name == selectedSession?.name,
+                                                       onSelect: { selectedSessionName = s.name },
+                                                       onMarkChecked: { appModel.markSessionChecked(s.name) },
+                                                       onNewWorktree: { beginWorktreeSession(from: s) },
+                                                       onDelete: { pendingKill = s },
+                                                       browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
+                                        .transition(rowTransition)
+                                }
+                            }
                         }
                         remoteSessionRows
                     }
@@ -901,24 +980,34 @@ struct CommandView: View {
                         if !appModel.remoteControllers.connections.isEmpty, !orderedSessions.isEmpty {
                             SessionMachineHeader.local
                         }
-                        ForEach(orderedSessions) { s in
-                            Group {
-                                if s.name == selectedSession?.name {
-                                    FocusedSessionCard(
-                                        session: s,
-                                        terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
-                                        onMarkChecked: { appModel.markSessionChecked(s.name) },
-                                        onNewWorktree: { beginWorktreeSession(from: s) },
-                                        onDelete: { pendingKill = s }
-                                    )
-                                } else {
-                                    CompactSessionCard(session: s, onSelect: { selectedSessionName = s.name },
-                                                       onMarkChecked: { appModel.markSessionChecked(s.name) },
-                                                       onNewWorktree: { beginWorktreeSession(from: s) },
-                                                       browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
+                        ForEach(projectGroups) { group in
+                            SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
+                                                 sessionCount: group.sessions.count,
+                                                 waitingCount: group.waitingCount,
+                                                 collapsed: collapsedProjectRoots.contains(group.id)) {
+                                toggleProject(group.id)
+                            }
+                            if !collapsedProjectRoots.contains(group.id) {
+                                ForEach(group.sessions) { s in
+                                    Group {
+                                        if s.name == selectedSession?.name {
+                                            FocusedSessionCard(
+                                                session: s,
+                                                terminal: (displayedTerminal?.sessionName == s.name) ? displayedTerminal : nil,
+                                                onMarkChecked: { appModel.markSessionChecked(s.name) },
+                                                onNewWorktree: { beginWorktreeSession(from: s) },
+                                                onDelete: { pendingKill = s }
+                                            )
+                                        } else {
+                                            CompactSessionCard(session: s, onSelect: { selectedSessionName = s.name },
+                                                               onMarkChecked: { appModel.markSessionChecked(s.name) },
+                                                               onNewWorktree: { beginWorktreeSession(from: s) },
+                                                               browserUnseen: appModel.browser?.hasUnseen(s.name) ?? false)
+                                        }
+                                    }
+                                    .transition(rowTransition)
                                 }
                             }
-                            .transition(rowTransition)
                         }
                         remoteSessionRows
                     }
@@ -941,11 +1030,22 @@ struct CommandView: View {
             if connection.sessions.isEmpty {
                 RemoteMachineEmptyRow(connection: connection)
             } else {
-                ForEach(connection.sessions, id: \.name) { session in
-                    RemoteSessionCard(connection: connection, session: session) {
-                        remoteSelection = .init(connection: connection, sessionName: session.name)
+                ForEach(remoteProjectGroups(for: connection)) { group in
+                    let collapseKey = "remote:\(connection.id):\(group.id)"
+                    SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
+                                         sessionCount: group.sessions.count,
+                                         waitingCount: group.waitingCount,
+                                         collapsed: collapsedProjectRoots.contains(collapseKey)) {
+                        toggleRemoteProject(collapseKey)
                     }
-                    .transition(rowTransition)
+                    if !collapsedProjectRoots.contains(collapseKey) {
+                        ForEach(group.sessions, id: \.name) { session in
+                            RemoteSessionCard(connection: connection, session: session) {
+                                remoteSelection = .init(connection: connection, sessionName: session.name)
+                            }
+                            .transition(rowTransition)
+                        }
+                    }
                 }
             }
         }
@@ -1126,9 +1226,9 @@ struct CommandView: View {
     /// session; in @ jump / > command mode, keep the filter text (plain arrows move the cursor).
     private func navMove(_ delta: Int) {
         if !isJumpMode && !isCommandMode { query = "" }
-        guard !orderedSessions.isEmpty else { return }
+        guard !visibleSessions.isEmpty else { return }
         let current = selectedIndex ?? 0
-        selectedSessionName = orderedSessions[max(0, min(orderedSessions.count - 1, current + delta))].name
+        selectedSessionName = visibleSessions[max(0, min(visibleSessions.count - 1, current + delta))].name
     }
 
     /// ⇧⇧: cycle to the next session that needs input (downward, wrapping). Returns false
@@ -1136,10 +1236,11 @@ struct CommandView: View {
     private func jumpToNextWaiting() -> Bool {
         let list = orderedSessions
         guard !list.isEmpty else { return false }
-        let current = selectedIndex ?? 0
+        let current = list.firstIndex(where: { $0.name == selectedSession?.name })
         for offset in 1...list.count {
-            let idx = (current + offset) % list.count
+            let idx = ((current ?? -1) + offset) % list.count
             if list[idx].needsUser, idx != current {
+                expandProject(containing: list[idx])
                 selectedSessionName = list[idx].name
                 return true
             }
@@ -1181,6 +1282,7 @@ struct CommandView: View {
 
     /// Leave the quick command and land on the chosen session — its live terminal takes over.
     private func jumpToSession(_ s: Session) {
+        expandProject(containing: s)
         selectedSessionName = s.name
         hideQuickCommand()
     }
@@ -1218,6 +1320,7 @@ struct CommandView: View {
     private func sendJumpMessage(to s: Session) {
         let text = (jumpMessage ?? "").trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { jumpToSession(s); return }
+        expandProject(containing: s)
         selectedSessionName = s.name
         hideQuickCommand()
         Task {
@@ -1453,11 +1556,15 @@ struct CommandView: View {
     }
 
     private func focusSoon(preselecting session: String? = nil, projectRoot: String? = nil) {
-        selectedSessionName = PanelSessionSelection.resolve(
+        let target = PanelSessionSelection.resolve(
             preselectedSession: session,
             projectRoot: projectRoot,
             orderedSessions: orderedSessions
         )
+        if let target, let match = orderedSessions.first(where: { $0.name == target }) {
+            expandProject(containing: match)
+        }
+        selectedSessionName = target
         syncTerminalTarget()
         refocusField()
     }
@@ -1896,6 +2003,65 @@ private struct SessionMachineHeader: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct SessionProjectHeader: View {
+    let root: String
+    let name: String
+    let emoji: String?
+    let sessionCount: Int
+    let waitingCount: Int
+    let collapsed: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 7) {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 12)
+                if let emoji {
+                    Text(emoji).font(.system(size: 12))
+                } else {
+                    Circle().fill(ProjectColor.color(for: root))
+                        .frame(width: 8, height: 8)
+                }
+                Text(name)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                Text("\(sessionCount)")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 4)
+                if waitingCount > 0 {
+                    Text("\(waitingCount) waiting")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(.horizontal, 9).padding(.vertical, 7)
+            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(root)
+        .accessibilityLabel("\(name), \(sessionCount) sessions, \(waitingCount) waiting")
+        .accessibilityHint(collapsed ? "Expand project" : "Collapse project")
+        .padding(.top, 5)
+    }
+}
+
+private struct RemoteSessionProjectGroup: Identifiable {
+    let id: String
+    let name: String
+    let emoji: String?
+    var sessions: [RemoteSessionDTO]
+
+    var waitingCount: Int {
+        sessions.filter {
+            $0.attention.status == .decision || $0.attention.status == .input || $0.unacknowledged
+        }.count
     }
 }
 
