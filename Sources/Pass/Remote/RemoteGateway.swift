@@ -356,6 +356,7 @@ enum RemoteGatewayState: Equatable, Sendable {
 
 typealias RemoteGatewayTransportFactory = @Sendable () -> any RemoteGatewayTransport
 typealias RemoteGatewayStateObserver = @MainActor @Sendable (RemoteGatewayState) -> Void
+typealias RemoteDesktopSignalObserver = @MainActor @Sendable (Data) -> Void
 
 struct RemoteMessageStreamSource: Equatable, Sendable {
     var session: String
@@ -385,6 +386,7 @@ actor RemoteGateway: RemoteSnapshotPublishing {
     private let handler: any RemoteCommandHandling
     private let transportFactory: RemoteGatewayTransportFactory
     private let stateObserver: RemoteGatewayStateObserver?
+    private let desktopSignalObserver: RemoteDesktopSignalObserver?
 
     private var lifecycleTask: Task<Void, Never>?
     private var transport: (any RemoteGatewayTransport)?
@@ -396,7 +398,8 @@ actor RemoteGateway: RemoteSnapshotPublishing {
         configuration: RemoteGatewayConfiguration,
         handler: any RemoteCommandHandling,
         transportFactory: RemoteGatewayTransportFactory? = nil,
-        stateObserver: RemoteGatewayStateObserver? = nil
+        stateObserver: RemoteGatewayStateObserver? = nil,
+        desktopSignalObserver: RemoteDesktopSignalObserver? = nil
     ) {
         self.configuration = configuration
         self.handler = handler
@@ -404,6 +407,7 @@ actor RemoteGateway: RemoteSnapshotPublishing {
             URLSessionRemoteTransport(configuration: configuration)
         }
         self.stateObserver = stateObserver
+        self.desktopSignalObserver = desktopSignalObserver
     }
 
     func start() {
@@ -475,6 +479,22 @@ actor RemoteGateway: RemoteSnapshotPublishing {
         }
     }
 
+    /// Screen signaling uses the authenticated desktop socket. Media and input travel over
+    /// the WebRTC peer connection; the relay never receives screen pixels or keystrokes.
+    func publishDesktopSignal(_ data: Data) async throws {
+        guard state == .connected, let transport else {
+            throw RemoteGatewayTransportError.notConnected
+        }
+        guard data.count <= Self.maximumOutboundFrameBytes,
+              let text = String(data: data, encoding: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String,
+              type.hasPrefix("desktop.screen.") else {
+            throw RemoteGatewayTransportError.nonUTF8Payload
+        }
+        try await transport.send(.text(text))
+    }
+
     private func runConnectionLoop() async {
         var attempt = 0
         var delay = max(0.05, configuration.minimumReconnectDelay)
@@ -540,6 +560,15 @@ actor RemoteGateway: RemoteSnapshotPublishing {
                 ))
             )
             try await send(failure, using: transport)
+            return
+        }
+
+        if let object = try? JSONSerialization.jsonObject(with: message.data) as? [String: Any],
+           let type = object["type"] as? String,
+           type.hasPrefix("desktop.screen.") {
+            if let desktopSignalObserver {
+                await desktopSignalObserver(message.data)
+            }
             return
         }
 

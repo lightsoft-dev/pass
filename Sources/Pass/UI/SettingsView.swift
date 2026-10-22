@@ -28,6 +28,7 @@ struct SettingsView: View {
     @AppStorage(RemoteGatewayPreferenceKey.enabled) private var remoteAccessEnabled = false
     @AppStorage(RemoteGatewayPreferenceKey.relayURL) private var remoteRelayURL = ""
     @AppStorage(RemoteGatewayPreferenceKey.authorizationToken) private var remoteAuthorizationToken = ""
+    @AppStorage(RemoteDesktopPreferenceKey.enabled) private var remoteDesktopSharingEnabled = false
     @AppStorage(ProjectCreationService.defaultParentDirectoryKey) private var newProjectParentDirectory = ""
 
     var body: some View {
@@ -399,6 +400,7 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
     private var mobileAccessSection: some View {
         Section(appModel.remotePublicAccessAvailable ? "Remote access" : "Remote access · developer preview") {
             if appModel.remotePublicAccessAvailable {
@@ -439,6 +441,11 @@ struct SettingsView: View {
                         appModel.refreshLinkedDesktops()
                     }
                     .disabled(remoteAccountBusy)
+                    if let webURL = RemotePublicConfiguration.loadRelayURL() {
+                        Button("Open remote desktop in browser", systemImage: "display") {
+                            NSWorkspace.shared.open(webURL)
+                        }
+                    }
                     Button("Create one-time pairing code", systemImage: "qrcode") {
                         appModel.createRemotePairing()
                     }
@@ -469,7 +476,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
-                Text("Macs signed in with the same account link automatically through device-scoped credentials. QR pairing remains available for companion devices. All secrets are stored in Keychain.")
+                Text("Macs signed in with the same account link automatically through device-scoped credentials. Projects stay on their own Mac, even when they share a name; the relay shares live session and project lists, not repository files. QR pairing remains available for companion devices. All secrets are stored in Keychain.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 Toggle("Enable outbound relay connection", isOn: $remoteAccessEnabled)
@@ -505,6 +512,38 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Text("The Mac only dials out; the local hook listener stays on 127.0.0.1. This development QR carries one reusable shared token. PASS_REMOTE_* environment values override these fields.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+
+        Section("Remote desktop") {
+            Toggle("Allow screen sharing requests", isOn: $remoteDesktopSharingEnabled)
+                .onChange(of: remoteDesktopSharingEnabled) { _, enabled in
+                    appModel.setRemoteDesktopSharingEnabled(enabled)
+                }
+            Text("A linked device can request this Mac's full display. You approve each request on this Mac and choose whether it may use the mouse and keyboard. Sharing turns off after 15 minutes.")
+                .font(.caption).foregroundStyle(.secondary)
+            LabeledContent("Status", value: appModel.remoteDesktopSessionStatus)
+            if let controllerID = appModel.remoteDesktopControllerID {
+                LabeledContent("Connected device") {
+                    Text(controllerID)
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                Button("Stop sharing", role: .destructive) {
+                    appModel.stopRemoteDesktopSharing()
+                }
+            }
+            if remoteDesktopSharingEnabled {
+                HStack {
+                    Button("Grant Screen Recording access") {
+                        appModel.requestRemoteDesktopScreenPermission()
+                    }
+                    Button("Grant Accessibility access") {
+                        appModel.requestRemoteDesktopControlPermission()
+                    }
+                }
+                Text("macOS permissions are required for screen capture and remote input. You may need to restart Pass after granting Screen Recording access.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

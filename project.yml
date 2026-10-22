@@ -23,6 +23,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: "2.9.5"
+  WebRTC:
+    url: https://github.com/stasel/WebRTC
+    exactVersion: "154.0.0"
 
 targets:
   Pass:
@@ -46,6 +49,7 @@ targets:
         product: FlyingSocks
       - package: SwiftTerm
       - package: Sparkle
+      - package: WebRTC
       - target: PassShare
       # Build ordering only — passcli is copied into Contents/MacOS by the script below
       # (a tool target can't be linked or framework-embedded).
@@ -64,6 +68,7 @@ targets:
         LSMinimumSystemVersion: "14.0"
         NSAppleEventsUsageDescription: "Pass opens tmux sessions in your terminal (Ghostty or Terminal) when you choose to attach."
         NSCameraUsageDescription: "Pass uses the trusted USB connection to display your iPhone or iPad screen in the attached device pane."
+        NSScreenCaptureUsageDescription: "Pass shares this Mac's display with a device you approve for remote viewing and control."
         CFBundleURLTypes:
           - CFBundleURLName: dev.lightsoft.pass.oauth
             CFBundleURLSchemes:

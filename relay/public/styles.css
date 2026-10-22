@@ -8,6 +8,7 @@
   --danger: #ff7c67;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; min-width: 320px; color: var(--ink); background: var(--night); font-family: "DM Mono", monospace; }
 body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .18; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E"); }
 button, input { font: inherit; }
@@ -49,6 +50,31 @@ h1 em { color: var(--acid); font-style: normal; }
 .danger-button { color: var(--danger); }
 .workbench { min-width: 0; padding: 42px 0 36px 42px; display: flex; flex-direction: column; }
 .workbench-head { display: flex; justify-content: space-between; align-items: end; padding-bottom: 26px; border-bottom: 1px solid var(--line); }
+.workbench-actions { display: flex; align-items: center; gap: 14px; }
+.screen-open-button { padding: 9px 12px; border: 1px solid var(--acid); color: var(--acid); background: transparent; font-size: 10px; white-space: nowrap; }
+.screen-open-button:hover:not(:disabled) { color: var(--night); background: var(--acid); }
+.remote-screen { display: flex; flex-direction: column; width: 100%; height: min(62vh, 620px); min-height: 320px; max-width: 100%; margin-top: 22px; overflow: hidden; resize: both; border: 1px solid var(--line); background: #080a08; }
+.screen-toolbar { min-height: 48px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--ash); border-bottom: 1px solid var(--line); }
+.screen-identity, .screen-actions { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.screen-identity { font-size: 10px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.screen-identity > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
+.screen-live-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.screen-live-dot.connected { background: var(--acid); box-shadow: 0 0 12px var(--acid); }
+.screen-mode { flex: none; padding: 4px 6px; border: 1px solid var(--line); color: var(--muted); font-size: 8px; letter-spacing: .08em; }
+.screen-mode.controlling { color: var(--acid); border-color: var(--acid); }
+.screen-tool-button { padding: 7px 9px; border: 1px solid var(--line); color: var(--ink); background: transparent; font-size: 9px; white-space: nowrap; }
+.screen-tool-button:hover:not(:disabled), .screen-tool-button:focus-visible { border-color: var(--acid); }
+.screen-tool-button:disabled { cursor: default; }
+.screen-disconnect { color: var(--danger); border-color: #65423d; }
+.screen-stage { position: relative; flex: 1; min-height: 180px; overflow: hidden; background: #050705; }
+.screen-stage video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.screen-input { position: absolute; inset: 0; cursor: default; outline: none; touch-action: none; }
+.screen-input:focus-within { box-shadow: inset 0 0 0 2px var(--acid); }
+.screen-keyboard { position: absolute; top: 50%; left: 50%; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; resize: none; pointer-events: none; }
+.screen-placeholder { position: absolute; inset: 0; display: grid; place-items: center; padding: 22px; color: var(--muted); font-size: 11px; text-align: center; pointer-events: none; }
+.screen-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 30px; padding: 7px 11px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; }
+.remote-screen:fullscreen { width: 100vw; height: 100vh; max-width: none; min-height: 0; margin: 0; border: 0; resize: none; }
+.remote-screen:fullscreen .screen-stage { min-height: 0; }
 h2 { font-size: clamp(28px, 4vw, 52px); line-height: .9; }.presence { color: var(--muted); }.presence.online { color: var(--acid); }
 .empty-state { flex: 1; display: grid; place-items: center; color: var(--muted); font-size: 12px; text-align: center; }
 .sessions { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); margin-top: 22px; }
@@ -57,3 +83,4 @@ h2 { font-size: clamp(28px, 4vw, 52px); line-height: .9; }.presence { color: var
 .composer { margin-top: auto; padding-top: 22px; }.composer label { display: block; color: var(--muted); font-size: 10px; margin-bottom: 9px; }.composer div { display: flex; }.composer input { flex: 1; min-width: 0; padding: 15px; border: 1px solid var(--line); color: var(--ink); outline: none; background: var(--ash); }.composer input:focus { border-color: var(--acid); }.composer button { border: 1px solid var(--acid); color: #161a0f; background: var(--acid); font-weight: 500; font-size: 11px; padding: 0 18px; }
 .notice { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); max-width: min(600px, calc(100vw - 40px)); margin: 0; color: var(--ink); background: #2d3328; padding: 10px 14px; font-size: 11px; line-height: 1.5; opacity: 0; pointer-events: none; transition: opacity .2s; }.notice.visible { opacity: 1; }.notice.error { color: #ffd0c8; }
 @media (max-width: 720px) { .shell { width: min(100vw - 28px, 1220px); }.masthead { height: 68px; }.welcome { min-height: calc(100vh - 68px); grid-template-columns: 1fr; gap: 22px; }.welcome::after { font-size: 36px; }.console { display: block; }.rail { min-height: auto; border: 0; padding: 22px 0; }.account-actions { margin-top: 16px; grid-template-columns: 1fr 1fr; }.desktop-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }.workbench { min-height: 60vh; padding: 22px 0; border-top: 1px solid var(--line); }.workbench-head { padding-bottom: 20px; }.composer { margin-top: 22px; } }
+@media (max-width: 720px) { .workbench-actions { align-items: end; flex-direction: column; gap: 8px; }.remote-screen { height: min(62vh, 480px); min-height: 280px; resize: vertical; }.screen-toolbar { align-items: start; flex-direction: column; }.screen-actions { width: 100%; justify-content: flex-end; }.screen-foot > span:last-child { display: none; } }

@@ -149,7 +149,11 @@ final class AppModel {
     private(set) var remoteAccountSignInAvailable = false
     private(set) var remoteAccountState: RemoteAccountState = .unavailable
     private(set) var remotePublicPairingPayload: String?
+    private(set) var remoteDesktopSessionStatus = "Off"
+    private(set) var remoteDesktopControllerID: String?
     @ObservationIgnored private var remoteGateway: RemoteGateway?
+    @ObservationIgnored private var remoteDesktopHost: RemoteDesktopHost?
+    @ObservationIgnored private var remoteDesktopSession: RemoteDesktopSessionCoordinator?
     @ObservationIgnored private var remoteSnapshotHook: RemoteSnapshotPublicationHook?
     @ObservationIgnored private var remoteTerminalCoordinator: RemoteTerminalCoordinator?
     @ObservationIgnored private var remoteGatewayGeneration = 0
@@ -157,6 +161,7 @@ final class AppModel {
     @ObservationIgnored private var remoteCredentialRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var remotePairingExpiryTask: Task<Void, Never>?
     @ObservationIgnored private var remoteControllerSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var remoteControllerDiscoveryError: String?
     @ObservationIgnored private var projectSyncLoopTask: Task<Void, Never>?
     @ObservationIgnored private var projectSyncTask: Task<Void, Never>?
     @ObservationIgnored private var projectSyncDebounceTask: Task<Void, Never>?
@@ -173,6 +178,13 @@ final class AppModel {
 
     /// Build the stores and start the reconcile loop. Called once from AppDelegate.
     func configure() {
+        let screenHost = RemoteDesktopHost()
+        remoteDesktopHost = screenHost
+        let screenEnabled = UserDefaults.standard.bool(forKey: RemoteDesktopPreferenceKey.enabled)
+        Task { [weak self] in
+            await screenHost.setEnabled(screenEnabled)
+            self?.remoteDesktopSessionStatus = screenEnabled ? "Ready" : "Off"
+        }
         remoteAccountService = RemoteAccountService()
         remoteControllers = RemoteControllerStore()
         extensionMarketplace = ExtensionMarketplaceService(accountService: remoteAccountService)
@@ -235,24 +247,42 @@ final class AppModel {
     /// Re-read the feature configuration and replace the outbound relay connection. Settings
     /// calls this explicitly after persisting edits so typing in a URL never churns sockets.
     func reconfigureRemoteGateway() {
+        let teardown = stopRemoteGateway()
+        remoteGatewayRestartTask = Task { [weak self] in
+            await teardown.value
+            guard !Task.isCancelled, let self else { return }
+            self.installRemoteGateway()
+        }
+    }
+
+    /// Detach the live socket and screen session before any account credential work. The
+    /// returned task completes local capture and transport teardown without reconnecting.
+    @discardableResult
+    private func stopRemoteGateway() -> Task<Void, Never> {
         let previous = remoteGateway
         let previousTerminalCoordinator = remoteTerminalCoordinator
+        let previousDesktopSession = remoteDesktopSession
+        let previousRestartTask = remoteGatewayRestartTask
         remoteGatewayGeneration &+= 1
-        remoteGatewayRestartTask?.cancel()
+        previousRestartTask?.cancel()
+        remoteGatewayRestartTask = nil
         sessions?.stopRemoteStreaming()
         sessions?.onRemoteStateChanged = nil
         sessions?.onRemoteStreamChanged = nil
         projects?.onRemoteStateChanged = nil
         remoteGateway = nil
+        remoteDesktopSession = nil
         remoteSnapshotHook = nil
         remoteTerminalCoordinator = nil
         remoteGatewayState = .stopped
 
-        remoteGatewayRestartTask = Task { [weak self] in
+        return Task {
+            // A previous reconfigure may already have detached the live gateway but still
+            // be tearing it down. Drain that work before treating sign-out as complete.
+            await previousRestartTask?.value
+            await previousDesktopSession?.stop(notifyRelay: false)
             await previousTerminalCoordinator?.stop()
             await previous?.stop()
-            guard !Task.isCancelled, let self else { return }
-            self.installRemoteGateway()
         }
     }
 
@@ -268,10 +298,31 @@ final class AppModel {
             stateObserver: { [weak self] state in
                 guard let self, self.remoteGatewayGeneration == generation else { return }
                 self.remoteGatewayState = state
+                if state != .connected {
+                    let session = self.remoteDesktopSession
+                    Task { await session?.stop(notifyRelay: false) }
+                }
+            },
+            desktopSignalObserver: { [weak self] data in
+                guard let self, self.remoteGatewayGeneration == generation else { return }
+                self.remoteDesktopSession?.receive(data)
             }
         )
         let snapshotHook = RemoteSnapshotPublicationHook(publisher: gateway)
         remoteGateway = gateway
+        if let screenHost = remoteDesktopHost {
+            remoteDesktopSession = RemoteDesktopSessionCoordinator(
+                host: screenHost,
+                send: { [weak gateway] data in
+                    guard let gateway else { throw RemoteGatewayTransportError.notConnected }
+                    try await gateway.publishDesktopSignal(data)
+                },
+                statusChanged: { [weak self] status, controllerID in
+                    self?.remoteDesktopSessionStatus = status
+                    self?.remoteDesktopControllerID = controllerID
+                }
+            )
+        }
         remoteSnapshotHook = snapshotHook
         remoteTerminalCoordinator = RemoteTerminalCoordinator { [weak gateway] snapshot in
             await gateway?.publishTerminalSnapshot(snapshot)
@@ -291,6 +342,33 @@ final class AppModel {
             sessions?.stopRemoteStreaming()
         }
         Task { await gateway.start() }
+    }
+
+    func setRemoteDesktopSharingEnabled(_ enabled: Bool) {
+        Task { [weak self] in
+            guard let self, let host = self.remoteDesktopHost else { return }
+            if !enabled { await self.remoteDesktopSession?.stop(notifyRelay: true) }
+            await host.setEnabled(enabled)
+            self.remoteDesktopSessionStatus = enabled ? "Ready" : "Off"
+            if !enabled { self.remoteDesktopControllerID = nil }
+        }
+    }
+
+    func requestRemoteDesktopScreenPermission() {
+        guard let remoteDesktopHost else { return }
+        _ = remoteDesktopHost.requestScreenRecordingPermission()
+        remoteDesktopSessionStatus = remoteDesktopHost.hasScreenRecordingAccess
+            ? "Ready" : "Screen Recording permission is required"
+    }
+
+    func requestRemoteDesktopControlPermission() {
+        guard let remoteDesktopHost else { return }
+        _ = remoteDesktopHost.requestAccessibilityPermission()
+    }
+
+    func stopRemoteDesktopSharing() {
+        let session = remoteDesktopSession
+        Task { await session?.stop(notifyRelay: true) }
     }
 
     func openRemoteTerminal(
@@ -371,25 +449,35 @@ final class AppModel {
     }
 
     func signOutFromRemoteAccess() {
+        // Block input and disconnect the relay locally before a potentially slow revoke call.
+        let gatewayTeardown = stopRemoteGateway()
+        remoteControllers.stop()
+        // Stop discovery before revoking credentials. Wait for the cancelled request to finish
+        // before clearing Keychain so an in-flight response cannot restore controller profiles.
+        let controllerSyncTask = remoteControllerSyncTask
+        remoteControllerSyncTask?.cancel()
+        remoteControllerSyncTask = nil
+        let credentialRefreshTask = remoteCredentialRefreshTask
+        remoteCredentialRefreshTask?.cancel()
+        remoteCredentialRefreshTask = nil
+        remoteControllerDiscoveryError = nil
         remoteAccountState = .signingOut
         Task { [weak self] in
             guard let self else { return }
+            await gatewayTeardown.value
+            if let controllerSyncTask { await controllerSyncTask.value }
+            if let credentialRefreshTask { await credentialRefreshTask.value }
             do {
                 if let configuration = RemotePublicConfiguration.load() {
                     try await self.remoteAccountService.revokeDesktop(configuration: configuration)
                 } else {
                     try self.remoteAccountService.clearLocalCredentials()
                 }
-                self.remoteCredentialRefreshTask?.cancel()
-                self.remoteCredentialRefreshTask = nil
                 self.remotePairingExpiryTask?.cancel()
                 self.remotePairingExpiryTask = nil
                 self.remotePublicPairingPayload = nil
                 self.remoteUsesPublicCredentials = false
                 self.remoteAccountState = RemotePublicConfiguration.load() == nil ? .unavailable : .signedOut
-                self.remoteControllerSyncTask?.cancel()
-                self.remoteControllerSyncTask = nil
-                self.remoteControllers.stop()
                 self.reconfigureRemoteGateway()
             } catch {
                 self.remoteAccountState = .failed(error.localizedDescription)
@@ -406,32 +494,68 @@ final class AppModel {
         remoteAccountState = hasCredentials ? .registered : (hasConfiguration ? .signedOut : .unavailable)
     }
 
-    /// Loads cached controller credentials immediately, then reconciles newly registered account
-    /// desktops in the background. QR-paired devices continue to work independently.
+    /// Loads cached controller credentials immediately, then discovers newly registered account
+    /// desktops now and once a minute. QR-paired devices continue to work independently.
     private func installRemoteControllers(syncAccount: Bool) {
+        let previousSyncTask = remoteControllerSyncTask
         let cached = (try? RemoteCredentialStore.loadControllerProfiles()) ?? []
-        remoteControllers.install(profiles: cached)
+        if previousSyncTask == nil, remoteControllers.connections.map(\.profile) != cached {
+            remoteControllers.install(profiles: cached)
+        }
         guard syncAccount,
               let configuration = RemotePublicConfiguration.load(),
               let registration = try? RemoteCredentialStore.loadDesktopRegistration(),
-              (try? RemoteCredentialStore.loadUserSession()) != nil else { return }
+              (try? RemoteCredentialStore.loadUserSession()) != nil else {
+            previousSyncTask?.cancel()
+            // Preserve the drain handle for sign-out even when credentials disappear during a
+            // pending request.
+            if let previousSyncTask {
+                remoteControllerSyncTask = Task { await previousSyncTask.value }
+            }
+            return
+        }
 
-        remoteControllerSyncTask?.cancel()
+        previousSyncTask?.cancel()
         remoteControllerSyncTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let profiles = try await self.remoteAccountService.syncControllerProfiles(
-                    configuration: configuration,
-                    localDesktopID: registration.id
-                )
-                guard !Task.isCancelled else { return }
-                self.remoteControllers.install(profiles: profiles)
-            } catch is CancellationError {
-                return
-            } catch {
-                // The local host connection remains useful even when discovery is temporarily
-                // unavailable. Surface the problem only when no cached remote can be used.
-                if cached.isEmpty { self.remoteAccountState = .failed(error.localizedDescription) }
+            // Account sync writes profiles to Keychain before returning. Serialize replacements
+            // so repeated Refresh actions cannot create duplicate devices or restore stale data.
+            if let previousSyncTask { await previousSyncTask.value }
+            guard !Task.isCancelled else { return }
+            var isFirstAttempt = true
+            while !Task.isCancelled {
+                do {
+                    // Keep the model alive only for the request, not through the idle interval.
+                    guard let self else { return }
+                    do {
+                        let profiles = try await self.remoteAccountService.syncControllerProfiles(
+                            configuration: configuration,
+                            localDesktopID: registration.id
+                        )
+                        guard !Task.isCancelled else { return }
+                        if self.remoteControllers.connections.map(\.profile) != profiles {
+                            self.remoteControllers.install(profiles: profiles)
+                        }
+                        if let reportedDiscoveryError = self.remoteControllerDiscoveryError,
+                           case .failed(let message) = self.remoteAccountState,
+                           message == reportedDiscoveryError {
+                            self.remoteAccountState = .registered
+                        }
+                        self.remoteControllerDiscoveryError = nil
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        guard !Task.isCancelled else { return }
+                        // Keep existing connections during a relay outage. The initial discovery
+                        // error is useful when there is no cached remote to show.
+                        if isFirstAttempt, cached.isEmpty {
+                            self.remoteControllerDiscoveryError = error.localizedDescription
+                            self.remoteAccountState = .failed(error.localizedDescription)
+                        }
+                    }
+                }
+                isFirstAttempt = false
+                do { try await Task.sleep(for: .seconds(60)) }
+                catch { return }
             }
         }
     }
@@ -453,6 +577,7 @@ final class AppModel {
             guard !Task.isCancelled, let self else { return }
             do {
                 _ = try await self.remoteAccountService.refreshDesktopRegistrationIfNeeded()
+                guard !Task.isCancelled, self.remoteAccountState != .signingOut else { return }
                 self.remoteCredentialRefreshTask = nil
                 self.reconfigureRemoteGateway()
             } catch {

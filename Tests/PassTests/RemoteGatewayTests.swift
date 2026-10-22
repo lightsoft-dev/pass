@@ -192,6 +192,39 @@ final class RemoteGatewayTests: XCTestCase {
         XCTAssertEqual(failure.code, "frame_too_large")
     }
 
+    func testScreenSignalingUsesAuthenticatedSocketWithoutCommandResponseLoop() async throws {
+        let requested = Data(#"{"version":1,"id":"evt_request","type":"desktop.screen.requested","sentAt":"2026-10-23T00:00:00Z","payload":{"sessionId":"screen_test","deviceId":"dev_test","requestedControl":true,"expiresAt":"2026-10-23T00:01:00Z"}}"#.utf8)
+        let approved = Data(#"{"version":1,"id":"evt_approve","type":"desktop.screen.approve","sentAt":"2026-10-23T00:00:01Z","payload":{"sessionId":"screen_test","allowControl":true}}"#.utf8)
+        let received = expectation(description: "Screen signal reaches host coordinator")
+        let transport = ScriptedRemoteTransport(incoming: [.data(requested)])
+        let gateway = RemoteGateway(
+            configuration: .init(
+                isEnabled: true,
+                relayURL: URL(string: "ws://127.0.0.1:9001/connect")!,
+                desktopID: "desk_screen",
+                minimumReconnectDelay: 10,
+                maximumReconnectDelay: 10
+            ),
+            handler: GatewayStubHandler(),
+            transportFactory: { transport },
+            desktopSignalObserver: { data in
+                XCTAssertEqual(data, requested)
+                received.fulfill()
+            }
+        )
+
+        await gateway.start()
+        await fulfillment(of: [received], timeout: 2)
+        try await gateway.publishDesktopSignal(approved)
+        let messages = await transport.sentMessages
+        await gateway.stop()
+
+        XCTAssertEqual(messages.count, 2)
+        let snapshot = try RemoteWireCodec.decodeEvent(from: messages[0].data)
+        XCTAssertEqual(snapshot.type, RemoteEventType.sessionSnapshot)
+        XCTAssertEqual(messages[1].data, approved)
+    }
+
     func testGatewayPublishesOrderedSelfContainedMessageStreamEvents() async throws {
         let transport = ScriptedRemoteTransport(incoming: [])
         let gateway = RemoteGateway(

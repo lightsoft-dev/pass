@@ -37,6 +37,9 @@ APPLE_PRIVATE_KEY=<contents-of-the-Apple-p8-private-key>
 APPLE_TOKEN_ENCRYPTION_KEY=<independent-32-byte-base64url-key>
 # Required only when serving the included browser console.
 GOOGLE_CLIENT_ID=<google-oauth-web-client-id>
+# Recommended for remote desktop across different networks; configure both together.
+TURN_KEY_ID=<cloudflare-turn-key-id>
+TURN_KEY_API_TOKEN=<cloudflare-turn-api-token>
 # Optional. Feedback is accepted into D1 even when Notion forwarding is disabled.
 NOTION_API_TOKEN=<notion-internal-integration-token>
 NOTION_FEEDBACK_DATA_SOURCE_ID=<feedback-data-source-id>
@@ -64,6 +67,9 @@ npx wrangler secret put RELAY_AUTH_TOKEN
 npx wrangler secret put DEVICE_CREDENTIAL_PEPPER
 npx wrangler secret put APPLE_PRIVATE_KEY
 npx wrangler secret put APPLE_TOKEN_ENCRYPTION_KEY
+# Remote desktop TURN; set both for reliable connections across NATs.
+npx wrangler secret put TURN_KEY_ID
+npx wrangler secret put TURN_KEY_API_TOKEN
 # Optional feedback forwarding; set or remove these as a pair.
 npx wrangler secret put NOTION_API_TOKEN
 npx wrangler secret put NOTION_FEEDBACK_DATA_SOURCE_ID
@@ -120,6 +126,28 @@ Browser WebSockets carry their temporary device access credential in a `pass.aut
 `Sec-WebSocket-Protocol` value because browsers cannot set `Authorization` on a WebSocket
 handshake. The relay accepts only issued `pass_at_…` credentials through that path; legacy shared
 development credentials are never accepted there.
+
+### Remote desktop from the browser
+
+The selected Mac can share its screen with the browser console. The Mac owner must enable remote
+desktop in Pass and approve each short-lived viewing or control request on that Mac. macOS Screen
+Recording permission is required to show the screen; Accessibility permission is required before
+the Mac accepts remote keyboard or pointer input. A controller can request control only with the
+`screen:control` scope, and the host can still approve viewing without control. The viewer shows
+the active mode, offers a resizable or full-screen canvas, and can disconnect at any time.
+
+Set `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` as Workers Secrets in each deployed environment. After
+host approval, the Worker uses them to issue separate short-lived WebRTC ICE credentials to the
+browser and Mac. If both values are absent, signaling still works with a STUN-only fallback, but
+screen connections may fail across restrictive NATs or firewalls. A partial or invalid TURN
+configuration fails the screen request rather than silently falling back. Keep the TURN API token
+out of source control and the browser configuration endpoint.
+
+The Durable Object relays only the approval and WebRTC signaling messages, plus an expiring lease;
+it does not store screen frames or input. Video and approved input travel over WebRTC directly
+between peers when possible, or through TURN when needed. TURN forwards that encrypted traffic,
+and Pass does not create or store a recording. The browser closes its screen session when its
+relay connection closes or the lease expires.
 
 Native iOS Sign in with Apple uses the same account API contract: send the Apple identity token as
 `Authorization: Bearer <identity-token>` to `GET /v2/me` and subsequent account endpoints. The
@@ -356,9 +384,10 @@ Relay-only mobile envelopes keep the same top-level shape:
 - `relay.ping` / `relay.pong` provide an application-level mobile heartbeat.
 
 Relay failures use the same `error` event DTO as the desktop and set `replyTo` when a command id is
-known. The desktop socket receives no relay control, presence, receipt, or error frames; its inbound
-data plane contains only original mobile command envelopes. This prevents the Swift gateway from
-mistaking relay control messages for remote commands.
+known. The desktop socket receives no general relay control, presence, receipt, or error frames.
+Its inbound data plane contains original mobile commands and the targeted `desktop.screen.*`
+signaling events for an approved screen lease. The Swift gateway routes screen signaling to its
+screen coordinator before decoding ordinary remote commands.
 
 ## Delivery and storage behavior
 
@@ -395,8 +424,8 @@ should normally complete Sign in with Apple and `POST /v2/apple/authorization` b
 deletion, or offer the explicit manual fallback described below. If Apple revocation succeeds but
 local cleanup temporarily fails, retrying `DELETE /v2/account`
 continues cleanup without a second Apple revoke. Before unrestricted public launch, add abuse
-alerts and a separate production D1 database and Worker environment. TURN/SFU credentials must
-also be short-lived and scoped when voice ships.
+alerts and a separate production D1 database and Worker environment. Remote desktop TURN
+credentials are short-lived and issued only after the host approves a session.
 
 When automatic Apple revocation cannot run, the deletion error includes
 `manualRevocationAvailable: true`. Only after explicit user confirmation may a client retry with

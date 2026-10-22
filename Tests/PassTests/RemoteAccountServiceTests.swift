@@ -161,6 +161,43 @@ final class RemoteAccountServiceTests: XCTestCase {
         )
     }
 
+    #if !SWIFT_PACKAGE
+    @MainActor
+    func testRemoteProjectPaletteIdentityKeepsSameNamedProjectsOnDifferentMacsDistinct() throws {
+        let credentials = RemoteCredentialPair(
+            accessToken: "test-access",
+            accessExpiresAt: "2027-01-01T00:00:00.000Z",
+            refreshToken: "test-refresh",
+            refreshExpiresAt: "2027-02-01T00:00:00.000Z"
+        )
+        let relayURL = try XCTUnwrap(URL(string: "https://relay.example.com"))
+        func connection(_ desktopID: String) -> RemoteControllerConnection {
+            RemoteControllerConnection(profile: .init(
+                desktopID: desktopID,
+                desktopName: "MacBook Pro",
+                deviceID: "controller",
+                relayURL: relayURL,
+                credentials: credentials
+            )) { _ in }
+        }
+
+        let first = connection("desk_first")
+        let second = connection("desk_second")
+        let sharedPath = RemoteProjectDTO(rootPath: "/projects/app", name: "app")
+        let otherPath = RemoteProjectDTO(rootPath: "/work/app", name: "app")
+
+        XCTAssertEqual(PaletteItem.remoteProject(first, sharedPath).id, "rp:desk_first:/projects/app")
+        XCTAssertNotEqual(
+            PaletteItem.remoteProject(first, sharedPath).id,
+            PaletteItem.remoteProject(second, sharedPath).id
+        )
+        XCTAssertNotEqual(
+            PaletteItem.remoteProject(first, sharedPath).id,
+            PaletteItem.remoteProject(first, otherPath).id
+        )
+    }
+    #endif
+
     private func makeDefaults() -> (UserDefaults, String) {
         let suite = "RemoteAccountServiceTests.\(UUID().uuidString)"
         return (UserDefaults(suiteName: suite)!, suite)
