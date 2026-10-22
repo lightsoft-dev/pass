@@ -102,7 +102,7 @@ struct ConversationPaneView: View {
 
     private var emptyTitle: String {
         if session.isProjectAgent {
-            return hasCaptured ? "프로젝트 에이전트에게 요청하세요" : "에이전트 대화를 여는 중…"
+            return hasCaptured ? "Pa에게 요청하세요" : "Pa 대화를 여는 중…"
         }
         return hasCaptured ? "No conversation detected" : "Reading the session…"
     }

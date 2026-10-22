@@ -1012,7 +1012,7 @@ struct CommandView: View {
                 return "no matches — ⏎ sends this to \(s.displayName)"
             }
             if case .command(let c)? = jumpSelectedItem { return commandHint(c) }
-            if case .projectAgent(let p)? = jumpSelectedItem { return "⏎ open \(p.name)'s project agent" }
+            if case .projectAgent(let p)? = jumpSelectedItem { return "⏎ open \(p.name)'s Pa" }
             if case .project(let p)? = jumpSelectedItem { return "⏎ new session in \(p.name)" }
             if jumpMessageIsReady, case .session(let s)? = jumpSelectedItem {
                 return "⏎ send to \(s.displayName)"
@@ -2175,7 +2175,7 @@ private struct SessionProjectHeader: View {
             .buttonStyle(.plain)
             .help(root)
             .accessibilityLabel("\(name), \(sessionCount) sessions, \(waitingCount) waiting")
-            .accessibilityHint(onSelectProject == nil ? "Collapse or expand project" : "Open project agent")
+            .accessibilityHint(onSelectProject == nil ? "Collapse or expand project" : "Open Pa, the project agent")
         }
         .padding(.top, 5)
     }
@@ -2570,7 +2570,7 @@ struct PaletteRow: View {
     private func projectAgentRow(_ p: Project) -> some View {
         HStack(spacing: 10) {
             Circle().fill(ProjectColor.color(for: p.rootPath)).frame(width: 8, height: 8)
-            Text("π").font(.system(size: 13, weight: .semibold))
+            Text("Pa").font(.system(size: 11, weight: .bold))
                 .frame(width: 16).foregroundStyle(.indigo)
             Text(p.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
             Spacer()

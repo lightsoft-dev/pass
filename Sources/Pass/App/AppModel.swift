@@ -117,6 +117,14 @@ final class AppModel {
     private(set) var browser: BrowserStore!
     private(set) var mirror: MirrorEngine!
     private(set) var miniTerminals: MiniTerminalManager!
+    private var projectAgentConversations: [String: ProjectAgentConversation] = [:]
+
+    func projectAgentConversation(for root: String) -> ProjectAgentConversation {
+        if let existing = projectAgentConversations[root] { return existing }
+        let conversation = ProjectAgentConversation(projectRoot: root)
+        projectAgentConversations[root] = conversation
+        return conversation
+    }
     private(set) var webViews: WebViewPool!
     private(set) var extensions: ExtensionStore!
     private(set) var extensionRuntime: ExtensionRuntime!

@@ -169,6 +169,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         if !completedOnboarding || Shell.resolveViaLoginShell("tmux") == nil {
             DispatchQueue.main.async { onboardingController.show() }
+        } else if Shell.resolveViaLoginShell("pi") != nil && PiAuthentication.needsLogin() {
+            DispatchQueue.main.async { [appModel] in
+                appModel.miniTerminals.openPiLogin()
+            }
         }
         Log.app.info("pass launched (\(appPresence.rawValue, privacy: .public), hook port \(PassConfig.hookPort))")
     }

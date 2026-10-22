@@ -181,11 +181,11 @@ enum CLIAPI {
     static func projectSessions(_ appModel: AppModel, body: Data) -> Data {
         guard body.count <= PassConfig.cliMaxBodyBytes,
               let request = try? JSONDecoder().decode(CLIProjectSessionRequest.self, from: body),
-              let source = projectAgentSource(appModel, request.sourceSession) else {
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession) else {
             return encode(CLIProjectSessionListResponse(ok: false, error: "project agent session required"))
         }
         let sessions = (appModel.sessions?.sessions ?? [])
-            .filter { $0.projectRoot == source.projectRoot && !$0.isProjectAgent }
+            .filter { $0.projectRoot == projectRoot && !$0.isProjectAgent }
             .map { session in
                 let state: String
                 switch session.attention {
@@ -196,14 +196,14 @@ enum CLIAPI {
                 return CLIProjectSessionInfo(name: session.name, agent: session.agent.rawValue,
                                              cwd: session.cwd, state: state)
             }
-        return encode(CLIProjectSessionListResponse(ok: true, projectRoot: source.projectRoot,
+        return encode(CLIProjectSessionListResponse(ok: true, projectRoot: projectRoot,
                                                     sessions: sessions))
     }
 
     static func startProjectSession(_ appModel: AppModel, body: Data) async -> Data {
         guard body.count <= PassConfig.cliMaxBodyBytes,
               let request = try? JSONDecoder().decode(CLIProjectSessionStartRequest.self, from: body),
-              let source = projectAgentSource(appModel, request.sourceSession) else {
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession) else {
             return encode(CLIProjectSessionResponse(ok: false, error: "project agent session required"))
         }
         guard let agent = AgentKind(rawValue: request.agent), AgentKind.launchable.contains(agent),
@@ -213,7 +213,7 @@ enum CLIAPI {
         guard let store = appModel.sessions else {
             return encode(CLIProjectSessionResponse(ok: false, error: "sessions unavailable"))
         }
-        let name = await store.createSession(projectDir: source.projectRoot, agent: agent,
+        let name = await store.createSession(projectDir: projectRoot, agent: agent,
                                              initialPrompt: request.message)
         guard await TmuxClient.shared.hasSession(name) else {
             return encode(CLIProjectSessionResponse(ok: false, error: "worker session could not start"))
@@ -224,8 +224,8 @@ enum CLIAPI {
     static func sendProjectSession(_ appModel: AppModel, body: Data) async -> Data {
         guard body.count <= PassConfig.cliMaxBodyBytes,
               let request = try? JSONDecoder().decode(CLIProjectSessionSendRequest.self, from: body),
-              let source = projectAgentSource(appModel, request.sourceSession),
-              let target = projectWorker(appModel, request.targetSession, root: source.projectRoot),
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession),
+              let target = projectWorker(appModel, request.targetSession, root: projectRoot),
               !request.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               request.message.utf8.count <= 16_384 else {
             return encode(CLIProjectSessionResponse(ok: false, error: "invalid project worker or message"))
@@ -243,8 +243,8 @@ enum CLIAPI {
     static func tailProjectSession(_ appModel: AppModel, body: Data) async -> Data {
         guard body.count <= PassConfig.cliMaxBodyBytes,
               let request = try? JSONDecoder().decode(CLIProjectSessionTailRequest.self, from: body),
-              let source = projectAgentSource(appModel, request.sourceSession),
-              let target = projectWorker(appModel, request.targetSession, root: source.projectRoot),
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession),
+              let target = projectWorker(appModel, request.targetSession, root: projectRoot),
               (1...200).contains(request.lines) else {
             return encode(CLIProjectSessionResponse(ok: false, error: "invalid project worker or line count"))
         }
@@ -253,11 +253,10 @@ enum CLIAPI {
                                                 content: String(content.suffix(100_000))))
     }
 
-    private static func projectAgentSource(_ appModel: AppModel, _ name: String) -> Session? {
-        guard let session = appModel.sessions?.session(named: name), session.isProjectAgent,
-              appModel.projects?.projects.contains(where: { $0.rootPath == session.projectRoot }) == true
-        else { return nil }
-        return session
+    private static func projectAgentRoot(_ appModel: AppModel, _ name: String) -> String? {
+        appModel.projects?.projects.first {
+            ProjectAgentIdentity.sessionName(for: $0.rootPath) == name
+        }?.rootPath
     }
 
     private static func projectWorker(_ appModel: AppModel, _ name: String, root: String) -> Session? {

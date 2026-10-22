@@ -12,12 +12,10 @@ struct ProjectAgentView: View {
     @State private var selectedWorkerName: String?
     @State private var message = ""
     @State private var status: String?
-    @State private var readableManager = true
+    @State private var pendingLoginMessage: String?
+    @State private var conversation: ProjectAgentConversation?
 
     private var projectName: String { URL(fileURLWithPath: projectRoot).lastPathComponent }
-    private var manager: Session? {
-        sessions.first { $0.projectRoot == projectRoot && $0.isProjectAgent }
-    }
     private var workers: [Session] {
         sessions.filter { $0.projectRoot == projectRoot && !$0.isProjectAgent }
     }
@@ -50,11 +48,29 @@ struct ProjectAgentView: View {
             }
         }
         .task(id: projectRoot) {
-            if message.isEmpty { message = initialDraft }
-            guard let store = appModel.sessions else { return }
-            switch await store.ensureProjectAgent(projectRoot: projectRoot) {
-            case .success: status = nil
-            case .failure(let error): status = error.localizedDescription
+            conversation = nil
+            message = initialDraft
+            pendingLoginMessage = nil
+            let agent = appModel.projectAgentConversation(for: projectRoot)
+            conversation = agent
+            agent.start()
+            if PiAuthentication.needsLogin() {
+                status = "Pi 로그인이 필요합니다. 열린 작은 터미널에서 계정을 연결하세요."
+                appModel.miniTerminals.openPiLogin()
+            } else {
+                status = nil
+            }
+        }
+        .task(id: projectRoot) {
+            while !Task.isCancelled {
+                if !PiAuthentication.needsLogin() {
+                    if status?.contains("로그인") == true { status = nil }
+                    if let pendingLoginMessage, conversation?.isReady == true {
+                        self.pendingLoginMessage = nil
+                        if message == pendingLoginMessage { sendMessage() }
+                    }
+                }
+                try? await Task.sleep(for: .seconds(1))
             }
         }
         .onChange(of: workers.map(\.name)) { _, names in
@@ -68,15 +84,15 @@ struct ProjectAgentView: View {
         HStack(spacing: 10) {
             Button(action: onBack) { Image(systemName: "chevron.left") }
                 .buttonStyle(.plain).help("Back to projects")
-            Text("π")
-                .font(.system(size: 17, weight: .semibold))
+            Text("Pa")
+                .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(.indigo)
                 .frame(width: 32, height: 32)
                 .background(.indigo.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(projectName) · Project agent")
+                Text("\(projectName) · Pa")
                     .font(.system(size: 14, weight: .semibold))
-                Text("Coordinates work across this project's agents")
+                Text("Project agent · Coordinates this project's work")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
             Spacer()
@@ -90,46 +106,48 @@ struct ProjectAgentView: View {
     private var managerPane: some View {
         VStack(spacing: 0) {
             HStack {
-                Label("Project agent", systemImage: "person.crop.circle.badge.checkmark")
+                Label("Pa · Project agent", systemImage: "person.crop.circle.badge.checkmark")
                     .font(.system(size: 11, weight: .semibold))
                 Spacer()
                 Button("Pi 계정 연결", action: connectAccount)
                     .buttonStyle(.plain)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.tint)
-                    .disabled(manager == nil)
                     .help("Choose a model provider and sign in through Pi")
-                SessionPresentationPicker(readableMode: $readableManager)
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
             Divider()
             Group {
-                if let manager {
-                    if readableManager {
-                        ConversationPaneView(session: manager)
-                    } else {
-                        LiveProjectTerminal(session: manager)
-                    }
+                if let conversation {
+                    ProjectAgentChatView(conversation: conversation)
                 } else if let status {
-                    ContentUnavailableView("Project agent unavailable", systemImage: "exclamationmark.triangle",
+                    ContentUnavailableView("Pa를 사용할 수 없습니다", systemImage: "exclamationmark.triangle",
                                            description: Text(status))
                 } else {
-                    ProgressView("Starting project agent…")
+                    ProgressView("Pa를 시작하는 중…")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            if let status, manager != nil {
+            if let status {
                 Text(status).font(.system(size: 10)).foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12).padding(.top, 6)
             }
+            if let conversation, conversation.canUseWorkingModel {
+                Button("연결된 Z.ai 모델로 전환") {
+                    conversation.useWorkingModel()
+                }
+                .buttonStyle(.link)
+                .font(.system(size: 11))
+                .padding(.horizontal, 12).padding(.top, 6)
+            }
             HStack(spacing: 8) {
-                TextField("Tell the project agent what to do…", text: $message)
+                TextField("Pa에게 할 일을 알려주세요…", text: $message)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(sendMessage)
                 Button("Send", action: sendMessage)
-                    .disabled(manager == nil || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(conversation?.isReady != true || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(10)
         }
@@ -152,7 +170,7 @@ struct ProjectAgentView: View {
                         .font(.system(size: 18))
                     Text("No worker yet")
                         .font(.system(size: 11, weight: .medium))
-                    Text("Ask the project agent to start one.")
+                    Text("Pa에게 작업을 맡기면 여기에 표시됩니다.")
                         .font(.system(size: 10))
                 }
                 .foregroundStyle(.secondary)
@@ -216,36 +234,107 @@ struct ProjectAgentView: View {
     }
 
     private func connectAccount() {
-        guard let manager else { return }
-        readableManager = false
-        status = nil
-        Task {
-            switch await appModel.reply(to: manager.name, text: "/login") {
-            case .delivered: break
-            case .refusedShell:
-                status = "Pi is not running. Check its terminal before connecting an account."
-            case .error(let error):
-                status = error
-            }
+        if appModel.miniTerminals.openPiLogin() {
+            status = "작은 터미널에서 Pi 로그인을 완료하세요."
+        } else {
+            status = "Pi가 설치되어 있지 않습니다. Pi를 설치한 뒤 Pass를 다시 여세요."
         }
     }
 
     private func sendMessage() {
-        guard let manager else { return }
+        guard let conversation else { return }
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        message = ""
-        status = nil
-        Task {
-            switch await appModel.reply(to: manager.name, text: text) {
-            case .delivered: break
-            case .refusedShell:
-                status = "Pi is not ready yet. Switch to Terminal to inspect its startup."
-                message = text
-            case .error(let error):
-                status = error
-                message = text
+        if PiAuthentication.needsLogin() {
+            pendingLoginMessage = text
+            status = "Pi 로그인 후 이 요청을 자동으로 보냅니다."
+            appModel.miniTerminals.openPiLogin()
+            return
+        }
+        if conversation.send(text) {
+            message = ""
+            status = nil
+        }
+    }
+}
+
+private struct ProjectAgentChatView: View {
+    let conversation: ProjectAgentConversation
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if conversation.messages.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Pa에게 요청하세요")
+                                .font(.system(size: 17, weight: .semibold))
+                            Text("이 프로젝트의 작업을 맡기고 진행 상황을 대화로 확인할 수 있습니다.")
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 30)
+                    }
+                    ForEach(conversation.messages) { entry in
+                        messageView(entry).id(entry.id)
+                    }
+                    if conversation.isResponding {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.mini)
+                            Text(conversation.status)
+                        }
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: 700)
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
+            .background(Color(nsColor: .textBackgroundColor))
+            .onChange(of: conversation.messages.count) { _, _ in
+                if let id = conversation.messages.last?.id {
+                    withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .bottom) }
+                }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            Text(conversation.modelLabel)
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .padding(7)
+        }
+    }
+
+    @ViewBuilder
+    private func messageView(_ entry: ProjectAgentMessage) -> some View {
+        switch entry.role {
+        case .user:
+            HStack {
+                Spacer(minLength: 40)
+                Text(entry.text)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 13).padding(.vertical, 10)
+                    .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+            }
+        case .assistant:
+            if !entry.text.isEmpty {
+                Text(entry.text)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 13).padding(.vertical, 10)
+                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+            }
+        case .activity:
+            Text(entry.text)
+                .font(.system(size: 11))
+                .textSelection(.enabled)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 8)
+        case .error:
+            Label(entry.text, systemImage: "exclamationmark.circle")
+                .font(.system(size: 11))
+                .textSelection(.enabled)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
