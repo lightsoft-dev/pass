@@ -179,7 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .doubleCommand:
             HotkeyService.setOptionSpaceEnabled(false)
             if doubleTapHotkey == nil {
-                doubleTapHotkey = DoubleTapHotkey { [weak self] in
+                doubleTapHotkey = DoubleTapHotkey(interval: 0.25) { [weak self] in
                     self?.panelController.toggle()
                 }
             }
