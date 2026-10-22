@@ -118,6 +118,7 @@ struct Session: Identifiable, Hashable, Sendable {
     var name: String            // tmux session name == id, e.g. "pass-myrepo--feat-x"
     var id: String { name }
     var projectRoot: String     // from @pass_project_root, else git/cwd
+    var isProjectAgent: Bool { ProjectAgentIdentity.isManager(name: name, projectRoot: projectRoot) }
     var cwd: String
     var agent: AgentKind
     var git: GitIdentity?

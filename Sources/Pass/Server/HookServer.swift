@@ -19,6 +19,10 @@ struct ShareHandlers: Sendable {
 
 /// Handlers backing the passcli control endpoints (wired by AppDelegate to CLIAPI).
 struct CLIHandlers: Sendable {
+    var projectSessions: @Sendable (Data) async -> Data
+    var startProjectSession: @Sendable (Data) async -> Data
+    var sendProjectSession: @Sendable (Data) async -> Data
+    var tailProjectSession: @Sendable (Data) async -> Data
     var open: @Sendable (Data) async -> Data
     var close: @Sendable (Data) async -> Data
     var tabs: @Sendable () async -> Data
@@ -99,6 +103,22 @@ actor HookServer {
         // passcli control plane — request/response (unlike /hook/*, results ride in the body).
         if let cli {
             let json = [HTTPHeader("Content-Type"): "application/json"]
+            await server.appendRoute("POST /cli/session/list") { request in
+                let body = await cliJSONBody(request)
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.projectSessions(body))
+            }
+            await server.appendRoute("POST /cli/session/start") { request in
+                let body = await cliJSONBody(request)
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.startProjectSession(body))
+            }
+            await server.appendRoute("POST /cli/session/send") { request in
+                let body = await cliJSONBody(request)
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.sendProjectSession(body))
+            }
+            await server.appendRoute("POST /cli/session/tail") { request in
+                let body = await cliJSONBody(request)
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.tailProjectSession(body))
+            }
             await server.appendRoute("POST /cli/browser/open") { request in
                 let body = await cliJSONBody(request)
                 return HTTPResponse(statusCode: .ok, headers: json, body: await cli.open(body))

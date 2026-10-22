@@ -20,6 +20,16 @@ final class SessionProjectGroupingTests: XCTestCase {
         XCTAssertEqual(groups[1].name, "b")
     }
 
+    func testRegisteredProjectWithoutWorkersRemainsVisible() {
+        let projects = [Project(rootPath: "/repos/empty"), Project(rootPath: "/repos/busy")]
+        let groups = SessionProjectGrouping.groups(
+            [session("pass-busy", root: "/repos/busy")], projects: projects,
+            includeEmptyProjects: true)
+
+        XCTAssertEqual(groups.map(\.id), ["/repos/busy", "/repos/empty"])
+        XCTAssertTrue(groups[1].sessions.isEmpty)
+    }
+
     private func session(_ name: String, root: String, cwd: String? = nil) -> Session {
         Session(name: name, projectRoot: root, cwd: cwd ?? root, agent: .claude,
                 git: nil, lastActivity: Date(), isAttached: false)

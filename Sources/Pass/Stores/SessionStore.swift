@@ -178,9 +178,16 @@ final class SessionStore {
             }
             guard !(await tmux.hasSession(ref.name)) else { continue }   // name already taken
 
+            let launch = ProjectAgentIdentity.isManager(name: ref.name, projectRoot: ref.projectRoot)
+                ? ProjectAgentIdentity.launchCommand(for: ref.projectRoot)
+                : Self.resumeCommand(for: agent)
+            guard launch != nil else { continue }
             upsertLaunching(name: ref.name, projectRoot: ref.projectRoot, cwd: ref.cwd, agent: agent, git: nil)
-            await tmux.newSession(name: ref.name, cwd: ref.cwd, projectRoot: ref.projectRoot,
-                                  agent: agent, launchCommand: Self.resumeCommand(for: agent))
+            guard await tmux.newSession(name: ref.name, cwd: ref.cwd, projectRoot: ref.projectRoot,
+                                        agent: agent, launchCommand: launch) else {
+                sessions.removeAll { $0.name == ref.name && $0.launching }
+                continue
+            }
             projects.rememberIfNew(rootPath: ref.projectRoot)
             restored += 1
         }
@@ -463,6 +470,33 @@ final class SessionStore {
         // 4. Finalize from tmux (clears `launching`, fills attention).
         await reconcile()
         return name
+    }
+
+    /// Start or reconnect to the single persistent Pi coordinator for this project.
+    func ensureProjectAgent(projectRoot: String) async -> Result<String, ProjectAgentFailure> {
+        guard projects.projects.contains(where: { $0.rootPath == projectRoot }) else {
+            return .failure(.unregisteredProject)
+        }
+        let name = ProjectAgentIdentity.sessionName(for: projectRoot)
+        if let session = session(named: name), !session.launching { return .success(name) }
+        guard let launch = ProjectAgentIdentity.launchCommand(for: projectRoot) else {
+            return .failure(.piUnavailable)
+        }
+        if reservedSessionNames.contains(name) { return .success(name) }
+        reservedSessionNames.insert(name)
+        defer { reservedSessionNames.remove(name) }
+        if await tmux.hasSession(name) {
+            await reconcile()
+            return .success(name)
+        }
+        upsertLaunching(name: name, projectRoot: projectRoot, cwd: projectRoot, agent: .pi, git: nil)
+        guard await tmux.newSession(name: name, cwd: projectRoot, projectRoot: projectRoot,
+                                    agent: .pi, launchCommand: launch) else {
+            sessions.removeAll { $0.name == name && $0.launching }
+            return .failure(.launchFailed)
+        }
+        await reconcile()
+        return .success(name)
     }
 
     /// Start a project tool (normally the spec document's dev server) in a visible, durable

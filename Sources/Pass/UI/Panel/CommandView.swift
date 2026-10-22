@@ -12,6 +12,7 @@ struct CommandView: View {
     @State private var route: Route = .list
     @State private var query: String = ""
     @State private var selectedSessionName: String?   // stable home cursor across automatic reordering
+    @State private var projectAgentDraft = ""
     @State private var jumpSelection: Int = 0         // cursor inside the @ jump results
     @State private var status: String?
     @State private var pendingKill: Session?          // session awaiting a kill confirmation
@@ -38,6 +39,8 @@ struct CommandView: View {
     enum Route: Equatable {
         case list
         case detail(String)                  // a session's full-height terminal (back → list)
+        case projectAgent(String)            // permanent Pi coordinator for a project
+        case projectWorker(String, String)   // worker opened from its coordinator
         case specs(String?)                  // spec documents, optionally pinned to a project
         case specSession(String, String)     // session opened FROM specs (name, projectRoot)
         case features
@@ -58,7 +61,9 @@ struct CommandView: View {
     private var homeMode: HomeMode { HomeMode(rawValue: homeModeRaw) ?? .stack }
     private var newSessionAgent: AgentKind { AgentKind(rawValue: newSessionAgentRaw) ?? .claude }
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
-    private var hasAnySessions: Bool { !sessions.isEmpty || appModel.remoteControllers.sessionCount > 0 }
+    private var hasAnySessions: Bool {
+        !sessions.isEmpty || !projects.isEmpty || appModel.remoteControllers.sessionCount > 0
+    }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
     /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
     /// and is simply stripped). `+branch` starts a worktree; `>command` narrows to extensions.
@@ -168,13 +173,14 @@ struct CommandView: View {
     /// mode so they are immediately visible. Newer requests lead that group; the rest follow in
     /// their existing recency order.
     private var orderedSessions: [Session] {
-        let waiting = sessions.filter { $0.needsUser }.sorted { pendingSince($0) > pendingSince($1) }
-        let rest = sessions.filter { !$0.needsUser }
+        let workers = sessions.filter { !$0.isProjectAgent }
+        let waiting = workers.filter { $0.needsUser }.sorted { pendingSince($0) > pendingSince($1) }
+        let rest = workers.filter { !$0.needsUser }
         return waiting + rest
     }
 
     private var projectGroups: [SessionProjectGroup] {
-        SessionProjectGrouping.groups(orderedSessions, projects: projects)
+        SessionProjectGrouping.groups(orderedSessions, projects: projects, includeEmptyProjects: true)
     }
 
     private var collapsedProjectRoots: Set<String> {
@@ -287,6 +293,8 @@ struct CommandView: View {
             }
             .onChange(of: appModel.backToken) { _, _ in
                 switch route {
+                case .projectWorker(_, let root): route = .projectAgent(root)
+                case .projectAgent: route = .list; focusSoon()
                 case .specSession(_, let root): route = .specs(root) // ⌘[ steps back one level
                 case .feature(let root, let id), .featureSession(_, let root, let id):
                     route = .feature(projectRoot: root, id: id)
@@ -398,14 +406,14 @@ struct CommandView: View {
         default:
             break
         }
-        guard route == .list else { return false }
+        guard route == .list || activeProjectRoot != nil else { return false }
         switch e.key {
         case .toggleInput:
             toggleQuickCommand()
             return true
         case .openSpecs:
             // ⌘D — the selected session's project document.
-            guard let s = selectedSession else { return true }
+            guard let s = workspaceSession ?? selectedSession else { return true }
             route = .specs(s.projectRoot)
             return true
         case .newSession:
@@ -420,7 +428,7 @@ struct CommandView: View {
             return true
         case .newWorktree:
             // ⌘T — worktree session off the selected session, branch name prefilled: just ⏎.
-            guard let s = selectedSession else { return true }
+            guard let s = workspaceSession ?? selectedSession else { return true }
             beginWorktreeSession(from: s)
             return true
         case .up:
@@ -478,11 +486,9 @@ struct CommandView: View {
                     else if jumpMessageIsReady { sendJumpMessage(to: s) } // "name msg" ⏎ → send
                     else { jumpToSession(s) }                        // "name" ⏎ → focus its terminal
                 case .project(let p):
-                    // Agent choice lives in the menu bar (New session ▸) — rarely needed, so the
-                    // fast path here always starts the default agent.
-                    appModel.createSession(projectDir: p.rootPath) // ⏎ start it
-                    query = ""
-                    hideQuickCommand() // action done — watch the new session arrive
+                    openProjectAgent(p.rootPath)
+                case .projectAgent(let p):
+                    openProjectAgent(p.rootPath, draft: jumpMessage ?? "")
                 case .newProject(let name, _):
                     createProjectFromInput(name)
                 case .githubRepository(let repository, _):
@@ -503,7 +509,7 @@ struct CommandView: View {
             return true
         case .delete:
             // ⌘⌫ → confirm killing the selected session.
-            if let s = selectedSession { pendingKill = s }
+            if let s = workspaceSession ?? selectedSession { pendingKill = s }
             return true
         case .markChecked:
             return true // handled before the route guard
@@ -532,8 +538,11 @@ struct CommandView: View {
     /// The session whose workspace (terminal │ browser) is on screen — browser keys target it.
     private var workspaceSessionName: String? {
         switch route {
-        case .detail(let name), .specSession(let name, _), .featureSession(let name, _, _):
+        case .detail(let name), .projectWorker(let name, _),
+             .specSession(let name, _), .featureSession(let name, _, _):
             return name
+        case .projectAgent(let root):
+            return sessions.first { $0.projectRoot == root && $0.isProjectAgent }?.name
         case .list: return selectedSession?.name
         case .specs, .features, .feature: return nil
         }
@@ -543,8 +552,11 @@ struct CommandView: View {
     /// actually on screen; the home targets its selected card; specs have no session context.
     private var workspaceSession: Session? {
         switch route {
-        case .detail(let name), .specSession(let name, _), .featureSession(let name, _, _):
+        case .detail(let name), .projectWorker(let name, _),
+             .specSession(let name, _), .featureSession(let name, _, _):
             return sessions.first { $0.name == name }
+        case .projectAgent(let root):
+            return sessions.first { $0.projectRoot == root && $0.isProjectAgent }
         case .list:
             return selectedSession
         case .specs, .features, .feature:
@@ -557,6 +569,18 @@ struct CommandView: View {
     private var miniTerminalContextKey: String? { workspaceSession?.cwd }
 
     private var extensionContextSession: Session? { workspaceSession }
+
+    private var activeProjectRoot: String? {
+        switch route {
+        case .projectAgent(let root), .projectWorker(_, let root): return root
+        default: return nil
+        }
+    }
+
+    private var selectedProjectWorkerName: String? {
+        if case .projectWorker(let name, _) = route { return name }
+        return nil
+    }
 
     @ViewBuilder
     private var content: some View {
@@ -608,6 +632,22 @@ struct CommandView: View {
                 // session vanished while open
                 listMode.onAppear { route = .list }
             }
+        case .projectAgent(let root):
+            projectWorkspace {
+                ProjectAgentView(projectRoot: root, sessions: sessions,
+                                 initialDraft: projectAgentDraft,
+                                 onBack: { route = .list; focusSoon() },
+                                 onOpenWorker: { route = .projectWorker($0, root) })
+                    .id(root)
+            }
+        case .projectWorker(let name, let root):
+            if let session = sessions.first(where: { $0.name == name }) {
+                projectWorkspace {
+                    SessionDetailView(session: session) { route = .projectAgent(root) }
+                }
+            } else {
+                Color.clear.onAppear { route = .projectAgent(root) }
+            }
         case .specs(let root):
             SpecsView(
                 initialRoot: root,
@@ -624,6 +664,64 @@ struct CommandView: View {
     }
 
     // MARK: List mode
+
+    private func projectWorkspace<Content: View>(@ViewBuilder content: @escaping () -> Content) -> some View {
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                projectSidebar
+                    .frame(width: min(max(geo.size.width * 0.28, 220), 300))
+                Divider()
+                content()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .overlay {
+                if showsCommandBar {
+                    commandBarOverlay(maxWidth: geo.size.width)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: showsCommandBar)
+        }
+    }
+
+    private var projectSidebar: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(projectGroups) { group in
+                        SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
+                                             sessionCount: group.sessions.count,
+                                             waitingCount: group.waitingCount,
+                                             collapsed: collapsedProjectRoots.contains(group.id),
+                                             onSelectProject: { openProjectAgent(group.id) }) {
+                            toggleProject(group.id)
+                        }
+                        .id(group.id)
+                        if !collapsedProjectRoots.contains(group.id) {
+                            ForEach(group.sessions) { session in
+                                CompactSessionCard(
+                                    session: session,
+                                    selected: selectedProjectWorkerName == session.name,
+                                    onSelect: { route = .projectWorker(session.name, session.projectRoot) },
+                                    onMarkChecked: { appModel.markSessionChecked(session.name) },
+                                    onNewWorktree: { beginWorktreeSession(from: session) },
+                                    onDelete: { pendingKill = session },
+                                    browserUnseen: appModel.browser?.hasUnseen(session.name) ?? false
+                                )
+                            }
+                        }
+                    }
+                }
+                .padding(8)
+            }
+            .onAppear {
+                if let root = activeProjectRoot { proxy.scrollTo(root, anchor: .center) }
+            }
+            .onChange(of: activeProjectRoot) { _, root in
+                if let root { withAnimation { proxy.scrollTo(root, anchor: .center) } }
+            }
+        }
+    }
 
     private var listMode: some View {
         GeometryReader { geo in
@@ -871,7 +969,7 @@ struct CommandView: View {
                 ? "Use a repository URL like https://github.com/owner/repository."
                 : "No matching projects — type a project name or paste a GitHub URL."
         }
-        return selectedSession.map { "No matches — ⏎ sends this to \($0.displayName)" }
+        return (workspaceSession ?? selectedSession).map { "No matches — ⏎ sends this to \($0.displayName)" }
             ?? "No matches — try a different name."
     }
 
@@ -910,10 +1008,11 @@ struct CommandView: View {
             return "extension commands · ⏎ run · Esc close"
         }
         if isJumpMode {
-            if jumpItems.isEmpty, let s = selectedSession {
+            if jumpItems.isEmpty, let s = workspaceSession ?? selectedSession {
                 return "no matches — ⏎ sends this to \(s.displayName)"
             }
             if case .command(let c)? = jumpSelectedItem { return commandHint(c) }
+            if case .projectAgent(let p)? = jumpSelectedItem { return "⏎ open \(p.name)'s project agent" }
             if case .project(let p)? = jumpSelectedItem { return "⏎ new session in \(p.name)" }
             if jumpMessageIsReady, case .session(let s)? = jumpSelectedItem {
                 return "⏎ send to \(s.displayName)"
@@ -928,7 +1027,7 @@ struct CommandView: View {
         if appModel.sessions?.tmuxMissing == true {
             message("exclamationmark.triangle", "tmux not found",
                     "Install tmux (brew install tmux) and reopen pass.")
-        } else if orderedSessions.isEmpty && appModel.remoteControllers.sessionCount == 0 {
+        } else if projectGroups.isEmpty && appModel.remoteControllers.sessionCount == 0 {
             message("bubble.left.and.bubble.right", "No sessions yet",
                     "@ to start one, or use New session… from the menu bar.")
         } else if homeMode != .stack {
@@ -945,7 +1044,8 @@ struct CommandView: View {
                             SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
                                                  sessionCount: group.sessions.count,
                                                  waitingCount: group.waitingCount,
-                                                 collapsed: collapsedProjectRoots.contains(group.id)) {
+                                                 collapsed: collapsedProjectRoots.contains(group.id),
+                                                 onSelectProject: { openProjectAgent(group.id) }) {
                                 toggleProject(group.id)
                             }
                             if !collapsedProjectRoots.contains(group.id) {
@@ -984,7 +1084,8 @@ struct CommandView: View {
                             SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
                                                  sessionCount: group.sessions.count,
                                                  waitingCount: group.waitingCount,
-                                                 collapsed: collapsedProjectRoots.contains(group.id)) {
+                                                 collapsed: collapsedProjectRoots.contains(group.id),
+                                                 onSelectProject: { openProjectAgent(group.id) }) {
                                 toggleProject(group.id)
                             }
                             if !collapsedProjectRoots.contains(group.id) {
@@ -1035,7 +1136,8 @@ struct CommandView: View {
                     SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
                                          sessionCount: group.sessions.count,
                                          waitingCount: group.waitingCount,
-                                         collapsed: collapsedProjectRoots.contains(collapseKey)) {
+                                         collapsed: collapsedProjectRoots.contains(collapseKey),
+                                         onSelectProject: nil) {
                         toggleRemoteProject(collapseKey)
                     }
                     if !collapsedProjectRoots.contains(collapseKey) {
@@ -1179,16 +1281,14 @@ struct CommandView: View {
     private func filteredItems(_ needleRaw: String) -> [PaletteItem] {
         let needle = needleRaw.trimmingCharacters(in: .whitespaces)
 
-        var out: [PaletteItem] = sessions.compactMap { s in
+        var out: [PaletteItem] = projects
+            .filter { Fuzzy.matches(needle, $0.name) }
+            .map { .projectAgent($0) }
+        out.append(contentsOf: sessions.filter { !$0.isProjectAgent }.compactMap { s in
             guard needle.isEmpty || Fuzzy.matches(needle, s.displayName) || Fuzzy.matches(needle, s.name)
             else { return nil }
             return .session(s)
-        }
-        // Also offer registered projects without a live session (jump / create).
-        let liveRoots = Set(sessions.map(\.projectRoot))
-        for p in projects where !liveRoots.contains(p.rootPath) {
-            if needle.isEmpty || Fuzzy.matches(needle, p.name) { out.append(.project(p)) }
-        }
+        })
         out.append(contentsOf: matchingExtensionCommands(needle).map { .command($0) })
         return out
     }
@@ -1228,7 +1328,9 @@ struct CommandView: View {
         if !isJumpMode && !isCommandMode { query = "" }
         guard !visibleSessions.isEmpty else { return }
         let current = selectedIndex ?? 0
-        selectedSessionName = visibleSessions[max(0, min(visibleSessions.count - 1, current + delta))].name
+        let session = visibleSessions[max(0, min(visibleSessions.count - 1, current + delta))]
+        selectedSessionName = session.name
+        if activeProjectRoot != nil { route = .projectWorker(session.name, session.projectRoot) }
     }
 
     /// ⇧⇧: cycle to the next session that needs input (downward, wrapping). Returns false
@@ -1242,6 +1344,9 @@ struct CommandView: View {
             if list[idx].needsUser, idx != current {
                 expandProject(containing: list[idx])
                 selectedSessionName = list[idx].name
+                if activeProjectRoot != nil {
+                    route = .projectWorker(list[idx].name, list[idx].projectRoot)
+                }
                 return true
             }
         }
@@ -1285,6 +1390,7 @@ struct CommandView: View {
         expandProject(containing: s)
         selectedSessionName = s.name
         hideQuickCommand()
+        if activeProjectRoot != nil { route = .projectWorker(s.name, s.projectRoot) }
     }
 
     /// Tab: replace the '@' token with the top match's name, keep any typed message, add a
@@ -1295,6 +1401,7 @@ struct CommandView: View {
         switch top {
         case .session(let s): token = jumpCompletionToken(s)
         case .project(let p): token = Slug.make(p.name)
+        case .projectAgent(let p): token = Slug.make(p.name)
         case .newProject(let name, _): token = name
         case .githubRepository(let repository, _): token = repository.cloneURL
         case .githubRemoteRepository(let repository, _): token = repository.fullName
@@ -1336,7 +1443,8 @@ struct CommandView: View {
     /// ⏎ on a plain message → send and close the quick command (reopens with a warning if the
     /// send was refused).
     private func sendReplyToSelected(_ text: String) {
-        guard let s = selectedSession, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        guard let s = workspaceSession ?? selectedSession,
+              !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         hideQuickCommand()
         Task {
             let r = await appModel.reply(to: s.name, text: text)
@@ -1507,9 +1615,14 @@ struct CommandView: View {
         case .session(let s):
             jumpToSession(s)
         case .project(let p):
-            // In ⌘N the dropdown chooses the agent; a project tap in @-jump uses the default.
-            appModel.createSession(projectDir: p.rootPath, agent: newSessionMode ? newSessionAgent : .claude)
-            query = ""
+            if newSessionMode {
+                appModel.createSession(projectDir: p.rootPath, agent: newSessionAgent)
+                query = ""
+            } else {
+                openProjectAgent(p.rootPath)
+            }
+        case .projectAgent(let p):
+            openProjectAgent(p.rootPath, draft: jumpMessage ?? "")
         case .newProject(let name, _):
             createProjectFromInput(name)
         case .githubRepository(let repository, _):
@@ -1521,6 +1634,12 @@ struct CommandView: View {
         case .command(let c):
             runExtensionCommand(c)
         }
+    }
+
+    private func openProjectAgent(_ root: String, draft: String = "") {
+        projectAgentDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        hideQuickCommand()
+        route = .projectAgent(root)
     }
 
     /// Run an extension's `/command` against the selected session. The bar closes on success
@@ -2013,41 +2132,51 @@ private struct SessionProjectHeader: View {
     let sessionCount: Int
     let waitingCount: Int
     let collapsed: Bool
+    let onSelectProject: (() -> Void)?
     let onToggle: () -> Void
 
     var body: some View {
-        Button(action: onToggle) {
-            HStack(spacing: 7) {
+        HStack(spacing: 4) {
+            Button(action: onToggle) {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
                     .font(.system(size: 9, weight: .bold))
-                    .frame(width: 12)
-                if let emoji {
-                    Text(emoji).font(.system(size: 12))
-                } else {
-                    Circle().fill(ProjectColor.color(for: root))
-                        .frame(width: 8, height: 8)
-                }
-                Text(name)
-                    .font(.system(size: 11, weight: .semibold))
-                    .lineLimit(1)
-                Text("\(sessionCount)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                Spacer(minLength: 4)
-                if waitingCount > 0 {
-                    Text("\(waitingCount) waiting")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.orange)
-                }
+                    .frame(width: 12, height: 26)
+                    .padding(.horizontal, 5)
+                    .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
             }
-            .padding(.horizontal, 9).padding(.vertical, 7)
-            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help(collapsed ? "Expand \(name)" : "Collapse \(name)")
+            .accessibilityLabel(collapsed ? "Expand \(name)" : "Collapse \(name)")
+            Button(action: onSelectProject ?? onToggle) {
+                HStack(spacing: 7) {
+                    if let emoji {
+                        Text(emoji).font(.system(size: 12))
+                    } else {
+                        Circle().fill(ProjectColor.color(for: root))
+                            .frame(width: 8, height: 8)
+                    }
+                    Text(name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                    Text("\(sessionCount)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                    Spacer(minLength: 4)
+                    if waitingCount > 0 {
+                        Text("\(waitingCount) waiting")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding(.horizontal, 9).padding(.vertical, 7)
+                .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(root)
+            .accessibilityLabel("\(name), \(sessionCount) sessions, \(waitingCount) waiting")
+            .accessibilityHint(onSelectProject == nil ? "Collapse or expand project" : "Open project agent")
         }
-        .buttonStyle(.plain)
-        .help(root)
-        .accessibilityLabel("\(name), \(sessionCount) sessions, \(waitingCount) waiting")
-        .accessibilityHint(collapsed ? "Expand project" : "Collapse project")
         .padding(.top, 5)
     }
 }
@@ -2329,6 +2458,7 @@ enum GitHubPaletteAction: String {
 enum PaletteItem: Identifiable {
     case session(Session)
     case project(Project)
+    case projectAgent(Project)
     case newProject(name: String, parentDirectory: String?)
     case githubRepository(ProjectCreationService.GitHubRepository, parentDirectory: String?)
     case githubRemoteRepository(GitHubRemoteRepository, parentDirectory: String?)
@@ -2339,6 +2469,7 @@ enum PaletteItem: Identifiable {
         switch self {
         case .session(let s): return "s:" + s.name
         case .project(let p): return "p:" + p.rootPath
+        case .projectAgent(let p): return "pa:" + p.rootPath
         case .newProject(let name, _): return "n:" + name
         case .githubRepository(let repository, _): return "g:" + repository.cloneURL
         case .githubRemoteRepository(let repository, _): return "gr:\(repository.id)"
@@ -2357,6 +2488,7 @@ struct PaletteRow: View {
             switch item {
             case .session(let s): sessionRow(s)
             case .project(let p): projectRow(p)
+            case .projectAgent(let p): projectAgentRow(p)
             case .newProject(let name, let parent): newProjectRow(name, parent: parent)
             case .githubRepository(let repository, let parent):
                 githubRepositoryRow(repository, parent: parent)
@@ -2432,6 +2564,17 @@ struct PaletteRow: View {
             Text(p.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
             Spacer()
             Text("new session").font(.system(size: 11)).foregroundStyle(.tertiary)
+        }
+    }
+
+    private func projectAgentRow(_ p: Project) -> some View {
+        HStack(spacing: 10) {
+            Circle().fill(ProjectColor.color(for: p.rootPath)).frame(width: 8, height: 8)
+            Text("π").font(.system(size: 13, weight: .semibold))
+                .frame(width: 16).foregroundStyle(.indigo)
+            Text(p.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+            Spacer()
+            Text("project").font(.system(size: 11)).foregroundStyle(.secondary)
         }
     }
 

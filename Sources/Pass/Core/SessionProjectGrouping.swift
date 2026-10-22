@@ -12,7 +12,8 @@ struct SessionProjectGroup: Identifiable {
 }
 
 enum SessionProjectGrouping {
-    static func groups(_ sessions: [Session], projects: [Project]) -> [SessionProjectGroup] {
+    static func groups(_ sessions: [Session], projects: [Project],
+                       includeEmptyProjects: Bool = false) -> [SessionProjectGroup] {
         var knownProjects: [String: Project] = [:]
         for project in projects where knownProjects[project.rootPath] == nil {
             knownProjects[project.rootPath] = project
@@ -33,6 +34,13 @@ enum SessionProjectGrouping {
                     emoji: project?.emoji,
                     sessions: [session]
                 ))
+            }
+        }
+        if includeEmptyProjects {
+            for project in projects where indexByRoot[project.rootPath] == nil {
+                indexByRoot[project.rootPath] = groups.count
+                groups.append(SessionProjectGroup(id: project.rootPath, name: project.name,
+                                                  emoji: project.emoji, sessions: []))
             }
         }
         return groups

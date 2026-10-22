@@ -26,6 +26,22 @@ Use `passcli` as the control plane for the running Pass app and the browser besi
 Use `"$PASS_CLI" <command> --help` whenever the installed binary may differ from the command
 forms below. Treat the binary's help as authoritative.
 
+## Coordinate a project's worker sessions
+
+The fixed Pi project agent can list, start, message, and inspect worker sessions in its own
+project. These commands resolve the source project from `$PASS_SESSION`; `--session` can select
+the project agent explicitly. Pass rejects targets from another project.
+
+```sh
+"$PASS_CLI" session list --json
+"$PASS_CLI" session start --agent claude --message 'Implement the requested change'
+"$PASS_CLI" session send pass-myrepo 'Review the current changes'
+"$PASS_CLI" session tail pass-myrepo --lines 80
+```
+
+`session start` accepts `claude`, `codex`, `grok`, or `pi`. `session tail` is a text snapshot;
+the Pass project agent screen shows each worker's live, unfiltered tmux terminal.
+
 ## Run the browser verification loop
 
 ### 1. Open the page

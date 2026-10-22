@@ -89,17 +89,31 @@ struct ConversationPaneView: View {
             Rectangle()
                 .fill(agentAccent)
                 .frame(width: 42, height: 3)
-            Text(hasCaptured ? "No conversation detected" : "Reading the session…")
+            Text(emptyTitle)
                 .font(.custom("New York", size: 19).weight(.semibold))
-            Text(hasCaptured
-                 ? "This provider has not emitted a recognizable message yet. Switch to Terminal for the unfiltered view."
-                 : "Recent agent output will be arranged into messages and tool activity.")
+            Text(emptyDescription)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 36)
         .frame(maxWidth: 420, alignment: .leading)
+    }
+
+    private var emptyTitle: String {
+        if session.isProjectAgent {
+            return hasCaptured ? "프로젝트 에이전트에게 요청하세요" : "에이전트 대화를 여는 중…"
+        }
+        return hasCaptured ? "No conversation detected" : "Reading the session…"
+    }
+
+    private var emptyDescription: String {
+        if session.isProjectAgent {
+            return "아래에 할 일을 적으면 이 프로젝트의 작업 세션에 전달하고 진행 상황을 알려줍니다. 로그인이 필요하면 위의 Pi 계정 연결을 누르세요."
+        }
+        return hasCaptured
+            ? "This provider has not emitted a recognizable message yet. Switch to Terminal for the unfiltered view."
+            : "Recent agent output will be arranged into messages and tool activity."
     }
 
     private var agentAccent: Color {
