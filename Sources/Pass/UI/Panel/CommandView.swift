@@ -62,9 +62,14 @@ struct CommandView: View {
     private var newSessionAgent: AgentKind { AgentKind(rawValue: newSessionAgentRaw) ?? .claude }
     private var sessions: [Session] { appModel.sessions?.sessions ?? [] }
     private var hasAnySessions: Bool {
-        !sessions.isEmpty || !projects.isEmpty || appModel.remoteControllers.sessionCount > 0
+        !sessions.isEmpty || !projects.isEmpty || !appModel.remoteControllers.connections.isEmpty
     }
     private var projects: [Project] { appModel.projects?.projects ?? [] }
+    private var remoteProjects: [PaletteItem] {
+        appModel.remoteControllers.connections.flatMap { connection in
+            connection.projects.map { .remoteProject(connection, $0) }
+        }
+    }
     /// Anything typed in the quick command searches — no `@` needed (a leading `@` still works
     /// and is simply stripped). `+branch` starts a worktree; `>command` narrows to extensions.
     private var isJumpMode: Bool { !query.isEmpty && !query.hasPrefix("+") && !query.hasPrefix(">") }
@@ -154,6 +159,7 @@ struct CommandView: View {
             var items: [PaletteItem] = projects
                 .filter { needle.isEmpty || Fuzzy.matches(needle, $0.name) }
                 .map { .project($0) }
+            items.append(contentsOf: matchingRemoteProjects(needle))
             let exactMatch = projects.contains {
                 $0.name.compare(needle, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
             }
@@ -223,6 +229,15 @@ struct CommandView: View {
     private func remoteProjectGroups(for connection: RemoteControllerConnection) -> [RemoteSessionProjectGroup] {
         var groups: [RemoteSessionProjectGroup] = []
         var indexByRoot: [String: Int] = [:]
+        for project in connection.projects where indexByRoot[project.rootPath] == nil {
+            indexByRoot[project.rootPath] = groups.count
+            groups.append(RemoteSessionProjectGroup(
+                id: project.rootPath,
+                name: project.name,
+                emoji: project.emoji,
+                sessions: []
+            ))
+        }
         for session in connection.sessions {
             let root = session.projectRoot
             if let index = indexByRoot[root] {
@@ -462,6 +477,8 @@ struct CommandView: View {
                 case .project(let p):
                     appModel.createSession(projectDir: p.rootPath, agent: newSessionAgent)
                     hideQuickCommand()
+                case .remoteProject(let connection, let project):
+                    startRemoteSession(on: connection, in: project, agent: newSessionAgent)
                 case .newProject(let name, _):
                     createProjectFromInput(name)
                 case .githubRepository(let repository, _):
@@ -489,6 +506,8 @@ struct CommandView: View {
                     openProjectAgent(p.rootPath)
                 case .projectAgent(let p):
                     openProjectAgent(p.rootPath, draft: jumpMessage ?? "")
+                case .remoteProject(let connection, let project):
+                    startRemoteSession(on: connection, in: project, agent: .claude)
                 case .newProject(let name, _):
                     createProjectFromInput(name)
                 case .githubRepository(let repository, _):
@@ -976,6 +995,9 @@ struct CommandView: View {
     private var hint: String {
         if newSessionMode {
             if case .project(let p)? = jumpSelectedItem { return "⏎ new \(newSessionAgent.rawValue) session in \(p.name)" }
+            if case .remoteProject(let connection, let project)? = jumpSelectedItem {
+                return "⏎ new \(newSessionAgent.rawValue) session in \(project.name) on \(connection.profile.desktopName)"
+            }
             if case .newProject(let name, _)? = jumpSelectedItem { return "⏎ create “\(name)” + start \(newSessionAgent.rawValue)" }
             if case .githubRepository(let repository, _)? = jumpSelectedItem {
                 return "⏎ clone \(repository.displayName) + start \(newSessionAgent.rawValue)"
@@ -1014,6 +1036,9 @@ struct CommandView: View {
             if case .command(let c)? = jumpSelectedItem { return commandHint(c) }
             if case .projectAgent(let p)? = jumpSelectedItem { return "⏎ open \(p.name)'s Pa" }
             if case .project(let p)? = jumpSelectedItem { return "⏎ new session in \(p.name)" }
+            if case .remoteProject(let connection, let project)? = jumpSelectedItem {
+                return "⏎ new session in \(project.name) on \(connection.profile.desktopName)"
+            }
             if jumpMessageIsReady, case .session(let s)? = jumpSelectedItem {
                 return "⏎ send to \(s.displayName)"
             }
@@ -1024,10 +1049,11 @@ struct CommandView: View {
 
     @ViewBuilder
     private var listBody: some View {
-        if appModel.sessions?.tmuxMissing == true {
+        if appModel.sessions?.tmuxMissing == true,
+           appModel.remoteControllers.connections.isEmpty {
             message("exclamationmark.triangle", "tmux not found",
                     "Install tmux (brew install tmux) and reopen pass.")
-        } else if projectGroups.isEmpty && appModel.remoteControllers.sessionCount == 0 {
+        } else if projectGroups.isEmpty && appModel.remoteControllers.connections.isEmpty {
             message("bubble.left.and.bubble.right", "No sessions yet",
                     "@ to start one, or use New session… from the menu bar.")
         } else if homeMode != .stack {
@@ -1037,6 +1063,12 @@ struct CommandView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 4) {
+                        if appModel.sessions?.tmuxMissing == true {
+                            Text("tmux is unavailable on this Mac; remote Macs remain accessible.")
+                                .font(PassFont.ui(size: 10))
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 8).padding(.vertical, 6)
+                        }
                         if !appModel.remoteControllers.connections.isEmpty, !orderedSessions.isEmpty {
                             SessionMachineHeader.local
                         }
@@ -1077,6 +1109,12 @@ struct CommandView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
+                        if appModel.sessions?.tmuxMissing == true {
+                            Text("tmux is unavailable on this Mac; remote Macs remain accessible.")
+                                .font(PassFont.ui(size: 10))
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 8).padding(.vertical, 6)
+                        }
                         if !appModel.remoteControllers.connections.isEmpty, !orderedSessions.isEmpty {
                             SessionMachineHeader.local
                         }
@@ -1128,10 +1166,11 @@ struct CommandView: View {
         ForEach(appModel.remoteControllers.connections) { connection in
             SessionMachineHeader.remote(connection)
                 .padding(.top, 6)
-            if connection.sessions.isEmpty {
+            let groups = remoteProjectGroups(for: connection)
+            if groups.isEmpty {
                 RemoteMachineEmptyRow(connection: connection)
             } else {
-                ForEach(remoteProjectGroups(for: connection)) { group in
+                ForEach(groups) { group in
                     let collapseKey = "remote:\(connection.id):\(group.id)"
                     SessionProjectHeader(root: group.id, name: group.name, emoji: group.emoji,
                                          sessionCount: group.sessions.count,
@@ -1141,6 +1180,17 @@ struct CommandView: View {
                         toggleRemoteProject(collapseKey)
                     }
                     if !collapsedProjectRoots.contains(collapseKey) {
+                        if group.sessions.isEmpty,
+                           let project = connection.projects.first(where: { $0.rootPath == group.id }) {
+                            Button("Start session on this Mac", systemImage: "plus.circle") {
+                                startRemoteSession(on: connection, in: project, agent: .claude)
+                            }
+                            .buttonStyle(.plain)
+                            .font(PassFont.ui(size: 10))
+                            .foregroundStyle(.secondary)
+                            .disabled(connection.state != .online)
+                            .padding(.horizontal, 20).padding(.vertical, 8)
+                        }
                         ForEach(group.sessions, id: \.name) { session in
                             RemoteSessionCard(connection: connection, session: session) {
                                 remoteSelection = .init(connection: connection, sessionName: session.name)
@@ -1289,8 +1339,20 @@ struct CommandView: View {
             else { return nil }
             return .session(s)
         })
+        out.append(contentsOf: matchingRemoteProjects(needle))
         out.append(contentsOf: matchingExtensionCommands(needle).map { .command($0) })
         return out
+    }
+
+    private func matchingRemoteProjects(_ needle: String) -> [PaletteItem] {
+        remoteProjects.filter { item in
+            guard case .remoteProject(let connection, let project) = item else { return false }
+            return needle.isEmpty
+                || Fuzzy.matches(needle, project.name)
+                || Fuzzy.matches(needle, connection.profile.desktopName)
+                || Fuzzy.matches(needle, "\(project.name) \(connection.profile.desktopName)")
+                || Fuzzy.matches(needle, project.rootPath)
+        }
     }
 
     private func matchingExtensionCommands(_ needleRaw: String) -> [ExtensionStore.PaletteCommand] {
@@ -1402,6 +1464,7 @@ struct CommandView: View {
         case .session(let s): token = jumpCompletionToken(s)
         case .project(let p): token = Slug.make(p.name)
         case .projectAgent(let p): token = Slug.make(p.name)
+        case .remoteProject: return // A name alone would lose the selected desktop.
         case .newProject(let name, _): token = name
         case .githubRepository(let repository, _): token = repository.cloneURL
         case .githubRemoteRepository(let repository, _): token = repository.fullName
@@ -1623,6 +1686,8 @@ struct CommandView: View {
             }
         case .projectAgent(let p):
             openProjectAgent(p.rootPath, draft: jumpMessage ?? "")
+        case .remoteProject(let connection, let project):
+            startRemoteSession(on: connection, in: project, agent: newSessionMode ? newSessionAgent : .claude)
         case .newProject(let name, _):
             createProjectFromInput(name)
         case .githubRepository(let repository, _):
@@ -1640,6 +1705,19 @@ struct CommandView: View {
         projectAgentDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         hideQuickCommand()
         route = .projectAgent(root)
+    }
+
+    private func startRemoteSession(
+        on connection: RemoteControllerConnection,
+        in project: RemoteProjectDTO,
+        agent: AgentKind
+    ) {
+        if connection.createSession(projectRoot: project.rootPath, agent: RemoteAgent(agent)) {
+            hideQuickCommand()
+        } else {
+            status = "⚠ \(connection.lastCommandError ?? "Could not start a session on \(connection.profile.desktopName).")"
+            showQuickCommand = true
+        }
     }
 
     /// Run an extension's `/command` against the selected session. The bar closes on success
@@ -2483,6 +2561,7 @@ enum PaletteItem: Identifiable {
     case session(Session)
     case project(Project)
     case projectAgent(Project)
+    case remoteProject(RemoteControllerConnection, RemoteProjectDTO)
     case newProject(name: String, parentDirectory: String?)
     case githubRepository(ProjectCreationService.GitHubRepository, parentDirectory: String?)
     case githubRemoteRepository(GitHubRemoteRepository, parentDirectory: String?)
@@ -2494,6 +2573,8 @@ enum PaletteItem: Identifiable {
         case .session(let s): return "s:" + s.name
         case .project(let p): return "p:" + p.rootPath
         case .projectAgent(let p): return "pa:" + p.rootPath
+        case .remoteProject(let connection, let project):
+            return "rp:\(connection.id):\(project.rootPath)"
         case .newProject(let name, _): return "n:" + name
         case .githubRepository(let repository, _): return "g:" + repository.cloneURL
         case .githubRemoteRepository(let repository, _): return "gr:\(repository.id)"
@@ -2513,6 +2594,7 @@ struct PaletteRow: View {
             case .session(let s): sessionRow(s)
             case .project(let p): projectRow(p)
             case .projectAgent(let p): projectAgentRow(p)
+            case .remoteProject(let connection, let project): remoteProjectRow(connection, project)
             case .newProject(let name, let parent): newProjectRow(name, parent: parent)
             case .githubRepository(let repository, let parent):
                 githubRepositoryRow(repository, parent: parent)
@@ -2599,6 +2681,35 @@ struct PaletteRow: View {
             Text(p.name).font(PassFont.ui(size: 13, weight: .medium)).lineLimit(1)
             Spacer()
             Text("project").font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
+        }
+    }
+
+    private func remoteProjectRow(
+        _ connection: RemoteControllerConnection,
+        _ project: RemoteProjectDTO
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "network")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                Text(project.rootPath)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("\(connection.profile.desktopName) · \(connection.id.prefix(6))")
+                    .font(.system(size: 10, weight: .semibold))
+                    .lineLimit(1)
+                Text(connection.state == .online ? "REMOTE" : "OFFLINE")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundStyle(connection.state == .online ? Color.orange : Color.secondary)
+            }
         }
     }
 

@@ -1131,6 +1131,8 @@ describe("public account and device control plane", () => {
     expect(nested(accountControllerPayload, "device").platform).toBe("macos");
     expect(nested(accountControllerPayload, "credentials").accessToken).toMatch(/^pass_at_cred_/);
     expect(accountControllerPayload.scopes).toContain("sessions:terminal");
+    expect(accountControllerPayload.scopes).toContain("screen:view");
+    expect(accountControllerPayload.scopes).toContain("screen:control");
 
     // The browser cannot add Authorization to a WebSocket upgrade. Its issued credential may
     // travel in a WebSocket subprotocol, but development credentials cannot use this route.
@@ -1189,6 +1191,8 @@ describe("public account and device control plane", () => {
     const mobileCredentials = nested(claim, "credentials");
     expect(claim.scopes).toContain("sessions:write");
     expect(claim.scopes).toContain("sessions:terminal");
+    expect(claim.scopes).not.toContain("screen:view");
+    expect(claim.scopes).not.toContain("screen:control");
 
     const crossAccountDesktopRevoke = await api(`/v2/desktops/${String(desktop.id)}`, {
       token: otherToken,

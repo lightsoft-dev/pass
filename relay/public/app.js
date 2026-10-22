@@ -1,4 +1,5 @@
 import { PassAPIError, parseAPIResponse } from "./api-error.js";
+import { RemoteDesktopViewer } from "./remote-desktop.js";
 
 const $ = (selector) => document.querySelector(selector);
 const ui = {
@@ -7,6 +8,13 @@ const ui = {
   sessions: $("#sessions"), empty: $("#empty-state"), composer: $("#composer"),
   message: $("#message"), notice: $("#notice"), connection: $(".connection"),
   connectionLabel: $("#connection-label"),
+  screen: {
+    open: $("#screen-open"), screen: $("#remote-screen"), machineName: $("#screen-machine-name"),
+    mode: $("#screen-mode"), control: $("#screen-control"), fullscreen: $("#screen-fullscreen"),
+    disconnect: $("#screen-disconnect"), video: $("#screen-video"), input: $("#screen-input"),
+    keyboard: $("#screen-keyboard"),
+    placeholder: $("#screen-placeholder"), status: $("#screen-status"),
+  },
 };
 
 let googleToken = null;
@@ -18,6 +26,8 @@ let socketRefreshTimer = null;
 let selectedSession = null;
 let latestSnapshot = { sessions: [], projects: [] };
 const controllers = new Map();
+let connectGeneration = 0;
+const viewer = new RemoteDesktopViewer({ elements: ui.screen, send, notice });
 
 function notice(message, error = false) {
   ui.notice.textContent = message;
@@ -78,7 +88,9 @@ async function signedIn(response) {
 
 async function connectDesktop(desktop) {
   closeSocket();
+  const generation = ++connectGeneration;
   activeDesktop = desktop;
+  viewer.selectDesktop(desktop);
   selectedSession = null;
   latestSnapshot = { sessions: [], projects: [] };
   ui.desktopName.textContent = desktop.name;
@@ -88,9 +100,14 @@ async function connectDesktop(desktop) {
   renderDesktops(); renderSessions(); connection("AUTHORIZING REMOTE");
   try {
     const controller = await ensureController(desktop);
+    if (generation !== connectGeneration || activeDesktop?.id !== desktop.id) return;
     accessToken = controller.accessToken;
     openSocket(desktop, controller);
-  } catch (error) { connection("CONNECTION FAILED", "error"); notice(error.message, true); }
+  } catch (error) {
+    if (generation !== connectGeneration || activeDesktop?.id !== desktop.id) return;
+    connection("CONNECTION FAILED", "error");
+    notice(error.message, true);
+  }
 }
 
 async function ensureController(desktop) {
@@ -153,12 +170,17 @@ function openSocket(desktop, controller) {
     scheduleControllerRefresh(desktop, controller);
     send("session.list", {});
   };
-  openedSocket.onmessage = (event) => receive(JSON.parse(event.data));
+  openedSocket.onmessage = (event) => {
+    if (socket !== openedSocket) return;
+    try { receive(JSON.parse(event.data)); }
+    catch { notice("Relay 응답을 읽을 수 없습니다.", true); }
+  };
   openedSocket.onerror = () => notice("Relay 연결을 열 수 없습니다.", true);
   openedSocket.onclose = async (event) => {
     if (socket !== openedSocket) return;
     socket = null;
     clearTimeout(socketRefreshTimer);
+    viewer.socketClosed();
     if (activeDesktop) connection("RELAY DISCONNECTED", "error");
     ui.presence.textContent = "OFFLINE";
     ui.presence.className = "presence";
@@ -174,8 +196,11 @@ function openSocket(desktop, controller) {
 }
 
 function receive(event) {
-  if (event.type === "desktop.presence") {
+  if (typeof event.type === "string" && event.type.startsWith("desktop.screen.")) {
+    viewer.handleEvent(event);
+  } else if (event.type === "desktop.presence") {
     const online = event.payload.desktopOnline === true;
+    viewer.setOnline(online);
     ui.presence.textContent = online ? "ONLINE" : "OFFLINE";
     ui.presence.className = `presence${online ? " online" : ""}`;
     if (online) send("session.list", {});
@@ -183,17 +208,19 @@ function receive(event) {
     latestSnapshot = event.payload;
     renderSessions();
   } else if (event.type === "error") {
-    notice(event.payload?.message || "원격 명령이 거부되었습니다.", true);
+    if (!viewer.handleEvent(event)) notice(event.payload?.message || "원격 명령이 거부되었습니다.", true);
   }
 }
 
 function send(type, payload) {
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ version: 1, id: `web_${crypto.randomUUID()}`, type, sentAt: new Date().toISOString(), payload }));
+  if (!socket || socket.readyState !== WebSocket.OPEN) return null;
+  const id = `web_${crypto.randomUUID()}`;
+  socket.send(JSON.stringify({ version: 1, id, type, sentAt: new Date().toISOString(), payload }));
+  return id;
 }
 
-function closeSocket() { clearTimeout(socketRefreshTimer); if (socket) { socket.onclose = null; socket.close(1000, "Changing desktop"); } socket = null; accessToken = null; }
-function signOut() { closeSocket(); controllers.clear(); googleToken = null; desktops = []; activeDesktop = null; ui.console.hidden = true; ui.signIn.hidden = false; connection("SIGN IN REQUIRED"); window.google?.accounts.id.disableAutoSelect(); }
+function closeSocket() { clearTimeout(socketRefreshTimer); viewer.close(); viewer.setOnline(false); if (socket) { socket.onclose = null; socket.close(1000, "Changing desktop"); } socket = null; accessToken = null; }
+function signOut() { ++connectGeneration; closeSocket(); viewer.selectDesktop(null); controllers.clear(); googleToken = null; desktops = []; activeDesktop = null; ui.console.hidden = true; ui.signIn.hidden = false; connection("SIGN IN REQUIRED"); window.google?.accounts.id.disableAutoSelect(); }
 function escapeHTML(value) { const element = document.createElement("span"); element.textContent = String(value || ""); return element.innerHTML; }
 
 $("#refresh").onclick = async () => { try { desktops = (await api("/v2/desktops")).desktops; renderDesktops(); } catch (error) { notice(error.message, true); } };

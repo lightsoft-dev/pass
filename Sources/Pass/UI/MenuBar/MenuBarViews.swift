@@ -8,6 +8,13 @@ struct MenuBarLabel: View {
     var body: some View {
         if appModel.setupProblem != nil {
             Image(systemName: "exclamationmark.triangle.fill")
+        } else if appModel.remoteDesktopControllerID != nil {
+            HStack(spacing: 3) {
+                Image(nsImage: MenuBarIcon.image)
+                Image(systemName: "display")
+                if appModel.pendingCount > 0 { Text("\(appModel.pendingCount)") }
+            }
+            .help("Remote desktop · \(appModel.remoteDesktopSessionStatus)")
         } else if appModel.pendingCount > 0 {
             // App-icon glyph + pending count.
             Label { Text("\(appModel.pendingCount)") } icon: { Image(nsImage: MenuBarIcon.image) }
@@ -36,6 +43,15 @@ struct MenuBarContent: View {
             .disabled(appModel.isExporting)
         Button("Attach device pane…") { appModel.showDeviceMirror() }
             .disabled(appModel.focusedSessionName == nil)
+
+        if let controllerID = appModel.remoteDesktopControllerID {
+            Divider()
+            Text("Remote desktop · \(appModel.remoteDesktopSessionStatus)")
+            Text(controllerID).font(.caption)
+            Button("Deny or stop screen sharing") {
+                appModel.stopRemoteDesktopSharing()
+            }
+        }
 
         if appModel.extensions?.activeExtensions.isEmpty == false {
             Menu("Extensions") {
