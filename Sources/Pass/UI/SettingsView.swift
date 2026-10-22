@@ -52,7 +52,7 @@ struct SettingsView: View {
             advertiseOn = ClaudeHooksInstaller.isAdvertiseInstalled()
             refreshChromeProfiles()
             // Keep the existing summon panel on screen, but below the Settings window while
-            // Settings has focus. Its floating level is restored when Settings closes.
+            // Settings has focus. Floating resumes when the panel regains focus.
             appModel.setSettingsPresented(true)
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -361,9 +361,9 @@ struct SettingsView: View {
                 .onChange(of: launchAtLogin) { _, on in
                     if !LoginItemService.setEnabled(on) { launchAtLogin = LoginItemService.isEnabled }
                 }
-            Toggle("Float above other windows", isOn: $floating)
+            Toggle("Float above other windows while focused", isOn: $floating)
                 .onChange(of: floating) { _, on in appModel.setPanelFloating(on) }
-            Text("Off: pass behaves like a normal window you can put beside your editor (⌘⇧F toggles).")
+            Text("Click another app to bring it in front of pass. Off: pass keeps its position like a normal window (⌘⇧F toggles).")
                 .font(.caption).foregroundStyle(.secondary)
             Toggle("Restore sessions after a restart", isOn: $restoreSessions)
             Text("If tmux was restarted (e.g. after a reboot), recreates your sessions with the same project and agent on launch — Claude resumes with --continue.")

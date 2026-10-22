@@ -88,8 +88,8 @@ final class PanelController {
         }
     )
 
-    /// Floating (always-on-top summon panel) vs a normal window that can sit behind others
-    /// and stay open while you work. Persisted.
+    /// Floating while focused vs a normal window. Both stay open behind other apps
+    /// after losing focus. Persisted.
     var isFloating: Bool {
         get { (UserDefaults.standard.object(forKey: "panel.floating") as? Bool) ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "panel.floating"); applyMode() }
@@ -101,8 +101,9 @@ final class PanelController {
         guard let panel else { return }
         panel.isFloatingPanel = isFloating
         // Keep the summon panel visible while Settings is open, but temporarily lower it so
-        // the normal Settings window can sit in front. Closing Settings restores floating mode.
-        panel.level = isFloating && !settingsPresented ? .floating : .normal
+        // the normal Settings window can sit in front. Closing Settings allows floating
+        // again once the panel regains the keyboard.
+        panel.floatsWhenKey = isFloating && !settingsPresented
         panel.collectionBehavior = isFloating
             ? [.canJoinAllSpaces, .fullScreenAuxiliary]
             : [.fullScreenAuxiliary]
@@ -127,7 +128,11 @@ final class PanelController {
         if !isVisible { show(preselecting: nil); return }
         // Visible but not focused (buried behind other windows in normal mode, or the user is
         // in another app) → the hotkey means "get me to pass": raise it instead of hiding.
-        if panel?.isKeyWindow == true { hide() } else { raise() }
+        if panel?.isKeyWindow == true || appModel.miniTerminals?.isKey == true {
+            hide()
+        } else {
+            raise()
+        }
     }
 
     /// Bring the already-visible panel to the front and give it the keyboard — WITHOUT

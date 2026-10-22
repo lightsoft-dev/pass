@@ -62,7 +62,9 @@ final class AppModel {
 
     /// Whether the panel is on screen. The home view attaches a live terminal to the selected
     /// session only while visible — hiding the panel detaches it (the session keeps running).
-    var panelVisible: Bool = false
+    var panelVisible: Bool = false {
+        didSet { miniTerminals?.setPanelVisible(panelVisible) }
+    }
 
     /// Bumped by ⌘[ to step back from the session terminal to the inbox.
     var backToken: Int = 0
@@ -167,6 +169,7 @@ final class AppModel {
         browser = BrowserStore()
         mirror = MirrorEngine()
         miniTerminals = MiniTerminalManager()
+        miniTerminals.setPanelVisible(panelVisible)
         webViews = WebViewPool()
         webViews.store = browser
         // Tabs are data (BrowserStore); webviews are the pool — keep them in lockstep.
