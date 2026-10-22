@@ -29,7 +29,7 @@ enum ProjectAgentIdentity {
               let prompt = Bundle.main.path(forResource: "ProjectAgentInstructions", ofType: "md")
         else { return nil }
         let title = URL(fileURLWithPath: root).lastPathComponent + " · project agent"
-        return [Shell.singleQuoted(pi), "--session-id", piSessionID(for: root),
+        return [Shell.singleQuoted(pi), "--no-extensions", "--session-id", piSessionID(for: root),
                 "--name", Shell.singleQuoted(title),
                 "--append-system-prompt", Shell.singleQuoted(prompt)].joined(separator: " ")
     }

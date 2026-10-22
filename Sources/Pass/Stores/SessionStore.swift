@@ -61,6 +61,8 @@ final class SessionStore {
     /// Names selected by concurrent launch tasks but not yet durably present in tmux. A separate
     /// in-process reservation is required because `has-session` awaits and MainActor is reentrant.
     private var reservedSessionNames: Set<String> = []
+    /// A newly sent launch command may still look like a shell while Pi starts.
+    private var projectAgentLaunchTimes: [String: Date] = [:]
 
     /// Descriptors for the CURRENT live launchable-agent sessions, mirrored to state.json so a
     /// session can be recreated after its tmux server dies. Rebuilt on every non-empty reconcile.
@@ -478,16 +480,28 @@ final class SessionStore {
             return .failure(.unregisteredProject)
         }
         let name = ProjectAgentIdentity.sessionName(for: projectRoot)
-        if let session = session(named: name), !session.launching { return .success(name) }
-        guard let launch = ProjectAgentIdentity.launchCommand(for: projectRoot) else {
-            return .failure(.piUnavailable)
-        }
         if reservedSessionNames.contains(name) { return .success(name) }
         reservedSessionNames.insert(name)
         defer { reservedSessionNames.remove(name) }
         if await tmux.hasSession(name) {
+            let state = await tmux.paneState(name)
+            if AgentKind.infer(fromPaneCommand: state.command) == .shell,
+               Date().timeIntervalSince(projectAgentLaunchTimes[name] ?? .distantPast) > 5 {
+                guard let launch = ProjectAgentIdentity.launchCommand(for: projectRoot) else {
+                    return .failure(.piUnavailable)
+                }
+                if state.inMode { await tmux.cancelMode(name) }
+                guard await tmux.sendKeys(name, ["C-c"]),
+                      await tmux.sendKeys(name, [launch, "Enter"]) else {
+                    return .failure(.launchFailed)
+                }
+                projectAgentLaunchTimes[name] = Date()
+            }
             await reconcile()
             return .success(name)
+        }
+        guard let launch = ProjectAgentIdentity.launchCommand(for: projectRoot) else {
+            return .failure(.piUnavailable)
         }
         upsertLaunching(name: name, projectRoot: projectRoot, cwd: projectRoot, agent: .pi, git: nil)
         guard await tmux.newSession(name: name, cwd: projectRoot, projectRoot: projectRoot,
@@ -495,6 +509,7 @@ final class SessionStore {
             sessions.removeAll { $0.name == name && $0.launching }
             return .failure(.launchFailed)
         }
+        projectAgentLaunchTimes[name] = Date()
         await reconcile()
         return .success(name)
     }
