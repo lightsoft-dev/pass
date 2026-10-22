@@ -68,10 +68,15 @@ final class DoubleTapHotkey {
     private var lastTapAt: Date?   // when the previous clean tap completed (modifier released)
 
     private let maxHold: TimeInterval = 0.35   // a tap's press-to-release must be quicker than this
-    private let interval: TimeInterval = 0.45  // max gap between the two taps' completions
+    private let interval: TimeInterval // max gap between the two taps' completions
 
-    init(modifier: NSEvent.ModifierFlags = .command, onDoubleTap: @escaping @MainActor () -> Void) {
+    init(
+        modifier: NSEvent.ModifierFlags = .command,
+        interval: TimeInterval = 0.45,
+        onDoubleTap: @escaping @MainActor () -> Void
+    ) {
         self.modifier = modifier
+        self.interval = interval
         fire = onDoubleTap
         let flags: (NSEvent) -> Void = { [weak self] e in
             MainActor.assumeIsolated { self?.handleFlags(e) }
