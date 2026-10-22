@@ -7,6 +7,7 @@ struct ProjectAgentMessage: Identifiable {
     let role: Role
     var text: String
     var attachments: [URL] = []
+    var images: [Data] = []
     var toolCallID: String? = nil
     var toolName: String? = nil
     var toolInput: String? = nil
@@ -478,7 +479,10 @@ final class ProjectAgentConversation {
             let completedAssistantID = assistantID
             if let assistantID, let index = messages.firstIndex(where: { $0.id == assistantID }) {
                 messages[index].text = text
-                if type == "message_end", text.isEmpty { messages.remove(at: index) }
+                if type == "message_end" {
+                    messages[index].images = Self.imageContent(message)
+                    if text.isEmpty, messages[index].images.isEmpty { messages.remove(at: index) }
+                }
             }
             if type == "message_end" {
                 assistantID = nil
@@ -602,6 +606,21 @@ final class ProjectAgentConversation {
         }.joined(separator: "\n")
     }
 
+    private static func imageContent(_ message: [String: Any]) -> [Data] {
+        let content = message["content"] as? [[String: Any]] ?? []
+        return content.filter { $0["type"] as? String == "image" }
+            .prefix(4)
+            .compactMap { part in
+                guard let mimeType = part["mimeType"] as? String,
+                      mimeType.hasPrefix("image/"),
+                      let encoded = part["data"] as? String,
+                      encoded.count <= 16_000_000,
+                      let data = Data(base64Encoded: encoded),
+                      data.count <= 12_000_000 else { return nil }
+                return data
+            }
+    }
+
     private static func messageFromHistory(_ message: [String: Any]) -> ProjectAgentMessage? {
         guard let role = message["role"] as? String else { return nil }
         if role == "user" {
@@ -610,7 +629,10 @@ final class ProjectAgentConversation {
         }
         if role == "assistant" {
             let text = textContent(message)
-            if !text.isEmpty { return ProjectAgentMessage(role: .assistant, text: text) }
+            let images = imageContent(message)
+            if !text.isEmpty || !images.isEmpty {
+                return ProjectAgentMessage(role: .assistant, text: text, images: images)
+            }
             if let error = message["errorMessage"] as? String {
                 return ProjectAgentMessage(role: .error, text: readableError(error))
             }

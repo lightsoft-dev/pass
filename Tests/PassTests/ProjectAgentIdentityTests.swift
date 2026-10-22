@@ -131,4 +131,18 @@ final class ProjectAgentIdentityTests: XCTestCase {
         XCTAssertEqual(messages[1].text, "README contents")
         XCTAssertFalse(messages[1].toolIsRunning)
     }
+
+    @MainActor func testAssistantImageRestoresWithoutText() {
+        let imageData = Data([0x89, 0x50, 0x4e, 0x47])
+        let history: [[String: Any]] = [[
+            "role": "assistant",
+            "content": [["type": "image", "mimeType": "image/png",
+                         "data": imageData.base64EncodedString()]]
+        ]]
+
+        let messages = ProjectAgentConversation.messagesFromHistory(history)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages[0].role, .assistant)
+        XCTAssertEqual(messages[0].images, [imageData])
+    }
 }
