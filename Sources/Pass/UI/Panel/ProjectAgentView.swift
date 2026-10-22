@@ -254,6 +254,17 @@ struct ProjectAgentView: View {
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
+                                Menu {
+                                    Button("Pa에게 삭제 요청", role: .destructive) {
+                                        requestWorkerRemoval(worker)
+                                    }
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .font(PassFont.ui(size: 10, weight: .semibold))
+                                }
+                                .menuStyle(.borderlessButton)
+                                .disabled(conversation?.canSendMessage != true)
+                                .help("Pa가 이 워커의 상태를 확인하고 삭제")
                             }
                             .padding(.horizontal, 9).padding(.vertical, 7)
                             .background(Color.primary.opacity(0.05),
@@ -311,6 +322,16 @@ struct ProjectAgentView: View {
         } else {
             request = "이 프로젝트에 코딩 에이전트 워커를 새로 추가해 주세요. 워커 선택 메모리와 프로젝트 상황을 확인하고 적합한 에이전트를 선택하세요. 아직 작업은 맡기지 마세요."
         }
+        if conversation.send(request) { status = nil }
+    }
+
+    private func requestWorkerRemoval(_ worker: Session) {
+        guard let conversation else { return }
+        if PiAuthentication.needsLogin() {
+            connectAccount()
+            return
+        }
+        let request = "이 프로젝트의 워커 \(worker.name)을 삭제해 주세요. 먼저 작업 상태와 최근 출력을 확인하세요. 작업 중이거나 입력을 기다리고 있으면 삭제 전에 저에게 알려주세요. 삭제할 수 있으면 passcli session remove 명령을 사용하고 결과를 알려주세요."
         if conversation.send(request) { status = nil }
     }
 
@@ -489,16 +510,82 @@ private struct ProjectAgentChatView: View {
                     .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
             }
         case .activity:
-            Text(entry.text)
-                .font(PassFont.ui(size: 11))
-                .textSelection(.enabled)
-                .foregroundStyle(.secondary)
-                .padding(.leading, 8)
+            ProjectAgentActivityRow(entry: entry)
         case .error:
             Label(entry.text, systemImage: "exclamationmark.circle")
                 .font(PassFont.ui(size: 11))
                 .textSelection(.enabled)
                 .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct ProjectAgentActivityRow: View {
+    let entry: ProjectAgentMessage
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: entry.toolIsError ? "exclamationmark.circle" : "wrench.and.screwdriver")
+                        .frame(width: 14)
+                    Text(entry.toolName ?? "도구")
+                        .fontWeight(.medium)
+                    if let summary = entry.toolSummary {
+                        Text(summary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: 4)
+                    if entry.toolIsRunning {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Text(entry.toolIsError ? "실패" : "완료")
+                            .foregroundStyle(entry.toolIsError ? Color.orange : Color.secondary)
+                    }
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(PassFont.ui(size: 9, weight: .semibold))
+                }
+                .font(PassFont.ui(size: 10))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(entry.toolName ?? "도구") \(entry.toolIsRunning ? "실행 중" : entry.toolIsError ? "실패" : "완료")")
+            .accessibilityHint(expanded ? "도구 실행 세부사항 접기" : "도구 실행 세부사항 펼치기")
+
+            if expanded {
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let input = entry.toolInput {
+                            detail("입력", text: input)
+                        }
+                        detail("결과", text: entry.text.isEmpty
+                               ? (entry.toolIsRunning ? "실행 중…" : "표시할 텍스트 결과가 없습니다.")
+                               : entry.text)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                }
+                .frame(maxHeight: 300)
+                .background(Color.primary.opacity(0.03))
+            }
+        }
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func detail(_ title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(PassFont.ui(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.custom("SF Mono", size: 10))
+                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

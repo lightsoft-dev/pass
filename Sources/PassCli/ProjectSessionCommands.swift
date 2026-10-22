@@ -6,7 +6,7 @@ struct ProjectSessions: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "session",
         abstract: "Manage worker sessions in this project (from its project agent).",
-        subcommands: [List.self, Start.self, Send.self, Tail.self]
+        subcommands: [List.self, Start.self, Send.self, Tail.self, Remove.self]
     )
 
     struct List: AsyncParsableCommand {
@@ -79,6 +79,23 @@ struct ProjectSessions: AsyncParsableCommand {
                 as: CLIProjectSessionResponse.self)
             guard result.ok else { PassClient.fail(result.error ?? "session tail failed", code: PassExit.refused) }
             if json { printJSON(result) } else { print(result.content ?? "", terminator: "") }
+        }
+    }
+
+    struct Remove: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Remove a worker session in this project.")
+
+        @OptionGroup var source: SessionOption
+        @Argument(help: "Worker session name.") var target: String
+        @Flag(help: "Machine-readable output.") var json = false
+
+        func run() async throws {
+            let result = await PassClient.post("/cli/session/remove",
+                CLIProjectSessionRemoveRequest(sourceSession: source.resolved(),
+                                               targetSession: target),
+                as: CLIProjectSessionResponse.self)
+            guard result.ok else { PassClient.fail(result.error ?? "session remove failed", code: PassExit.refused) }
+            if json { printJSON(result) } else { print("removed \(result.session ?? target)") }
         }
     }
 }

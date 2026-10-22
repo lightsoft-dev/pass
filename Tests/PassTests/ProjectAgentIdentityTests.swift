@@ -94,4 +94,41 @@ final class ProjectAgentIdentityTests: XCTestCase {
 
         XCTAssertEqual(candidates.map(\.label), ["zai/glm-4.7", "zai/glm-4.5-air"])
     }
+
+    func testToolActivityKeepsOneRowAndFullResult() {
+        var messages: [ProjectAgentMessage] = []
+        ProjectAgentToolActivity.start([
+            "toolCallId": "call-1", "toolName": "bash", "args": ["command": "git status"]
+        ], in: &messages)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertTrue(messages[0].toolIsRunning)
+        XCTAssertEqual(messages[0].toolSummary, "git status")
+
+        let result = String(repeating: "output ", count: 120)
+        ProjectAgentToolActivity.finish([
+            "toolCallId": "call-1", "toolName": "bash",
+            "result": ["content": [["type": "text", "text": result]]], "isError": false
+        ], in: &messages, isComplete: true)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertFalse(messages[0].toolIsRunning)
+        XCTAssertEqual(messages[0].text, result)
+    }
+
+    @MainActor func testToolActivityRestoresFromPiHistory() {
+        let history: [[String: Any]] = [
+            ["role": "assistant", "content": [
+                ["type": "text", "text": "파일을 확인할게요."],
+                ["type": "toolCall", "id": "call-2", "name": "read",
+                 "arguments": ["path": "README.md"]]
+            ]],
+            ["role": "toolResult", "toolCallId": "call-2", "toolName": "read",
+             "content": [["type": "text", "text": "README contents"]], "isError": false]
+        ]
+        let messages = ProjectAgentConversation.messagesFromHistory(history)
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages[0].text, "파일을 확인할게요.")
+        XCTAssertEqual(messages[1].toolName, "read")
+        XCTAssertEqual(messages[1].text, "README contents")
+        XCTAssertFalse(messages[1].toolIsRunning)
+    }
 }

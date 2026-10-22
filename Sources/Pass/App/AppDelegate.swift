@@ -247,6 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 startProjectSession: { body in await CLIAPI.startProjectSession(appModel, body: body) },
                 sendProjectSession: { body in await CLIAPI.sendProjectSession(appModel, body: body) },
                 tailProjectSession: { body in await CLIAPI.tailProjectSession(appModel, body: body) },
+                removeProjectSession: { body in await CLIAPI.removeProjectSession(appModel, body: body) },
                 open: { body in await CLIAPI.open(appModel, body: body) },
                 close: { body in await MainActor.run { CLIAPI.close(appModel, body: body) } },
                 tabs: { await MainActor.run { CLIAPI.tabs(appModel) } },
