@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Observation
 
 /// Stable identity for the one Pi coordinator owned by a registered project.
 enum ProjectAgentIdentity {
@@ -54,8 +55,7 @@ enum ProjectAgentFailure: Error, LocalizedError {
     }
 }
 
-/// Pi's selected provider must have a usable local credential before a project agent can reply.
-/// OAuth refresh may also succeed later; an expired credential is a good reason to offer login.
+/// Pa may use any locally connected Pi provider; credentials stay in Pi's own auth store.
 enum PiAuthentication {
     static func defaultModelLabel(agentDirectory: URL? = nil) -> String? {
         let directory = agentDirectory ?? URL(fileURLWithPath: NSHomeDirectory())
@@ -68,41 +68,123 @@ enum PiAuthentication {
     }
 
     static func hasCredential(for provider: String, agentDirectory: URL? = nil) -> Bool {
+        usableProviders(agentDirectory: agentDirectory).contains(provider)
+    }
+
+    static func usableProviders(now: Date = Date(), agentDirectory: URL? = nil) -> Set<String> {
         let directory = agentDirectory ?? URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".pi/agent", isDirectory: true)
         guard let data = try? Data(contentsOf: directory.appendingPathComponent("auth.json")),
-              let auth = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let credential = auth[provider] as? [String: Any] else { return false }
-        if credential["type"] as? String == "api_key" {
-            return (credential["key"] as? String)?.isEmpty == false
-        }
-        if credential["type"] as? String == "oauth",
-           let expiry = credential["expires"] as? Double,
-           let access = credential["access"] as? String {
-            return !access.isEmpty && expiry > Date().timeIntervalSince1970 * 1_000 + 60_000
-        }
-        return false
+              let auth = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [] }
+        return Set(auth.compactMap { provider, value in
+            guard let credential = value as? [String: Any] else { return nil }
+            switch credential["type"] as? String {
+            case "api_key":
+                return (credential["key"] as? String)?.isEmpty == false ? provider : nil
+            case "oauth":
+                guard let expiry = credential["expires"] as? Double,
+                      let access = credential["access"] as? String,
+                      !access.isEmpty,
+                      expiry > now.timeIntervalSince1970 * 1_000 + 60_000
+                else { return nil }
+                return provider
+            default: return nil
+            }
+        })
     }
 
     static func needsLogin(now: Date = Date(), agentDirectory: URL? = nil) -> Bool {
-        let directory = agentDirectory ?? URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".pi/agent", isDirectory: true)
-        guard let settingsData = try? Data(contentsOf: directory.appendingPathComponent("settings.json")),
-              let settings = try? JSONSerialization.jsonObject(with: settingsData) as? [String: Any],
-              let provider = settings["defaultProvider"] as? String, !provider.isEmpty,
-              let authData = try? Data(contentsOf: directory.appendingPathComponent("auth.json")),
-              let auth = try? JSONSerialization.jsonObject(with: authData) as? [String: Any],
-              let credential = auth[provider] as? [String: Any] else { return true }
+        usableProviders(now: now, agentDirectory: agentDirectory).isEmpty
+    }
+}
 
-        switch credential["type"] as? String {
-        case "api_key":
-            return (credential["key"] as? String)?.isEmpty != false
-        case "oauth":
-            guard let expires = credential["expires"] as? Double,
-                  let access = credential["access"] as? String else { return true }
-            return access.isEmpty || expires <= now.timeIntervalSince1970 * 1_000 + 60_000
-        default:
-            return true
+/// Updates the user's existing Pi installation through Pi's own self-update command.
+@MainActor
+@Observable
+final class PiUpdater {
+    private(set) var version: String?
+    private(set) var isUpdating = false
+    private(set) var status: String?
+    @ObservationIgnored private var versionGeneration = 0
+
+    func refreshVersion() {
+        guard !isUpdating else { return }
+        guard let pi = Shell.resolveViaLoginShell("pi") else {
+            version = nil
+            return
         }
+        versionGeneration += 1
+        let generation = versionGeneration
+        Task {
+            let result = await Self.run(pi, arguments: ["--version"])
+            if generation == versionGeneration, !isUpdating, result.exitCode == 0 {
+                version = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+    }
+
+    func update(onSuccess: @escaping @MainActor () -> Void) {
+        guard !isUpdating else { return }
+        guard let pi = Shell.resolveViaLoginShell("pi") else {
+            status = "Pi가 설치되어 있지 않습니다."
+            return
+        }
+        versionGeneration += 1
+        isUpdating = true
+        status = "Pi 업데이트 중…"
+        Task {
+            let oldVersion = version
+            let result = await Self.run(pi, arguments: ["update", "--self", "--no-approve"])
+            let updated = await Self.run(pi, arguments: ["--version"])
+            if updated.exitCode == 0 {
+                version = updated.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            isUpdating = false
+            if result.exitCode == 0 {
+                if let version {
+                    status = version == oldVersion ? "Pi v\(version)은 최신 버전입니다."
+                                                   : "Pi v\(version) 업데이트 완료"
+                    if version != oldVersion { onSuccess() }
+                } else {
+                    status = "Pi 업데이트 후 버전을 확인할 수 없습니다."
+                    onSuccess()
+                }
+            } else {
+                let detail = result.output.split(whereSeparator: \.isNewline).last.map(String.init) ?? ""
+                status = detail.isEmpty ? "Pi 업데이트에 실패했습니다."
+                    : "Pi 업데이트 실패: \(String(detail.prefix(180)))"
+            }
+        }
+    }
+
+    private struct CommandResult: Sendable {
+        let exitCode: Int32
+        let output: String
+    }
+
+    private nonisolated static func run(_ executable: String, arguments: [String]) async -> CommandResult {
+        await Task.detached(priority: .utility) {
+            let process = Process()
+            let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
+            process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+            var environment = ProcessInfo.processInfo.environment
+            environment["PATH"] = URL(fileURLWithPath: executable).deletingLastPathComponent().path
+                + ":" + (environment["PATH"] ?? "/usr/bin:/bin")
+            process.environment = environment
+            process.standardOutput = pipe
+            process.standardError = pipe
+            do {
+                try process.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                return CommandResult(exitCode: process.terminationStatus,
+                                     output: String(decoding: data, as: UTF8.self))
+            } catch {
+                return CommandResult(exitCode: -1, output: error.localizedDescription)
+            }
+        }.value
     }
 }

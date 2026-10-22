@@ -117,6 +117,7 @@ final class AppModel {
     private(set) var browser: BrowserStore!
     private(set) var mirror: MirrorEngine!
     private(set) var miniTerminals: MiniTerminalManager!
+    let piUpdater = PiUpdater()
     private var projectAgentConversations: [String: ProjectAgentConversation] = [:]
 
     func projectAgentConversation(for root: String) -> ProjectAgentConversation {
@@ -124,6 +125,12 @@ final class AppModel {
         let conversation = ProjectAgentConversation(projectRoot: root)
         projectAgentConversations[root] = conversation
         return conversation
+    }
+
+    func restartProjectAgentsAfterPiUpdate() {
+        for conversation in projectAgentConversations.values {
+            conversation.restartAfterPiUpdate()
+        }
     }
     private(set) var webViews: WebViewPool!
     private(set) var extensions: ExtensionStore!

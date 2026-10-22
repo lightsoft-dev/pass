@@ -20,6 +20,16 @@ final class ProjectAgentConversation {
     private(set) var status = "에이전트를 시작하는 중…"
     private(set) var modelLabel = "Pi 기본 모델"
     private(set) var modelError = false
+    private(set) var manuallySelectedModel: String?
+    private(set) var availableModels: [PiModelOption] = []
+
+    var selectableModels: [PiModelOption] {
+        let providers = PiAuthentication.usableProviders()
+        return availableModels.filter { providers.contains($0.provider) }
+    }
+
+    var canChangeModel: Bool { isReady && !isResponding && !settingModel && !waitingForModels }
+    var canSendMessage: Bool { isReady && !isResponding && !settingModel }
 
     @ObservationIgnored private var process: Process?
     @ObservationIgnored private var input: Pipe?
@@ -30,8 +40,23 @@ final class ProjectAgentConversation {
     @ObservationIgnored private var assistantID: UUID?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var activePrompt: String?
+    @ObservationIgnored private var toolStartedForPrompt = false
+    @ObservationIgnored private var attemptedModels: Set<String> = []
+    @ObservationIgnored private var blockedProviders: Set<String> = []
+    @ObservationIgnored private var retryError: String?
+    @ObservationIgnored private var waitingForModels = false
+    @ObservationIgnored private var waitingForAgentEnd = false
+    @ObservationIgnored private var settingModel = false
+    @ObservationIgnored private var pendingModel: PiModelOption?
+    @ObservationIgnored private var pendingSelectionIsManual = false
+    @ObservationIgnored private var restartWhenIdle = false
 
-    init(projectRoot: String) { self.projectRoot = projectRoot }
+    init(projectRoot: String) {
+        self.projectRoot = projectRoot
+        manuallySelectedModel = UserDefaults.standard.string(forKey:
+            "projectAgent.manualModel." + ProjectAgentIdentity.sessionName(for: projectRoot))
+    }
 
     func start() {
         guard !started else { return }
@@ -39,52 +64,162 @@ final class ProjectAgentConversation {
         launch()
     }
 
-    func useWorkingModel() {
-        guard PiAuthentication.hasCredential(for: "zai") else { return }
-        UserDefaults.standard.set("zai/glm-4.7", forKey: modelPreferenceKey)
-        restart()
-    }
-
-    var canUseWorkingModel: Bool {
-        modelError && PiAuthentication.hasCredential(for: "zai") && modelLabel != "zai/glm-4.7"
+    func restartAfterPiUpdate() {
+        guard started else { return }
+        if isResponding {
+            restartWhenIdle = true
+            return
+        }
+        generation += 1
+        output?.fileHandleForReading.readabilityHandler = nil
+        errorOutput?.fileHandleForReading.readabilityHandler = nil
+        input?.fileHandleForWriting.closeFile()
+        if process?.isRunning == true { process?.terminate() }
+        process = nil
+        input = nil
+        output = nil
+        errorOutput = nil
+        lineBuffer.removeAll()
+        stderrTail = ""
+        availableModels = []
+        assistantID = nil
+        retryError = nil
+        waitingForModels = false
+        waitingForAgentEnd = false
+        settingModel = false
+        pendingModel = nil
+        isReady = false
+        status = "새 Pi 버전으로 다시 연결하는 중…"
+        restartWhenIdle = false
+        launch()
     }
 
     @discardableResult
     func send(_ text: String) -> Bool {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isReady, !body.isEmpty else { return false }
+        guard canSendMessage, !body.isEmpty else { return false }
         let entry = ProjectAgentMessage(role: .user, text: body)
         messages.append(entry)
         isResponding = true
+        activePrompt = body
+        toolStartedForPrompt = false
+        attemptedModels = [modelLabel]
+        blockedProviders = []
+        retryError = nil
+        waitingForAgentEnd = false
+        modelError = false
         status = "생각하는 중…"
-        if !write(["id": UUID().uuidString, "type": "prompt", "message": body,
-                   "streamingBehavior": "followUp"]) {
+        if !sendPrompt(body) {
             messages.append(ProjectAgentMessage(role: .error, text: "메시지를 보낼 수 없습니다. 에이전트를 다시 열어 주세요."))
             isResponding = false
+            activePrompt = nil
             return false
         }
         return true
+    }
+
+    private func sendPrompt(_ body: String) -> Bool {
+        write(["id": UUID().uuidString, "type": "prompt", "message": body,
+               "streamingBehavior": "followUp"])
     }
 
     private var modelPreferenceKey: String {
         "projectAgent.model." + ProjectAgentIdentity.sessionName(for: projectRoot)
     }
 
-    private func restart() {
-        generation += 1
-        output?.fileHandleForReading.readabilityHandler = nil
-        errorOutput?.fileHandleForReading.readabilityHandler = nil
-        input?.fileHandleForWriting.closeFile()
-        process?.terminate()
-        process = nil
-        input = nil
-        output = nil
-        errorOutput = nil
-        isReady = false
-        isResponding = false
-        modelError = false
-        lineBuffer.removeAll()
-        launch()
+    private var manualModelKey: String {
+        "projectAgent.manualModel." + ProjectAgentIdentity.sessionName(for: projectRoot)
+    }
+
+    func selectModel(_ model: PiModelOption) {
+        guard canChangeModel, selectableModels.contains(model) else { return }
+        if model.label == modelLabel {
+            saveManualSelection(model.label)
+            return
+        }
+        pendingModel = model
+        pendingSelectionIsManual = true
+        settingModel = true
+        status = "\(model.label) 연결 중…"
+        if !write(["id": "manual-model", "type": "set_model",
+                   "provider": model.provider, "modelId": model.id]) {
+            settingModel = false
+            pendingModel = nil
+            status = "모델을 바꿀 수 없습니다"
+        }
+    }
+
+    func useAutomaticModel() {
+        guard canChangeModel else { return }
+        let preferred = preferredAutomaticModel()
+        guard let preferred, preferred != modelLabel,
+              let model = selectableModels.first(where: { $0.label == preferred }) else {
+            saveManualSelection(nil)
+            return
+        }
+        pendingModel = model
+        pendingSelectionIsManual = false
+        settingModel = true
+        status = "\(model.label) 연결 중…"
+        if !write(["id": "manual-model", "type": "set_model",
+                   "provider": model.provider, "modelId": model.id]) {
+            settingModel = false
+            pendingModel = nil
+            status = "모델을 바꿀 수 없습니다"
+        }
+    }
+
+    private func saveManualSelection(_ label: String?) {
+        manuallySelectedModel = label
+        if let label {
+            UserDefaults.standard.set(label, forKey: manualModelKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: manualModelKey)
+        }
+    }
+
+    private static let lastWorkingModelKey = "projectAgent.lastWorkingModel"
+    private static let unsupportedModelsKey = "projectAgent.unsupportedModels"
+
+    private func savedModelChoices() -> [String] {
+        let defaults = UserDefaults.standard
+        var choices: [String] = []
+        if let model = defaults.string(forKey: modelPreferenceKey) { choices.append(model) }
+        if let model = defaults.string(forKey: Self.lastWorkingModelKey) { choices.append(model) }
+        for key in defaults.dictionaryRepresentation().keys.sorted()
+            where key.hasPrefix("projectAgent.model.") && key != modelPreferenceKey {
+            if let model = defaults.string(forKey: key) { choices.append(model) }
+        }
+        var seen: Set<String> = []
+        return choices.filter { seen.insert($0).inserted }
+    }
+
+    private func preferredModelOnLaunch() -> String? {
+        if let manuallySelectedModel {
+            if let provider = manuallySelectedModel.split(separator: "/", maxSplits: 1).first,
+               PiAuthentication.hasCredential(for: String(provider)) {
+                return manuallySelectedModel
+            }
+            saveManualSelection(nil)
+        }
+        return preferredAutomaticModel()
+    }
+
+    private func preferredAutomaticModel() -> String? {
+        let unsupported = Set(UserDefaults.standard.stringArray(forKey: Self.unsupportedModelsKey) ?? [])
+        for choice in savedModelChoices() where !unsupported.contains(choice) {
+            if let provider = choice.split(separator: "/", maxSplits: 1).first,
+               PiAuthentication.hasCredential(for: String(provider)) {
+                return choice
+            }
+        }
+        return nil
+    }
+
+    private func rememberUnsupportedModel() {
+        var models = Set(UserDefaults.standard.stringArray(forKey: Self.unsupportedModelsKey) ?? [])
+        models.insert(modelLabel)
+        UserDefaults.standard.set(models.sorted(), forKey: Self.unsupportedModelsKey)
     }
 
     private func launch() {
@@ -102,7 +237,7 @@ final class ProjectAgentConversation {
                              ProjectAgentIdentity.rpcSessionID(for: projectRoot),
                              "--name", URL(fileURLWithPath: projectRoot).lastPathComponent + " · Pa",
                              "--append-system-prompt", instructions]
-        if let selectedModel = UserDefaults.standard.string(forKey: modelPreferenceKey),
+        if let selectedModel = preferredModelOnLaunch(),
            let slash = selectedModel.firstIndex(of: "/") {
             process.arguments! += ["--provider", String(selectedModel[..<slash]),
                                    "--model", String(selectedModel[selectedModel.index(after: slash)...])]
@@ -154,6 +289,7 @@ final class ProjectAgentConversation {
             self.errorOutput = errorOutput
             status = "이전 대화를 불러오는 중…"
             _ = write(["id": "history", "type": "get_messages"])
+            waitingForModels = write(["id": "models", "type": "get_available_models"])
         } catch {
             status = "Pi를 시작할 수 없습니다: \(error.localizedDescription)"
             messages.append(ProjectAgentMessage(role: .error, text: status))
@@ -182,18 +318,59 @@ final class ProjectAgentConversation {
     private func receive(_ event: [String: Any]) {
         let type = event["type"] as? String ?? ""
         if type == "response" {
-            if event["id"] as? String == "history" {
+            let id = event["id"] as? String ?? ""
+            if id == "history" {
                 if let data = event["data"] as? [String: Any],
                    let history = data["messages"] as? [[String: Any]] {
-                    messages = history.compactMap(Self.messageFromHistory)
+                    messages = Self.messagesFromHistory(history)
                 }
                 isReady = event["success"] as? Bool == true
                 status = isReady ? "준비됨" : (event["error"] as? String ?? "대화를 불러올 수 없습니다.")
+            } else if id == "models" {
+                waitingForModels = false
+                if let data = event["data"] as? [String: Any],
+                   let models = data["models"] as? [[String: Any]] {
+                    availableModels = models.compactMap(PiModelOption.init)
+                }
+                if retryError != nil && !waitingForAgentEnd { tryNextModel() }
+            } else if id == "auto-model" {
+                settingModel = false
+                if event["success"] as? Bool == true, let selected = pendingModel,
+                   let prompt = activePrompt {
+                    modelLabel = selected.label
+                    pendingModel = nil
+                    retryError = nil
+                    status = "\(modelLabel)로 다시 시도하는 중…"
+                    if !sendPrompt(prompt) {
+                        finishModelFailure("Pa가 요청을 다시 보낼 수 없습니다.")
+                    }
+                } else {
+                    pendingModel = nil
+                    tryNextModel()
+                }
+            } else if id == "manual-model" {
+                settingModel = false
+                if event["success"] as? Bool == true, let selected = pendingModel {
+                    modelLabel = selected.label
+                    modelError = false
+                    saveManualSelection(pendingSelectionIsManual ? selected.label : nil)
+                    status = "준비됨"
+                } else {
+                    status = "모델을 바꿀 수 없습니다"
+                    let error = event["error"] as? String ?? "선택한 모델을 사용할 수 없습니다."
+                    messages.append(ProjectAgentMessage(role: .error, text: Self.readableError(error)))
+                }
+                pendingModel = nil
             } else if event["success"] as? Bool == false {
                 let error = event["error"] as? String ?? "Pi 요청이 실패했습니다."
-                messages.append(ProjectAgentMessage(role: .error, text: error))
-                isResponding = false
-                status = error
+                if !handleModelFailure(error) {
+                    messages.append(ProjectAgentMessage(role: .error, text: Self.readableError(error)))
+                    isResponding = false
+                    activePrompt = nil
+                    status = "응답 오류"
+                } else {
+                    tryNextModel()
+                }
             }
             return
         }
@@ -208,6 +385,7 @@ final class ProjectAgentConversation {
             guard let message = event["message"] as? [String: Any],
                   message["role"] as? String == "assistant" else { return }
             let text = Self.textContent(message)
+            let completedAssistantID = assistantID
             if let assistantID, let index = messages.firstIndex(where: { $0.id == assistantID }) {
                 messages[index].text = text
                 if type == "message_end", text.isEmpty { messages.remove(at: index) }
@@ -215,13 +393,20 @@ final class ProjectAgentConversation {
             if type == "message_end" {
                 assistantID = nil
                 if let error = message["errorMessage"] as? String {
-                    modelError = error.localizedCaseInsensitiveContains("model is not supported")
-                    messages.append(ProjectAgentMessage(role: .error,
-                                                        text: Self.readableError(error)))
-                    status = modelError ? "모델 연결 오류" : "응답 오류"
+                    if handleModelFailure(error, waitForAgentEnd: true) {
+                        if let completedAssistantID {
+                            messages.removeAll { $0.id == completedAssistantID }
+                        }
+                    } else {
+                        messages.append(ProjectAgentMessage(role: .error,
+                                                            text: Self.readableError(error)))
+                        activePrompt = nil
+                        status = "응답 오류"
+                    }
                 }
             }
         case "tool_execution_start":
+            toolStartedForPrompt = true
             let name = event["toolName"] as? String ?? "도구"
             status = "\(name) 실행 중…"
             messages.append(ProjectAgentMessage(role: .activity, text: "\(name) 실행 중…"))
@@ -234,10 +419,89 @@ final class ProjectAgentConversation {
                                                  text: preview.isEmpty ? "\(name) 완료" : "\(name) 완료\n\(preview)"))
             status = "결과를 정리하는 중…"
         case "agent_end":
-            isResponding = false
-            if !modelError { status = "준비됨" }
+            if event["willRetry"] as? Bool == true { return }
+            if retryError != nil {
+                waitingForAgentEnd = false
+                tryNextModel()
+            } else {
+                if activePrompt != nil && !modelError {
+                    UserDefaults.standard.set(modelLabel, forKey: modelPreferenceKey)
+                    UserDefaults.standard.set(modelLabel, forKey: Self.lastWorkingModelKey)
+                }
+                activePrompt = nil
+                isResponding = false
+                if !modelError { status = "준비됨" }
+                if restartWhenIdle { restartAfterPiUpdate() }
+            }
         default: break
         }
+    }
+
+    private func handleModelFailure(_ error: String, waitForAgentEnd: Bool = false) -> Bool {
+        guard activePrompt != nil, !toolStartedForPrompt,
+              Self.isRecoverableModelError(error) else { return false }
+        if manuallySelectedModel == modelLabel { saveManualSelection(nil) }
+        if error.localizedCaseInsensitiveContains("model is not supported") {
+            rememberUnsupportedModel()
+        }
+        if error.localizedCaseInsensitiveContains("when using Codex with a ChatGPT account"),
+           let provider = modelLabel.split(separator: "/", maxSplits: 1).first {
+            blockedProviders.insert(String(provider))
+        }
+        retryError = error
+        waitingForAgentEnd = waitForAgentEnd
+        status = "사용 가능한 모델을 찾는 중…"
+        return true
+    }
+
+    private func tryNextModel() {
+        guard let retryError, activePrompt != nil, !settingModel,
+              !waitingForAgentEnd else { return }
+        if waitingForModels { return }
+        guard attemptedModels.count < 4 else { finishModelFailure(retryError); return }
+        let candidates = PiModelSelection.candidates(
+            availableModels,
+            usableProviders: PiAuthentication.usableProviders(),
+            preferredLabels: savedModelChoices(),
+            attemptedLabels: attemptedModels,
+            blockedProviders: blockedProviders)
+        guard let next = candidates.first else { finishModelFailure(retryError); return }
+        attemptedModels.insert(next.label)
+        pendingModel = next
+        settingModel = true
+        status = "\(next.label) 연결 중…"
+        if !write(["id": "auto-model", "type": "set_model",
+                   "provider": next.provider, "modelId": next.id]) {
+            settingModel = false
+            pendingModel = nil
+            tryNextModel()
+        }
+    }
+
+    private func finishModelFailure(_ error: String) {
+        retryError = nil
+        waitingForAgentEnd = false
+        pendingModel = nil
+        settingModel = false
+        activePrompt = nil
+        isResponding = false
+        modelError = true
+        status = "모델에 연결할 수 없습니다"
+        messages.append(ProjectAgentMessage(role: .error,
+            text: Self.readableError(error) + " Pi 계정을 연결하거나 모델 설정을 확인해 주세요."))
+        if restartWhenIdle { restartAfterPiUpdate() }
+    }
+
+    private static func isRecoverableModelError(_ error: String) -> Bool {
+        let lower = error.lowercased()
+        return lower.contains("model is not supported")
+            || lower.contains("no api key for provider")
+            || lower.contains("authentication failed")
+            || lower.contains("oauth token")
+            || lower.contains("invalid api key")
+            || lower.contains("unauthorized")
+            || lower.contains("rate limit")
+            || lower.contains("429")
     }
 
     private static func textContent(_ message: [String: Any]) -> String {
@@ -260,10 +524,75 @@ final class ProjectAgentConversation {
         return nil
     }
 
+    private static func messagesFromHistory(_ history: [[String: Any]]) -> [ProjectAgentMessage] {
+        var visible: [ProjectAgentMessage] = []
+        var index = 0
+        while index < history.count {
+            if index + 2 < history.count,
+               history[index]["role"] as? String == "user",
+               history[index + 1]["role"] as? String == "assistant",
+               let error = history[index + 1]["errorMessage"] as? String,
+               isRecoverableModelError(error),
+               history[index + 2]["role"] as? String == "user",
+               textContent(history[index]) == textContent(history[index + 2]) {
+                index += 2
+                continue
+            }
+            if let message = messageFromHistory(history[index]) { visible.append(message) }
+            index += 1
+        }
+        return visible
+    }
+
     private static func readableError(_ error: String) -> String {
         if error.localizedCaseInsensitiveContains("model is not supported") {
-            return "현재 ChatGPT 계정에서는 선택된 Pi 모델을 사용할 수 없습니다. 연결된 다른 모델을 선택해 주세요."
+            return "현재 계정에서는 선택된 Pi 모델을 사용할 수 없습니다."
         }
         return error
+    }
+}
+
+struct PiModelOption: Equatable {
+    let provider: String
+    let id: String
+    var label: String { provider + "/" + id }
+
+    init(provider: String, id: String) {
+        self.provider = provider
+        self.id = id
+    }
+
+    init?(_ data: [String: Any]) {
+        guard let provider = data["provider"] as? String,
+              let id = data["id"] as? String,
+              let inputs = data["input"] as? [String], inputs.contains("text")
+        else { return nil }
+        self.init(provider: provider, id: id)
+    }
+}
+
+enum PiModelSelection {
+    static func candidates(_ models: [PiModelOption], usableProviders: Set<String>,
+                           preferredLabels: [String], attemptedLabels: Set<String>,
+                           blockedProviders: Set<String>) -> [PiModelOption] {
+        let eligible = models.filter {
+            usableProviders.contains($0.provider)
+                && !attemptedLabels.contains($0.label)
+                && !blockedProviders.contains($0.provider)
+        }
+        var ordered: [PiModelOption] = []
+        for label in preferredLabels {
+            if let model = eligible.first(where: { $0.label == label }), !ordered.contains(model) {
+                ordered.append(model)
+            }
+        }
+        for provider in Set(eligible.map(\.provider)).sorted() {
+            if let model = eligible.first(where: { $0.provider == provider }),
+               !ordered.contains(model) {
+                ordered.append(model)
+            }
+        }
+        for model in eligible where !ordered.contains(model) { ordered.append(model) }
+        return ordered
     }
 }

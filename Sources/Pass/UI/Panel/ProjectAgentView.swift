@@ -48,6 +48,7 @@ struct ProjectAgentView: View {
             }
         }
         .task(id: projectRoot) {
+            appModel.piUpdater.refreshVersion()
             conversation = nil
             message = initialDraft
             pendingLoginMessage = nil
@@ -109,6 +110,26 @@ struct ProjectAgentView: View {
                 Label("Pa · Project agent", systemImage: "person.crop.circle.badge.checkmark")
                     .font(.system(size: 11, weight: .semibold))
                 Spacer()
+                if let version = appModel.piUpdater.version {
+                    Text("Pi v\(version)")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                Button {
+                    appModel.piUpdater.update {
+                        appModel.restartProjectAgentsAfterPiUpdate()
+                    }
+                } label: {
+                    if appModel.piUpdater.isUpdating {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Text("Pi 업데이트")
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.tint)
+                .disabled(appModel.piUpdater.isUpdating || conversation?.isResponding == true)
+                .help("설치된 Pi를 최신 버전으로 업데이트")
                 Button("Pi 계정 연결", action: connectAccount)
                     .buttonStyle(.plain)
                     .font(.system(size: 10, weight: .medium))
@@ -134,20 +155,19 @@ struct ProjectAgentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12).padding(.top, 6)
             }
-            if let conversation, conversation.canUseWorkingModel {
-                Button("연결된 Z.ai 모델로 전환") {
-                    conversation.useWorkingModel()
-                }
-                .buttonStyle(.link)
-                .font(.system(size: 11))
-                .padding(.horizontal, 12).padding(.top, 6)
+            if let updateStatus = appModel.piUpdater.status {
+                Text(updateStatus).font(.system(size: 10))
+                    .foregroundStyle(appModel.piUpdater.isUpdating ? .secondary : .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.top, 6)
             }
             HStack(spacing: 8) {
                 TextField("Pa에게 할 일을 알려주세요…", text: $message)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(sendMessage)
                 Button("Send", action: sendMessage)
-                    .disabled(conversation?.isReady != true || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(conversation?.canSendMessage != true
+                              || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(10)
         }
@@ -298,9 +318,39 @@ private struct ProjectAgentChatView: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            Text(conversation.modelLabel)
-                .font(.system(size: 10)).foregroundStyle(.secondary)
-                .padding(7)
+            Menu {
+                Button {
+                    conversation.useAutomaticModel()
+                } label: {
+                    Label("자동 선택", systemImage: conversation.manuallySelectedModel == nil
+                          ? "checkmark" : "sparkles")
+                }
+                Divider()
+                ForEach(conversation.selectableModels, id: \.label) { model in
+                    Button {
+                        conversation.selectModel(model)
+                    } label: {
+                        if conversation.manuallySelectedModel == model.label {
+                            Label(model.label, systemImage: "checkmark")
+                        } else {
+                            Text(model.label)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("\(conversation.manuallySelectedModel == nil ? "자동 선택" : "직접 선택") · \(conversation.modelLabel)")
+                    Image(systemName: "chevron.down")
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .background(.regularMaterial, in: Capsule())
+            }
+            .menuStyle(.borderlessButton)
+            .disabled(!conversation.canChangeModel)
+            .help("Pa 모델 선택")
+            .padding(7)
         }
     }
 
