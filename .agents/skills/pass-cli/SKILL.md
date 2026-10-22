@@ -28,7 +28,7 @@ forms below. Treat the binary's help as authoritative.
 
 ## Coordinate a project's worker sessions
 
-The fixed Pi project agent can list, start, message, and inspect worker sessions in its own
+The fixed Pi project agent can list, start, message, inspect, and remove worker sessions in its own
 project. These commands resolve the source project from `$PASS_SESSION`; `--session` can select
 the project agent explicitly. Pass rejects targets from another project.
 
@@ -37,10 +37,12 @@ the project agent explicitly. Pass rejects targets from another project.
 "$PASS_CLI" session start --agent claude --message 'Implement the requested change'
 "$PASS_CLI" session send pass-myrepo 'Review the current changes'
 "$PASS_CLI" session tail pass-myrepo --lines 80
+"$PASS_CLI" session remove pass-myrepo
 ```
 
 `session start` accepts `claude`, `codex`, `grok`, or `pi`. `session tail` is a text snapshot;
 the Pass project agent screen shows each worker's live, unfiltered tmux terminal.
+`session remove` ends the named worker session after Pa checks that its work has finished.
 
 ## Run the browser verification loop
 

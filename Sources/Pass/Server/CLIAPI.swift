@@ -162,6 +162,11 @@ struct CLIProjectSessionTailRequest: Codable {
     var lines: Int
 }
 
+struct CLIProjectSessionRemoveRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+}
+
 struct CLIProjectSessionResponse: Codable {
     var ok: Bool
     var session: String? = nil
@@ -251,6 +256,21 @@ enum CLIAPI {
         let content = await TmuxClient.shared.capturePaneHistory(target.name, lines: request.lines)
         return encode(CLIProjectSessionResponse(ok: true, session: target.name,
                                                 content: String(content.suffix(100_000))))
+    }
+
+    static func removeProjectSession(_ appModel: AppModel, body: Data) async -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes,
+              let request = try? JSONDecoder().decode(CLIProjectSessionRemoveRequest.self, from: body),
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession),
+              let target = projectWorker(appModel, request.targetSession, root: projectRoot),
+              let store = appModel.sessions else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "invalid project worker"))
+        }
+        await store.kill(target.name)
+        guard !(await TmuxClient.shared.hasSession(target.name)) else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "worker session could not be removed"))
+        }
+        return encode(CLIProjectSessionResponse(ok: true, session: target.name))
     }
 
     private static func projectAgentRoot(_ appModel: AppModel, _ name: String) -> String? {

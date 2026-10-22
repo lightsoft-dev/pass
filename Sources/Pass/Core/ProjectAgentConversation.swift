@@ -2,11 +2,68 @@ import Foundation
 import Observation
 
 struct ProjectAgentMessage: Identifiable {
-    enum Role { case user, assistant, activity, error }
+    enum Role: Equatable { case user, assistant, activity, error }
     let id = UUID()
     let role: Role
     var text: String
     var attachments: [URL] = []
+    var toolCallID: String? = nil
+    var toolName: String? = nil
+    var toolInput: String? = nil
+    var toolSummary: String? = nil
+    var toolIsRunning = false
+    var toolIsError = false
+}
+
+enum ProjectAgentToolActivity {
+    static func start(_ event: [String: Any], in messages: inout [ProjectAgentMessage]) {
+        let name = event["toolName"] as? String ?? "도구"
+        let callID = event["toolCallId"] as? String
+        let args = event["args"] as? [String: Any] ?? [:]
+        let input = formattedInput(args)
+        let summary = ["command", "path", "file_path", "pattern", "query", "description", "url"]
+            .compactMap { args[$0] as? String }.first?
+            .replacingOccurrences(of: "\n", with: " ")
+        messages.append(ProjectAgentMessage(role: .activity, text: "", toolCallID: callID,
+                                            toolName: name, toolInput: input,
+                                            toolSummary: summary, toolIsRunning: true))
+    }
+
+    static func finish(_ event: [String: Any], in messages: inout [ProjectAgentMessage],
+                       isComplete: Bool) {
+        let callID = event["toolCallId"] as? String
+        let name = event["toolName"] as? String ?? "도구"
+        let result = (isComplete ? event["result"] : event["partialResult"]) as? [String: Any] ?? [:]
+        let output = textContent(result)
+        let index = messages.lastIndex { $0.role == .activity && $0.toolIsRunning
+            && (callID != nil ? $0.toolCallID == callID : $0.toolName == name) }
+        if let index {
+            if !output.isEmpty || messages[index].text.isEmpty { messages[index].text = output }
+            if isComplete {
+                messages[index].toolIsRunning = false
+                messages[index].toolIsError = event["isError"] as? Bool == true
+            }
+        } else if isComplete {
+            messages.append(ProjectAgentMessage(role: .activity, text: output,
+                                                toolCallID: callID, toolName: name,
+                                                toolIsError: event["isError"] as? Bool == true))
+        }
+    }
+
+    private static func formattedInput(_ args: [String: Any]) -> String? {
+        guard !args.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: args,
+                                                    options: [.prettyPrinted, .sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        return text
+    }
+
+    private static func textContent(_ message: [String: Any]) -> String {
+        let content = message["content"] as? [[String: Any]] ?? []
+        return content.compactMap { part in
+            part["type"] as? String == "text" ? part["text"] as? String : nil
+        }.joined(separator: "\n")
+    }
 }
 
 /// Runs Pi as a headless conversation engine. Pass owns the chat UI; stdout is JSONL RPC,
@@ -443,14 +500,11 @@ final class ProjectAgentConversation {
             toolStartedForPrompt = true
             let name = event["toolName"] as? String ?? "도구"
             status = "\(name) 실행 중…"
-            messages.append(ProjectAgentMessage(role: .activity, text: "\(name) 실행 중…"))
+            ProjectAgentToolActivity.start(event, in: &messages)
+        case "tool_execution_update":
+            ProjectAgentToolActivity.finish(event, in: &messages, isComplete: false)
         case "tool_execution_end":
-            let name = event["toolName"] as? String ?? "도구"
-            let result = event["result"] as? [String: Any] ?? [:]
-            let text = Self.textContent(result)
-            let preview = String(text.prefix(500)).trimmingCharacters(in: .whitespacesAndNewlines)
-            messages.append(ProjectAgentMessage(role: .activity,
-                                                 text: preview.isEmpty ? "\(name) 완료" : "\(name) 완료\n\(preview)"))
+            ProjectAgentToolActivity.finish(event, in: &messages, isComplete: true)
             status = "결과를 정리하는 중…"
         case "agent_end":
             if event["willRetry"] as? Bool == true { return }
@@ -541,6 +595,7 @@ final class ProjectAgentConversation {
     }
 
     private static func textContent(_ message: [String: Any]) -> String {
+        if let content = message["content"] as? String { return content }
         let content = message["content"] as? [[String: Any]] ?? []
         return content.compactMap { part in
             part["type"] as? String == "text" ? part["text"] as? String : nil
@@ -563,7 +618,7 @@ final class ProjectAgentConversation {
         return nil
     }
 
-    private static func messagesFromHistory(_ history: [[String: Any]]) -> [ProjectAgentMessage] {
+    static func messagesFromHistory(_ history: [[String: Any]]) -> [ProjectAgentMessage] {
         var visible: [ProjectAgentMessage] = []
         var index = 0
         while index < history.count {
@@ -577,7 +632,25 @@ final class ProjectAgentConversation {
                 index += 2
                 continue
             }
-            if let message = messageFromHistory(history[index]) { visible.append(message) }
+            let item = history[index]
+            if let message = messageFromHistory(item) { visible.append(message) }
+            if item["role"] as? String == "assistant",
+               let content = item["content"] as? [[String: Any]] {
+                for part in content where part["type"] as? String == "toolCall" {
+                    ProjectAgentToolActivity.start([
+                        "toolCallId": part["id"] as? String ?? "",
+                        "toolName": part["name"] as? String ?? "도구",
+                        "args": part["arguments"] as? [String: Any] ?? [:]
+                    ], in: &visible)
+                }
+            } else if item["role"] as? String == "toolResult" {
+                ProjectAgentToolActivity.finish([
+                    "toolCallId": item["toolCallId"] as? String ?? "",
+                    "toolName": item["toolName"] as? String ?? "도구",
+                    "result": item,
+                    "isError": item["isError"] as? Bool == true
+                ], in: &visible, isComplete: true)
+            }
             index += 1
         }
         return visible

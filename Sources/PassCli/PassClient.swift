@@ -192,6 +192,11 @@ struct CLIProjectSessionTailRequest: Codable {
     var lines: Int
 }
 
+struct CLIProjectSessionRemoveRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+}
+
 struct CLIProjectSessionResponse: Codable {
     var ok: Bool
     var session: String? = nil
