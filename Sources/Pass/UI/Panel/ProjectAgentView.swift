@@ -51,7 +51,6 @@ struct ProjectAgentView: View {
             }
         }
         .task(id: projectRoot) {
-            appModel.piUpdater.refreshVersion()
             conversation = nil
             message = initialDraft
             attachedFiles = []
@@ -106,38 +105,6 @@ struct ProjectAgentView: View {
 
     private var managerPane: some View {
         VStack(spacing: 0) {
-            HStack {
-                Label("Pa", systemImage: "person.crop.circle.badge.checkmark")
-                    .font(PassFont.ui(size: 11, weight: .semibold))
-                Spacer()
-                if let version = appModel.piUpdater.version {
-                    Text("Pi v\(version)")
-                        .font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
-                }
-                Button {
-                    appModel.piUpdater.update {
-                        appModel.restartProjectAgentsAfterPiUpdate()
-                    }
-                } label: {
-                    if appModel.piUpdater.isUpdating {
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Text("Pi 업데이트")
-                    }
-                }
-                .buttonStyle(.plain)
-                .font(PassFont.ui(size: 10, weight: .medium))
-                .foregroundStyle(.tint)
-                .disabled(appModel.piUpdater.isUpdating || conversation?.isResponding == true)
-                .help("설치된 Pi를 최신 버전으로 업데이트")
-                Button("Pi 계정 연결", action: connectAccount)
-                    .buttonStyle(.plain)
-                    .font(PassFont.ui(size: 10, weight: .medium))
-                    .foregroundStyle(.tint)
-                    .help("Choose a model provider and sign in through Pi")
-            }
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            Divider()
             Group {
                 if let conversation {
                     ProjectAgentChatView(conversation: conversation)
@@ -152,12 +119,6 @@ struct ProjectAgentView: View {
             Divider()
             if let status {
                 Text(status).font(PassFont.ui(size: 10)).foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.top, 6)
-            }
-            if let updateStatus = appModel.piUpdater.status {
-                Text(updateStatus).font(PassFont.ui(size: 10))
-                    .foregroundStyle(appModel.piUpdater.isUpdating ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12).padding(.top, 6)
             }

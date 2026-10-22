@@ -20,6 +20,8 @@ struct SettingsView: View {
     @State private var extensionRepository = ""
     @State private var extensionSharingBusy = false
     @State private var extensionSharingMessage: String?
+    @State private var piConnectedProviders: [String] = []
+    @State private var piAccountError: String?
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
     @AppStorage(SummonShortcutMode.storageKey) private var summonShortcutModeRaw = SummonShortcutMode.doubleCommand.rawValue
     @AppStorage(SessionStore.restoreDefaultsKey) private var restoreSessions = true
@@ -60,6 +62,14 @@ struct SettingsView: View {
         .onDisappear {
             appModel.setSettingsPresented(false)
         }
+        .task(id: selectedSection) {
+            guard selectedSection == .agents else { return }
+            appModel.piUpdater.refreshVersion()
+            while !Task.isCancelled {
+                piConnectedProviders = PiAuthentication.usableProviders().sorted()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
         .sheet(isPresented: $showExtensionBuilder) {
             ExtensionBuilderView().environment(appModel)
         }
@@ -82,6 +92,7 @@ struct SettingsView: View {
         case .backup:
             backupSection
         case .agents:
+            piSection
             agentCommandsSection
         case .extensions:
             extensionsSection
@@ -212,7 +223,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Text("In the ⌘N menu, type a new name and choose Create. Pass makes an empty Git project here and starts the selected agent.")
+            Text("Use New project or ⌘N, type a name, and choose Create. Pass makes an empty Git project here and starts the selected agent.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -229,6 +240,58 @@ struct SettingsView: View {
                 }
             }
             Text("Bundles every registered project + settings into one .tar.gz you can move to another Mac. Build artifacts (node_modules, .build, …) are excluded. With optimize on, git repos that have a remote are stored as URL + commit instead of copied.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var piSection: some View {
+        Section("Pa · Pi") {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pi version")
+                        .font(PassFont.ui(size: 12, weight: .semibold))
+                    Text(appModel.piUpdater.version.map { "v\($0)" } ?? "Version unavailable")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    appModel.piUpdater.update {
+                        appModel.restartProjectAgentsAfterPiUpdate()
+                    }
+                } label: {
+                    if appModel.piUpdater.isUpdating {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Update Pi", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .disabled(appModel.piUpdater.isUpdating)
+            }
+            if let updateStatus = appModel.piUpdater.status {
+                Text(updateStatus)
+                    .font(.caption)
+                    .foregroundStyle(appModel.piUpdater.isUpdating ? .secondary : .primary)
+            }
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pi account")
+                        .font(PassFont.ui(size: 12, weight: .semibold))
+                    Text(piConnectedProviders.isEmpty
+                         ? "No model providers connected"
+                         : piConnectedProviders.joined(separator: ", "))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Connect account…") {
+                    piAccountError = appModel.miniTerminals.openPiLogin()
+                        ? nil : "Pi is not installed. Install Pi and reopen Pass."
+                }
+                .disabled(appModel.piUpdater.isUpdating)
+            }
+            if let piAccountError {
+                Text(piAccountError).font(.caption).foregroundStyle(.orange)
+            }
+            Text("Pi credentials are managed in Pi's own login terminal and shared by every Pa project.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -886,7 +949,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .home: return "Home layout and terminal theme"
         case .projects: return "Registered project folders"
         case .backup: return "Export project and settings bundle"
-        case .agents: return "Default launch commands"
+        case .agents: return "Pa account, Pi updates, and launch commands"
         case .extensions: return "Browse, publish, and manage extensions"
         case .mobile: return "Account, desktops, and device pairing"
         case .integrations: return "Hooks, CLI, and browser"
