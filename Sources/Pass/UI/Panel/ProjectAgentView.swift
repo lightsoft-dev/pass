@@ -420,11 +420,19 @@ private struct ProjectAgentChatView: View {
                     .frame(maxWidth: .infinity, alignment: .top)
                     Color.clear.frame(height: 1).id(bottomID)
                 }
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: AgentConversationContentHeightKey.self,
+                                           value: geometry.size.height)
+                })
             }
             .background(Color(nsColor: .textBackgroundColor))
+            .onPreferenceChange(AgentConversationContentHeightKey.self) { _ in
+                scrollToBottom(proxy)
+            }
             .onAppear { scrollToBottom(proxy) }
             .onChange(of: conversation.messages.count) { _, _ in scrollToBottom(proxy) }
             .onChange(of: conversation.messages.last?.text) { _, _ in scrollToBottom(proxy) }
+            .onChange(of: conversation.messages.last?.images.count) { _, _ in scrollToBottom(proxy) }
             .onChange(of: conversation.isResponding) { _, _ in scrollToBottom(proxy) }
             .onChange(of: conversation.status) { _, _ in scrollToBottom(proxy) }
         }
@@ -476,7 +484,7 @@ private struct ProjectAgentChatView: View {
             HStack {
                 Spacer(minLength: 40)
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(entry.text).textSelection(.enabled)
+                    AgentMarkdownView(source: entry.text, projectRoot: conversation.projectRoot)
                     if !entry.attachments.isEmpty {
                         HStack(spacing: 6) {
                             ForEach(entry.attachments, id: \.path) { file in
@@ -485,15 +493,22 @@ private struct ProjectAgentChatView: View {
                         }
                     }
                 }
-                    .padding(.horizontal, 13).padding(.vertical, 10)
-                    .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 13).padding(.vertical, 10)
+                .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
             }
         case .assistant:
-            if !entry.text.isEmpty {
-                AgentMarkdownView(source: entry.text)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 13).padding(.vertical, 10)
-                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+            if !entry.text.isEmpty || !entry.images.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    if !entry.text.isEmpty {
+                        AgentMarkdownView(source: entry.text, projectRoot: conversation.projectRoot)
+                    }
+                    ForEach(Array(entry.images.enumerated()), id: \.offset) { _, data in
+                        AgentImageDataView(data: data)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 13).padding(.vertical, 10)
+                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
             }
         case .activity:
             ProjectAgentActivityRow(entry: entry)

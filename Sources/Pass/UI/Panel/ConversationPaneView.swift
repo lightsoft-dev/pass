@@ -59,7 +59,8 @@ struct ConversationPaneView: View {
                             emptyState
                         } else {
                             ForEach(blocks) { block in
-                                ConversationBlockView(block: block, agent: session.agent)
+                                ConversationBlockView(block: block, agent: session.agent,
+                                                      projectRoot: session.projectRoot)
                                     .id(block.id)
                             }
                         }
@@ -70,8 +71,15 @@ struct ConversationPaneView: View {
                     .frame(maxWidth: .infinity, alignment: .top)
                     Color.clear.frame(height: 1).id(bottomID)
                 }
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: AgentConversationContentHeightKey.self,
+                                           value: geometry.size.height)
+                })
             }
             .background(Color(nsColor: .textBackgroundColor))
+            .onPreferenceChange(AgentConversationContentHeightKey.self) { _ in
+                scrollToBottom(proxy)
+            }
             .onAppear { scrollToBottom(proxy) }
             .task(id: session.name) {
                 while !Task.isCancelled {
@@ -137,6 +145,7 @@ struct ConversationPaneView: View {
 private struct ConversationBlockView: View {
     let block: AgentConversationBlock
     let agent: AgentKind
+    let projectRoot: String
 
     var body: some View {
         switch block.kind {
@@ -162,7 +171,7 @@ private struct ConversationBlockView: View {
                     .frame(width: 20, height: 20)
                     .background(accent.opacity(0.1), in: Circle())
                     .accessibilityHidden(true)
-                AgentMarkdownView(source: block.text, fontSize: 14)
+                AgentMarkdownView(source: block.text, fontSize: 14, projectRoot: projectRoot)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         case .tool:
