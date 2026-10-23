@@ -165,6 +165,7 @@ struct CLIProjectSessionInfo: Codable {
     var agent: String
     var cwd: String
     var state: String
+    var lastActivitySecondsAgo: Int
 }
 
 struct CLIProjectSessionListResponse: Codable {
