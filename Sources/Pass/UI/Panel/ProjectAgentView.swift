@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -149,6 +150,16 @@ struct ProjectAgentView: View {
                 TextField("Pa에게 할 일을 알려주세요…", text: $message, axis: .vertical)
                     .textFieldStyle(.plain)
                     .focused($messageFocused)
+                    .onKeyPress(.return, phases: [.down]) { press in
+                        // Keep the editor's native newline and IME confirmation behavior.
+                        if press.modifiers.contains(.shift) || press.modifiers.contains(.command)
+                            || press.modifiers.contains(.control) || press.modifiers.contains(.option)
+                            || (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true {
+                            return .ignored
+                        }
+                        sendMessage()
+                        return .handled
+                    }
                     .font(PassFont.ui(size: 13))
                     .lineLimit(4...8)
                     .padding(.horizontal, 14)
@@ -171,7 +182,7 @@ struct ProjectAgentView: View {
                     .help("파일 첨부")
                     .accessibilityLabel("파일 첨부")
                     Spacer()
-                    Text("Return 줄바꿈 · ⌃Return 보내기")
+                    Text("Enter 보내기 · ⇧Enter 줄바꿈")
                         .font(PassFont.ui(size: 10))
                         .foregroundStyle(.tertiary)
                     Button(action: sendMessage) {
