@@ -89,6 +89,38 @@ test("stores optional snapshot truncation totals", () => {
   });
 });
 
+test("applies Pa conversation snapshots in arrival order and clears them on pairing reset", () => {
+  const snapshot = (sentAt: string, text: string): ServerEvent<"project.agent.snapshot"> => ({
+    version: 1,
+    id: `evt_pa_${text}`,
+    type: "project.agent.snapshot",
+    sentAt,
+    replyTo: "cmd_pa_get",
+    payload: {
+      projectRoot: "/work/app",
+      messages: [{ id: "msg_1", role: "assistant", text, truncated: false }],
+      truncated: false,
+      isReady: true,
+      isResponding: false,
+      status: "Ready",
+      modelLabel: "provider/model",
+    },
+  });
+  let state = remoteReducer(initialRemoteState, {
+    type: "EVENT_RECEIVED",
+    event: snapshot("2026-07-16T10:00:02Z", "new"),
+  });
+  state = remoteReducer(state, {
+    type: "EVENT_RECEIVED",
+    event: snapshot("2026-07-16T10:00:01Z", "old"),
+  });
+  assert.equal(state.projectAgentsByRoot["/work/app"]?.messages[0]?.text, "old");
+  assert.equal(state.projectAgentReplyToByRoot["/work/app"], "cmd_pa_get");
+  state = remoteReducer(state, { type: "RESET", configured: true });
+  assert.deepEqual(state.projectAgentsByRoot, {});
+  assert.deepEqual(state.projectAgentReplyToByRoot, {});
+});
+
 test("hydrates an in-progress message stream from a snapshot", () => {
   const streamingSession: RemoteSession = {
     ...makeSession("streaming", "working"),

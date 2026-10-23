@@ -231,7 +231,8 @@ Use one versioned JSON protocol over WebSocket for the control plane. Every comm
 ### Desktop-to-mobile events
 
 The developer MVP currently emits `ack`, `error`, `session.snapshot`, `message.delivered`, the
-three `session.message.*` streaming events, and `session.terminal.snapshot`. Other incremental and
+three `session.message.*` streaming events, `session.terminal.snapshot`, and
+`project.agent.snapshot`. Other incremental and
 voice events in this table remain the target contract for later phases; full snapshots remain the
 source of truth.
 
@@ -242,6 +243,7 @@ source of truth.
 | `session.message.updated` | New complete sampled text for the same message id and a higher sequence. |
 | `session.message.completed` | Final complete text when the response stops streaming. |
 | `session.terminal.snapshot` | Revisioned ANSI active-pane image, geometry, cursor, and truncation state. |
+| `project.agent.snapshot` | Bounded Pa conversation for a registered project, including truncation state. |
 | `session.updated` | One changed session: name, display name, agent, project root, git branch, attention, last message, activity. |
 | `session.removed` | Removed tmux session name. |
 | `attention.changed` | Pending decision/input/working/idle state and optional prompt preview. |
@@ -264,6 +266,8 @@ capability by the desktop.
 | `session.terminal.input` | Send bounded terminal UTF-8/escape input to an active subscription. |
 | `session.terminal.close` | End a terminal subscription. |
 | `project.list` | List projects registered on the selected host, retaining their host identity. |
+| `project.agent.get` | Read a bounded snapshot of a registered project's Pa conversation. |
+| `project.agent.send` | Send a bounded text instruction to that project's Pa. |
 | `voice.start` | Start a voice-management conversation. |
 | `voice.inputAudio` | Stream or reference audio chunks, depending on transport. |
 | `voice.interrupt` | Stop current speech and return to listening. |

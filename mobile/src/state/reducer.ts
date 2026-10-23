@@ -2,6 +2,7 @@ import type {
   Capability,
   ClientCommand,
   ClientCommandType,
+  ProjectAgentSnapshot,
   RemoteProject,
   RemoteSession,
   SessionMessageStreamPayload,
@@ -35,6 +36,7 @@ export interface PendingCommand {
   sentAt: string;
   status: CommandStatus;
   session?: string;
+  projectRoot?: string;
   preview?: string;
   error?: string;
 }
@@ -68,6 +70,8 @@ export interface RemoteState {
   };
   sessionsByName: Record<string, RemoteSession>;
   projectsByRoot: Record<string, RemoteProject>;
+  projectAgentsByRoot: Record<string, ProjectAgentSnapshot>;
+  projectAgentReplyToByRoot: Record<string, string>;
   capabilities: Capability[];
   pendingCommands: Record<string, PendingCommand>;
   activities: RemoteActivity[];
@@ -99,6 +103,8 @@ export const initialRemoteState: RemoteState = {
   },
   sessionsByName: {},
   projectsByRoot: {},
+  projectAgentsByRoot: {},
+  projectAgentReplyToByRoot: {},
   capabilities: [],
   pendingCommands: {},
   activities: [],
@@ -130,7 +136,7 @@ function keepNewest<T>(items: T[], max: number): T[] {
   return items.length <= max ? items : items.slice(items.length - max);
 }
 
-function commandMetadata(command: ClientCommand): Pick<PendingCommand, "session" | "preview"> {
+function commandMetadata(command: ClientCommand): Pick<PendingCommand, "session" | "projectRoot" | "preview"> {
   switch (command.type) {
     case "session.sendMessage":
       return {
@@ -144,6 +150,8 @@ function commandMetadata(command: ClientCommand): Pick<PendingCommand, "session"
       };
     case "session.create":
       return { preview: `${command.payload.agent} · ${command.payload.projectRoot}` };
+    case "project.agent.send":
+      return { projectRoot: command.payload.projectRoot, preview: command.payload.text.slice(0, 500) };
     default:
       return {};
   }
@@ -461,6 +469,19 @@ function reduceEvent(state: RemoteState, event: ServerEvent): RemoteState {
             }
           : undefined,
       };
+    case "project.agent.snapshot": {
+      const root = event.payload.projectRoot;
+      return {
+        ...state,
+        projectAgentsByRoot: { ...state.projectAgentsByRoot, [root]: event.payload },
+        // The desktop processes commands serially on one socket. Arrival order remains valid
+        // even when its wall clock changes; replyTo also releases an in-flight Pa composer.
+        projectAgentReplyToByRoot: {
+          ...state.projectAgentReplyToByRoot,
+          [root]: event.replyTo ?? "",
+        },
+      };
+    }
     case "session.message.started":
     case "session.message.updated":
       return applyMessageStream(

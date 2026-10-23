@@ -62,6 +62,7 @@ const MUTATING_COMMANDS = new Set<ClientCommandType>([
   "session.sendMessage",
   "session.answerDecision",
   "session.terminal.input",
+  "project.agent.send",
 ]);
 const BACKGROUND_COMMANDS = new Set<ClientCommandType>([
   "session.terminal.open",

@@ -71,6 +71,43 @@ test("accepts Grok in a desktop session snapshot", () => {
   assert.equal(result.ok, true);
 });
 
+test("validates Pa commands and bounded project conversation snapshots", () => {
+  const get = createCommand("project.agent.get", { projectRoot: "/work/my-app" }, { id: "cmd_pa_get" });
+  assert.doesNotThrow(() => validateCommand(get));
+  const send = createCommand(
+    "project.agent.send",
+    { projectRoot: "/work/my-app", text: "🙂".repeat(COMMAND_LIMITS.projectAgentMessageBytes / 4) },
+    { id: "cmd_pa_send" },
+  );
+  assert.doesNotThrow(() => validateCommand(send));
+  assert.throws(
+    () => validateCommand({ ...send, payload: { ...send.payload, text: `${send.payload.text}🙂` } }),
+    expectValidationCode("message_too_large"),
+  );
+
+  const snapshot = {
+    version: 1,
+    id: "evt_pa_snapshot",
+    type: "project.agent.snapshot",
+    sentAt: "2026-07-16T10:01:00.000Z",
+    replyTo: "cmd_pa_get",
+    payload: {
+      projectRoot: "/work/my-app",
+      messages: [{ id: "msg_1", role: "assistant", text: "Ready", truncated: false }],
+      truncated: false,
+      isReady: true,
+      isResponding: false,
+      status: "Ready",
+      modelLabel: "provider/model",
+    },
+  };
+  assert.equal(parseServerEvent(snapshot).ok, true);
+  assert.equal(parseServerEvent({ ...snapshot, payload: { ...snapshot.payload, truncated: undefined } }).ok, false);
+  assert.equal(parseServerEvent({ ...snapshot, payload: { ...snapshot.payload, messages: [
+    { id: "msg_1", role: "assistant", text: "x".repeat(8 * 1_024 + 1), truncated: true },
+  ] } }).ok, false);
+});
+
 test("uses an injected secure UUID factory for command ids", () => {
   const command = createCommand("session.list", {}, {
     uuidFactory: () => "018f6879-dde6-7682-9983-f0cd5d26591d",

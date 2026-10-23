@@ -13,6 +13,7 @@ export const COMMAND_LIMITS = {
   outboundFrameBytes: 1_024 * 1_024,
   terminalInputBytes: 16 * 1_024,
   subscriptionIdCharacters: 128,
+  projectAgentMessageBytes: 8 * 1_024,
 } as const;
 
 export type CommandValidationCode =
@@ -114,6 +115,15 @@ function requireSubscription(subscriptionId: string): void {
   }
 }
 
+function requireProject(root: string): void {
+  const normalized = root.trim();
+  if (!normalized ||
+      characterCount(normalized) > COMMAND_LIMITS.projectPathCharacters ||
+      utf8ByteLength(normalized) > COMMAND_LIMITS.projectPathCharacters) {
+    throw new CommandValidationError("invalid_project", "A registered project root is required.");
+  }
+}
+
 /** Mirrors the desktop command-handler limits before a frame reaches the relay. */
 export function validateCommand(command: ClientCommand): void {
   switch (command.type) {
@@ -160,6 +170,21 @@ export function validateCommand(command: ClientCommand): void {
       return;
     case "session.answerDecision":
       requireSession(command.payload.session);
+      return;
+    case "project.agent.get":
+      requireProject(command.payload.projectRoot);
+      return;
+    case "project.agent.send":
+      requireProject(command.payload.projectRoot);
+      if (!command.payload.text.trim()) {
+        throw new CommandValidationError("invalid_message", "Message text is required.");
+      }
+      if (utf8ByteLength(command.payload.text) > COMMAND_LIMITS.projectAgentMessageBytes) {
+        throw new CommandValidationError(
+          "message_too_large",
+          `Pa message must be ${COMMAND_LIMITS.projectAgentMessageBytes.toLocaleString("en-US")} UTF-8 bytes or fewer.`,
+        );
+      }
       return;
     case "session.terminal.open":
     case "session.terminal.close":

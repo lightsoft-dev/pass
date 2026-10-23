@@ -20,6 +20,8 @@ protocol RemoteCommandBackend: AnyObject {
     func currentProjects() -> [RemoteProjectDTO]
     func createSession(_ command: RemoteSessionCreateCommand) async throws -> String
     func sendMessage(_ command: RemoteSessionSendMessageCommand) async throws
+    func projectAgentSnapshot(_ command: RemoteProjectAgentGetCommand) throws -> RemoteProjectAgentSnapshot
+    func sendProjectAgentMessage(_ command: RemoteProjectAgentSendCommand) throws -> RemoteProjectAgentSnapshot
     func answerDecision(_ command: RemoteSessionAnswerDecisionCommand) async throws
     func openTerminal(_ command: RemoteSessionTerminalOpenCommand) async throws -> RemoteSessionTerminalSnapshot
     func sendTerminalInput(_ command: RemoteSessionTerminalInputCommand) async throws
@@ -43,6 +45,7 @@ final class RemoteCommandHandler: RemoteCommandHandling {
     static let maximumMessageCharacters = 64 * 1_024
     static let maximumInitialPromptCharacters = 64 * 1_024
     static let maximumSubscriptionIDCharacters = 128
+    static let maximumProjectAgentMessageBytes = RemoteWireLimits.projectAgentMessageBytes
 
     private let backend: any RemoteCommandBackend
     private let now: () -> Date
@@ -84,6 +87,37 @@ final class RemoteCommandHandler: RemoteCommandHandling {
                 acknowledgement(for: envelope),
                 makeSnapshotEvent(replyTo: envelope.id),
             ]
+
+        case .projectAgentGet(let command):
+            guard let root = validProjectRoot(command.projectRoot) else {
+                return [failure(replyTo: envelope.id, code: "invalid_project", message: "A valid project root is required.")]
+            }
+            do {
+                let snapshot = try backend.projectAgentSnapshot(.init(projectRoot: root))
+                return [acknowledgement(for: envelope),
+                        event(replyTo: envelope.id, .projectAgentSnapshot(snapshot))]
+            } catch {
+                return [failure(for: error, replyTo: envelope.id)]
+            }
+
+        case .projectAgentSend(let command):
+            guard let root = validProjectRoot(command.projectRoot) else {
+                return [failure(replyTo: envelope.id, code: "invalid_project", message: "A valid project root is required.")]
+            }
+            let body = command.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else {
+                return [failure(replyTo: envelope.id, code: "invalid_message", message: "Message text is required.")]
+            }
+            guard body.utf8.count <= Self.maximumProjectAgentMessageBytes else {
+                return [failure(replyTo: envelope.id, code: "message_too_large", message: "Message is too large.")]
+            }
+            do {
+                let snapshot = try backend.sendProjectAgentMessage(.init(projectRoot: root, text: body))
+                return [acknowledgement(for: envelope),
+                        event(replyTo: envelope.id, .projectAgentSnapshot(snapshot))]
+            } catch {
+                return [failure(for: error, replyTo: envelope.id)]
+            }
 
         case .sessionCreate(let command):
             let root = command.projectRoot.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -268,6 +302,13 @@ final class RemoteCommandHandler: RemoteCommandHandling {
     private func validSession(_ session: String) -> Bool {
         let trimmed = session.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty && trimmed.count <= Self.maximumSessionNameCharacters
+    }
+
+    private func validProjectRoot(_ root: String) -> String? {
+        let trimmed = root.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= Self.maximumPathCharacters,
+              trimmed.utf8.count <= RemoteWireLimits.pathBytes else { return nil }
+        return trimmed
     }
 
     private func validSubscriptionID(_ id: String) -> Bool {

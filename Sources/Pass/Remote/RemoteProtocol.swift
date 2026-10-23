@@ -22,6 +22,10 @@ enum RemoteWireLimits {
     static let terminalInputBytes = 16 * 1_024
     static let projectNameBytes = 500
     static let emojiBytes = 32
+    static let projectAgentMessageBytes = 8 * 1_024
+    static let projectAgentStatusBytes = 1_024
+    static let projectAgentModelBytes = 256
+    static let maximumProjectAgentMessages = 64
 
     static func prefix(_ value: String, maximumUTF8Bytes: Int) -> String {
         guard maximumUTF8Bytes > 0 else { return "" }
@@ -52,6 +56,34 @@ enum RemoteWireLimits {
         return scalarResult
     }
 
+    static func suffix(_ value: String, maximumUTF8Bytes: Int) -> String {
+        guard maximumUTF8Bytes > 0 else { return "" }
+        guard value.utf8.count > maximumUTF8Bytes else { return value }
+        var reversedCharacters: [Character] = []
+        var usedBytes = 0
+        for character in value.reversed() {
+            let bytes = String(character).utf8.count
+            guard usedBytes + bytes <= maximumUTF8Bytes else { break }
+            reversedCharacters.append(character)
+            usedBytes += bytes
+        }
+        if !reversedCharacters.isEmpty {
+            return String(reversedCharacters.reversed())
+        }
+
+        // Preserve valid UTF-8 even if the final grapheme alone exceeds the budget.
+        var scalarResult = ""
+        usedBytes = 0
+        for scalar in value.unicodeScalars.reversed() {
+            let fragment = String(scalar)
+            let bytes = fragment.utf8.count
+            guard usedBytes + bytes <= maximumUTF8Bytes else { break }
+            scalarResult = fragment + scalarResult
+            usedBytes += bytes
+        }
+        return scalarResult
+    }
+
     static func optionalPrefix(_ value: String?, maximumUTF8Bytes: Int) -> String? {
         value.map { prefix($0, maximumUTF8Bytes: maximumUTF8Bytes) }
     }
@@ -66,6 +98,8 @@ enum RemoteCommandType {
     static let sessionTerminalInput = "session.terminal.input"
     static let sessionTerminalClose = "session.terminal.close"
     static let projectList = "project.list"
+    static let projectAgentGet = "project.agent.get"
+    static let projectAgentSend = "project.agent.send"
 }
 
 enum RemoteEventType {
@@ -77,6 +111,7 @@ enum RemoteEventType {
     static let sessionMessageUpdated = "session.message.updated"
     static let sessionMessageCompleted = "session.message.completed"
     static let sessionTerminalSnapshot = "session.terminal.snapshot"
+    static let projectAgentSnapshot = "project.agent.snapshot"
 }
 
 /// JSON fallback used to preserve an unknown command/event payload. Keeping unknown types
@@ -157,6 +192,15 @@ struct RemoteSessionSendMessageCommand: Codable, Equatable, Sendable {
     var text: String
 }
 
+struct RemoteProjectAgentGetCommand: Codable, Equatable, Sendable {
+    var projectRoot: String
+}
+
+struct RemoteProjectAgentSendCommand: Codable, Equatable, Sendable {
+    var projectRoot: String
+    var text: String
+}
+
 enum RemoteDecision: String, Codable, Equatable, Sendable {
     case allowOnce
     case allowAll
@@ -209,6 +253,8 @@ enum RemoteCommand: Equatable, Sendable {
     case sessionTerminalInput(RemoteSessionTerminalInputCommand)
     case sessionTerminalClose(RemoteSessionTerminalCloseCommand)
     case projectList
+    case projectAgentGet(RemoteProjectAgentGetCommand)
+    case projectAgentSend(RemoteProjectAgentSendCommand)
     case unsupported(type: String, payload: RemoteJSONValue)
 
     var type: String {
@@ -221,6 +267,8 @@ enum RemoteCommand: Equatable, Sendable {
         case .sessionTerminalInput: return RemoteCommandType.sessionTerminalInput
         case .sessionTerminalClose: return RemoteCommandType.sessionTerminalClose
         case .projectList: return RemoteCommandType.projectList
+        case .projectAgentGet: return RemoteCommandType.projectAgentGet
+        case .projectAgentSend: return RemoteCommandType.projectAgentSend
         case .unsupported(let type, _): return type
         }
     }
@@ -286,6 +334,10 @@ struct RemoteCommandEnvelope: Codable, Equatable, Sendable {
             )
         case RemoteCommandType.projectList:
             command = .projectList
+        case RemoteCommandType.projectAgentGet:
+            command = .projectAgentGet(try container.decode(RemoteProjectAgentGetCommand.self, forKey: .payload))
+        case RemoteCommandType.projectAgentSend:
+            command = .projectAgentSend(try container.decode(RemoteProjectAgentSendCommand.self, forKey: .payload))
         default:
             let payload = try container.decodeIfPresent(RemoteJSONValue.self, forKey: .payload) ?? .object([:])
             command = .unsupported(type: type, payload: payload)
@@ -312,6 +364,10 @@ struct RemoteCommandEnvelope: Codable, Equatable, Sendable {
         case .sessionTerminalInput(let payload):
             try container.encode(payload, forKey: .payload)
         case .sessionTerminalClose(let payload):
+            try container.encode(payload, forKey: .payload)
+        case .projectAgentGet(let payload):
+            try container.encode(payload, forKey: .payload)
+        case .projectAgentSend(let payload):
             try container.encode(payload, forKey: .payload)
         case .unsupported(_, let payload):
             try container.encode(payload, forKey: .payload)
@@ -377,6 +433,8 @@ struct RemoteSessionDTO: Codable, Equatable, Sendable {
     var isAttached: Bool
     var unacknowledged: Bool
     var launching: Bool
+    /// Optional on decode so snapshots from older desktops remain readable.
+    var isProjectAgent: Bool?
     /// Current in-progress assistant text. This makes a fresh mobile snapshot sufficient to
     /// recover a stream even though ephemeral stream events are not retained by the relay.
     var liveMessage: String?
@@ -408,6 +466,7 @@ struct RemoteSessionDTO: Codable, Equatable, Sendable {
         isAttached = session.isAttached
         unacknowledged = session.unacknowledged
         launching = session.launching
+        isProjectAgent = session.isProjectAgent
         liveMessage = RemoteWireLimits.optionalPrefix(
             session.liveTail,
             maximumUTF8Bytes: RemoteWireLimits.streamMessageBytes
@@ -431,6 +490,7 @@ struct RemoteSessionDTO: Codable, Equatable, Sendable {
         isAttached: Bool,
         unacknowledged: Bool,
         launching: Bool,
+        isProjectAgent: Bool? = nil,
         liveMessage: String? = nil,
         liveMessageTruncated: Bool? = nil
     ) {
@@ -466,6 +526,7 @@ struct RemoteSessionDTO: Codable, Equatable, Sendable {
         self.isAttached = isAttached
         self.unacknowledged = unacknowledged
         self.launching = launching
+        self.isProjectAgent = isProjectAgent
         self.liveMessage = RemoteWireLimits.optionalPrefix(
             liveMessage,
             maximumUTF8Bytes: RemoteWireLimits.streamMessageBytes
@@ -495,6 +556,61 @@ struct RemoteProjectDTO: Codable, Equatable, Sendable {
             emoji,
             maximumUTF8Bytes: RemoteWireLimits.emojiBytes
         )
+    }
+}
+
+enum RemoteProjectAgentRole: String, Codable, Equatable, Sendable {
+    case user
+    case assistant
+    case activity
+    case error
+}
+
+struct RemoteProjectAgentMessage: Codable, Equatable, Sendable {
+    var id: String
+    var role: RemoteProjectAgentRole
+    var text: String
+    var truncated: Bool
+
+    init(id: String, role: RemoteProjectAgentRole, text: String, truncated: Bool = false) {
+        self.id = RemoteWireLimits.prefix(id, maximumUTF8Bytes: 128)
+        self.role = role
+        self.text = role == .assistant
+            ? RemoteWireLimits.suffix(text, maximumUTF8Bytes: RemoteWireLimits.projectAgentMessageBytes)
+            : RemoteWireLimits.prefix(text, maximumUTF8Bytes: RemoteWireLimits.projectAgentMessageBytes)
+        self.truncated = truncated || text.utf8.count > RemoteWireLimits.projectAgentMessageBytes
+    }
+
+    init(_ message: ProjectAgentMessage) {
+        let role: RemoteProjectAgentRole
+        switch message.role {
+        case .user: role = .user
+        case .assistant: role = .assistant
+        case .activity: role = .activity
+        case .error: role = .error
+        }
+        self.init(id: message.id.uuidString, role: role, text: message.text)
+    }
+}
+
+struct RemoteProjectAgentSnapshot: Codable, Equatable, Sendable {
+    var projectRoot: String
+    var messages: [RemoteProjectAgentMessage]
+    var truncated: Bool
+    var isReady: Bool
+    var isResponding: Bool
+    var status: String
+    var modelLabel: String
+
+    init(projectRoot: String, messages: [RemoteProjectAgentMessage], isReady: Bool,
+         isResponding: Bool, status: String, modelLabel: String, truncated: Bool = false) {
+        self.projectRoot = RemoteWireLimits.prefix(projectRoot, maximumUTF8Bytes: RemoteWireLimits.pathBytes)
+        self.messages = Array(messages.suffix(RemoteWireLimits.maximumProjectAgentMessages))
+        self.truncated = truncated || messages.count > RemoteWireLimits.maximumProjectAgentMessages
+        self.isReady = isReady
+        self.isResponding = isResponding
+        self.status = RemoteWireLimits.prefix(status, maximumUTF8Bytes: RemoteWireLimits.projectAgentStatusBytes)
+        self.modelLabel = RemoteWireLimits.prefix(modelLabel, maximumUTF8Bytes: RemoteWireLimits.projectAgentModelBytes)
     }
 }
 
@@ -609,6 +725,7 @@ enum RemoteEvent: Equatable, Sendable {
     case sessionMessageUpdated(RemoteSessionMessageStream)
     case sessionMessageCompleted(RemoteSessionMessageStream)
     case sessionTerminalSnapshot(RemoteSessionTerminalSnapshot)
+    case projectAgentSnapshot(RemoteProjectAgentSnapshot)
     case unsupported(type: String, payload: RemoteJSONValue)
 
     var type: String {
@@ -621,6 +738,7 @@ enum RemoteEvent: Equatable, Sendable {
         case .sessionMessageUpdated: return RemoteEventType.sessionMessageUpdated
         case .sessionMessageCompleted: return RemoteEventType.sessionMessageCompleted
         case .sessionTerminalSnapshot: return RemoteEventType.sessionTerminalSnapshot
+        case .projectAgentSnapshot: return RemoteEventType.projectAgentSnapshot
         case .unsupported(let type, _): return type
         }
     }
@@ -682,6 +800,8 @@ struct RemoteEventEnvelope: Codable, Equatable, Sendable {
             event = .sessionTerminalSnapshot(
                 try container.decode(RemoteSessionTerminalSnapshot.self, forKey: .payload)
             )
+        case RemoteEventType.projectAgentSnapshot:
+            event = .projectAgentSnapshot(try container.decode(RemoteProjectAgentSnapshot.self, forKey: .payload))
         default:
             let payload = try container.decodeIfPresent(RemoteJSONValue.self, forKey: .payload) ?? .object([:])
             event = .unsupported(type: type, payload: payload)
@@ -711,6 +831,8 @@ struct RemoteEventEnvelope: Codable, Equatable, Sendable {
         case .sessionMessageCompleted(let payload):
             try container.encode(payload, forKey: .payload)
         case .sessionTerminalSnapshot(let payload):
+            try container.encode(payload, forKey: .payload)
+        case .projectAgentSnapshot(let payload):
             try container.encode(payload, forKey: .payload)
         case .unsupported(_, let payload):
             try container.encode(payload, forKey: .payload)
@@ -765,6 +887,30 @@ enum RemoteWireCodec {
 
         var data = try encode(candidate)
         guard data.count > maximumBytes else { return data }
+        if case .projectAgentSnapshot(var snapshot) = candidate.event {
+            while data.count > maximumBytes, !snapshot.messages.isEmpty {
+                snapshot.truncated = true
+                if snapshot.messages.count > 1 {
+                    snapshot.messages.removeFirst()
+                } else if !snapshot.messages[0].text.isEmpty {
+                    let previous = snapshot.messages[0].text
+                    let messageBytes = previous.utf8.count
+                    let shortened = snapshot.messages[0].role == .assistant
+                        ? RemoteWireLimits.suffix(previous, maximumUTF8Bytes: messageBytes / 2)
+                        : RemoteWireLimits.prefix(previous, maximumUTF8Bytes: messageBytes / 2)
+                    snapshot.messages[0].text = shortened == previous ? "" : shortened
+                    snapshot.messages[0].truncated = true
+                } else {
+                    snapshot.messages.removeFirst()
+                }
+                candidate.event = .projectAgentSnapshot(snapshot)
+                data = try encode(candidate)
+            }
+            guard data.count <= maximumBytes else {
+                throw RemoteWireCodecError.outboundFrameTooLarge
+            }
+            return data
+        }
         guard case .sessionSnapshot(var snapshot) = candidate.event else {
             throw RemoteWireCodecError.outboundFrameTooLarge
         }

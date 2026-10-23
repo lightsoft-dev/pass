@@ -42,12 +42,30 @@ export interface RemoteSession {
   isAttached: boolean;
   unacknowledged: boolean;
   launching: boolean;
+  isProjectAgent?: boolean;
 }
 
 export interface RemoteProject {
   rootPath: string;
   name: string;
   emoji?: string | null;
+}
+
+export interface ProjectAgentMessage {
+  id: string;
+  role: "user" | "assistant" | "activity" | "error";
+  text: string;
+  truncated: boolean;
+}
+
+export interface ProjectAgentSnapshot {
+  projectRoot: string;
+  messages: ProjectAgentMessage[];
+  truncated: boolean;
+  isReady: boolean;
+  isResponding: boolean;
+  status: string;
+  modelLabel: string;
 }
 
 export type VoiceStatus =
@@ -101,6 +119,8 @@ export interface ClientCommandPayloadMap {
   };
   "session.terminal.close": { session: string; subscriptionId: string };
   "project.list": Record<string, never>;
+  "project.agent.get": { projectRoot: string };
+  "project.agent.send": { projectRoot: string; text: string };
 }
 
 export type ClientCommandType = keyof ClientCommandPayloadMap;
@@ -168,6 +188,7 @@ export type ServerEventPayloadMap = {
   "session.message.updated": SessionMessageStreamPayload;
   "session.message.completed": SessionMessageStreamPayload;
   "session.terminal.snapshot": SessionTerminalSnapshotPayload;
+  "project.agent.snapshot": ProjectAgentSnapshot;
 };
 
 export interface SessionMessageStreamPayload {
