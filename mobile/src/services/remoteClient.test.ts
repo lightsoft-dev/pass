@@ -101,6 +101,12 @@ test("uses header auth and keeps an offline desktop socket open", async () => {
     "X-Pass-Device-ID": "mobile_123",
   });
 
+  assert.throws(
+    () => client.send("project.agent.send", { projectRoot: "/work/app", text: "Continue" }),
+    (error: unknown) => error instanceof RemoteClientError && error.code === "desktop_offline",
+    "Pa instructions must not queue while the Mac is offline",
+  );
+
   socket.onmessage?.({
     data: event("desktop.presence", { desktopOnline: true, mobileCount: 1 }),
   });

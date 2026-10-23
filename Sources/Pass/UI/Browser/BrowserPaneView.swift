@@ -22,7 +22,7 @@ struct BrowserPaneView: View {
             toolbar
             if let addressError {
                 Text(addressError)
-                    .font(.system(size: 10)).foregroundStyle(.orange)
+                    .font(PassFont.ui(size: 10)).foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10).padding(.bottom, 4)
             }
@@ -54,13 +54,13 @@ struct BrowserPaneView: View {
     private var chromeProfileImportPrompt: some View {
         HStack(spacing: 9) {
             Image(systemName: "person.crop.circle.badge.arrow.forward")
-                .font(.system(size: 14, weight: .semibold))
+                .font(PassFont.ui(size: 14, weight: .semibold))
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Bring your Chrome login into Pass")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(PassFont.ui(size: 11, weight: .semibold))
                 Text("Import cookies from an installed Chrome profile.")
-                    .font(.system(size: 10))
+                    .font(PassFont.ui(size: 10))
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -117,7 +117,7 @@ struct BrowserPaneView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "clock").font(.system(size: 11))
+                    Image(systemName: "clock").font(PassFont.ui(size: 11))
                 }
                 .menuIndicator(.hidden)
                 .fixedSize()
@@ -143,7 +143,7 @@ struct BrowserPaneView: View {
                 .buttonStyle(.plain).foregroundStyle(.secondary)
                 .help("Close browser (⌘B hides without closing)")
         }
-        .font(.system(size: 12))
+        .font(PassFont.ui(size: 12))
         .padding(.horizontal, 10).padding(.vertical, 6)
     }
 

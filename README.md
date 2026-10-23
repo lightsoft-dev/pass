@@ -66,10 +66,12 @@ straight into the session. Sessions live in **tmux**, so they survive pass resta
   draggable and an open browser tab remains available when the device pane closes. Pass never
   captures a Mac window, so Screen Recording permission is not required. Use the device button
   in a session header or menu bar → **Attach device pane…**.
-- **Mobile remote developer preview** — an outbound-only macOS gateway, Cloudflare
-  Worker/Durable Object relay, and Expo client can list/create sessions, send messages, and answer
-  decisions. The current shared-token pairing is explicitly development-only; device-key pairing
-  and voice are still follow-up work.
+- **Remote access** — an outbound-only macOS gateway and Cloudflare Worker/Durable Object relay
+  let a paired phone or another Mac on the same account view and control sessions. On a second Mac,
+  choose the source Mac and one of its registered projects to start a session on that Mac. Projects
+  with the same name on both computers stay separate under their respective Mac names. This shares
+  project and session metadata and forwards commands; it does not copy repository files between Macs.
+  The legacy shared-token mode is development-only, and voice is still follow-up work.
 
 ## Build & run
 
@@ -99,12 +101,25 @@ The assistant can be reopened any time from the menu bar. If notifications are b
 Pass in System Settings. Summon with the shortcut selected in Settings (⌘⌘ or ⌥Space), `@` to
 jump, or use `New session…` from the menu bar.
 
-## Mobile remote developer preview
+## Remote access
 
 The implementation and its security boundary are documented in
 [`docs/mobile-remote-architecture.md`](docs/mobile-remote-architecture.md). Relay setup lives in
 [`relay/README.md`](relay/README.md), and Expo setup lives in
-[`mobile/README.md`](mobile/README.md). No relay is deployed automatically.
+[`mobile/README.md`](mobile/README.md). Sign in to the same account on each Mac to discover the
+other Mac through the relay. Remote projects use paths on their source Mac, so selecting a remote
+project starts the session there even when a project with the same name also exists locally.
+Repository contents, Git changes, and project files are not synchronized by this feature. No relay
+is deployed automatically.
+
+Remote desktop is available from the relay web console for Macs linked to the same account. On
+the host Mac, turn on **Settings → Remote → Allow screen sharing requests**, grant macOS Screen
+Recording access, then approve each request and choose view only or mouse/keyboard control. Control
+also requires macOS Accessibility access. The browser can resize or full-screen the remote display,
+and either side can disconnect. A session ends after 15 minutes. Video and input use an encrypted
+WebRTC connection; the relay forwards only connection signals and keeps no screen frames or input.
+For reliable connections across different networks, configure Cloudflare TURN as described in
+[`relay/README.md`](relay/README.md).
 
 ## Steam Deck client
 

@@ -9,6 +9,13 @@ import { handleControlRequest } from "./control";
 import { handleFeedbackRequest } from "./feedback";
 import { handleMarketplaceRequest } from "./marketplace";
 import { handleUsageRequest } from "./usage";
+import {
+  SCREEN_ACTIVE_MS,
+  SCREEN_PENDING_MS,
+  generateScreenIceServers,
+  validScreenCandidate,
+  validScreenSdp,
+} from "./screen";
 
 import {
   MAX_FRAME_BYTES,
@@ -65,6 +72,8 @@ type RelayEnv = Env & {
   APPLE_PRIVATE_KEY?: string;
   APPLE_TOKEN_ENCRYPTION_KEY?: string;
   GOOGLE_CLIENT_ID?: string;
+  TURN_KEY_ID?: string;
+  TURN_KEY_API_TOKEN?: string;
   ASSETS?: Fetcher;
 };
 
@@ -101,6 +110,23 @@ type LatestSequenceRow = {
 type TerminalSubscriptionRow = {
   subscription_id: string;
   origin_device_id: string;
+  expires_at: number;
+};
+
+type ScreenSessionRow = {
+  id: number;
+  session_id: string;
+  request_id: string;
+  origin_device_id: string;
+  origin_connection_id: string;
+  desktop_connection_id: string;
+  requested_control: number;
+  can_control: number;
+  state: "pending" | "approved";
+  offer_sent: number;
+  answer_sent: number;
+  mobile_ice_count: number;
+  desktop_ice_count: number;
   expires_at: number;
 };
 
@@ -248,14 +274,16 @@ function parseInternalScopes(raw: string | null): string[] | null {
   }
 }
 
-function requiredCommandScope(commandType: string): string | null {
+export function requiredCommandScope(commandType: string): string | null {
   switch (commandType) {
     case "session.list":
+    case "project.agent.get":
       return "sessions:read";
     case "project.list":
       return "projects:read";
     case "session.create":
     case "session.sendMessage":
+    case "project.agent.send":
       return "sessions:write";
     case "session.answerDecision":
       return "decisions:answer";
@@ -303,6 +331,21 @@ function makeErrorEvent(
   };
 }
 
+function makeScreenEvent(
+  type: string,
+  payload: Record<string, unknown>,
+  replyTo?: string,
+): DesktopEvent {
+  return {
+    version: PROTOCOL_VERSION,
+    id: crypto.randomUUID(),
+    type,
+    sentAt: new Date().toISOString(),
+    ...(replyTo === undefined ? {} : { replyTo }),
+    payload,
+  };
+}
+
 function commandStatusForEvent(
   event: DesktopEvent,
 ): StoredCommandStatus | null {
@@ -313,6 +356,7 @@ function commandStatusForEvent(
       return "rejected";
     case "message.delivered":
     case "session.snapshot":
+    case "project.agent.snapshot":
       return "completed";
     default:
       return null;
@@ -382,6 +426,31 @@ export class DesktopRoom extends DurableObject<Env> {
         Date.now(),
       );
     }
+    if (current < 3) {
+      this.ctx.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS screen_session (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          session_id TEXT NOT NULL,
+          request_id TEXT NOT NULL,
+          origin_device_id TEXT NOT NULL,
+          origin_connection_id TEXT NOT NULL,
+          desktop_connection_id TEXT NOT NULL,
+          requested_control INTEGER NOT NULL,
+          can_control INTEGER NOT NULL,
+          state TEXT NOT NULL,
+          offer_sent INTEGER NOT NULL DEFAULT 0,
+          answer_sent INTEGER NOT NULL DEFAULT 0,
+          mobile_ice_count INTEGER NOT NULL DEFAULT 0,
+          desktop_ice_count INTEGER NOT NULL DEFAULT 0,
+          expires_at INTEGER NOT NULL
+        );
+      `);
+      this.ctx.storage.sql.exec(
+        "INSERT INTO _relay_schema_migrations (version, applied_at) VALUES (?, ?)",
+        3,
+        Date.now(),
+      );
+    }
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -437,6 +506,7 @@ export class DesktopRoom extends DurableObject<Env> {
 
     if (role === "desktop") {
       for (const existing of this.openSockets("role:desktop")) {
+        this.endScreenForConnection(this.attachment(existing)?.connectionId, "host_replaced");
         existing.close(4001, "Replaced by a newer desktop connection.");
       }
     }
@@ -504,8 +574,13 @@ export class DesktopRoom extends DurableObject<Env> {
         attachment.credentialExpiresAt !== undefined &&
         attachment.credentialExpiresAt <= now
       ) {
+        this.endScreenForConnection(attachment.connectionId, "credential_expired");
         socket.close(4003, "Credential expired.");
       }
+    }
+    const screen = this.screenSession();
+    if (screen !== null && screen.expires_at <= now) {
+      this.endScreenSession("timeout");
     }
     this.broadcastPresence();
     await this.scheduleCredentialExpiry();
@@ -525,6 +600,7 @@ export class DesktopRoom extends DurableObject<Env> {
       attachment.credentialExpiresAt !== undefined &&
       attachment.credentialExpiresAt <= Date.now()
     ) {
+      this.endScreenForConnection(attachment.connectionId, "credential_expired");
       socket.close(4003, "Credential expired.");
       return;
     }
@@ -565,6 +641,10 @@ export class DesktopRoom extends DurableObject<Env> {
     }
 
     const parsedMessage = parsed.value;
+    if (parsedMessage.message.type.startsWith("desktop.screen.")) {
+      await this.handleScreenMessage(socket, attachment, parsedMessage.message);
+      return;
+    }
     if (attachment.role === "mobile") {
       if (parsedMessage.kind === "resume") {
         if (!this.hasScope(attachment, "sessions:read")) {
@@ -645,7 +725,9 @@ export class DesktopRoom extends DurableObject<Env> {
       reason,
       wasClean,
     });
+    this.endScreenForConnection(attachment?.connectionId, "peer_disconnected");
     this.broadcastPresence();
+    await this.scheduleCredentialExpiry();
   }
 
   override async webSocketError(
@@ -659,7 +741,342 @@ export class DesktopRoom extends DurableObject<Env> {
       connectionId: attachment?.connectionId ?? "unknown",
       error: error instanceof Error ? error.message : String(error),
     });
+    this.endScreenForConnection(attachment?.connectionId, "peer_disconnected");
     this.broadcastPresence();
+    await this.scheduleCredentialExpiry();
+  }
+
+  private screenSession(): ScreenSessionRow | null {
+    try {
+      return this.ctx.storage.sql.exec<ScreenSessionRow>(
+        "SELECT * FROM screen_session WHERE id = 1 LIMIT 1",
+      ).toArray()[0] ?? null;
+    } catch (error) {
+      // /purge deletes all SQLite tables before pending WebSocket close callbacks finish.
+      if (error instanceof Error && error.message.includes("no such table: screen_session")) return null;
+      throw error;
+    }
+  }
+
+  private socketForConnection(connectionId: string, role: Role): WebSocket | null {
+    return this.openSockets(`connection:${connectionId}`).find(
+      (socket) => this.attachment(socket)?.role === role,
+    ) ?? null;
+  }
+
+  private screenError(socket: WebSocket, requestId: string, code: string, message: string): void {
+    if (this.attachment(socket)?.role === "mobile") {
+      this.send(socket, makeErrorEvent(code, message, false, requestId));
+    } else {
+      structuredLog("warn", "rejected desktop screen signal", { code, requestId });
+    }
+  }
+
+  private endScreenSession(reason: string): void {
+    const screen = this.screenSession();
+    if (screen === null) return;
+    this.ctx.storage.sql.exec("DELETE FROM screen_session WHERE id = 1");
+    const requester = this.socketForConnection(screen.origin_connection_id, "mobile");
+    const host = this.socketForConnection(screen.desktop_connection_id, "desktop");
+    const message = reason === "denied"
+      ? "The host declined the screen request."
+      : reason === "timeout"
+      ? "The screen request or session expired."
+      : reason === "turn_unavailable"
+      ? "The screen connection could not be prepared."
+      : "The screen session ended.";
+    if (requester !== null) {
+      this.send(requester, makeScreenEvent(
+        screen.state === "pending" ? "desktop.screen.denied" : "desktop.screen.close",
+        { sessionId: screen.session_id, reason, message },
+        screen.state === "pending" ? screen.request_id : undefined,
+      ));
+    }
+    if (host !== null) {
+      this.send(host, makeScreenEvent("desktop.screen.close", {
+        sessionId: screen.session_id,
+        reason,
+      }));
+    }
+  }
+
+  private endScreenForConnection(connectionId: string | null | undefined, reason: string): void {
+    if (!connectionId) return;
+    const screen = this.screenSession();
+    if (screen !== null &&
+      (screen.origin_connection_id === connectionId || screen.desktop_connection_id === connectionId)) {
+      this.endScreenSession(reason);
+    }
+  }
+
+  private async handleScreenMessage(
+    socket: WebSocket,
+    attachment: ConnectionAttachment,
+    message: { id: string; type: string; payload: unknown },
+  ): Promise<void> {
+    const payload = message.payload;
+    if (!isRecord(payload)) {
+      this.screenError(socket, message.id, "screen.invalid_signal", "Screen payload must be an object.");
+      return;
+    }
+    if (attachment.role === "mobile") {
+      if (attachment.authorization !== "device" || !this.hasScope(attachment, "screen:view")) {
+        this.screenError(socket, message.id, "scope.denied", "Screen viewing is not authorized.");
+        return;
+      }
+      if (message.type === "desktop.screen.open") {
+        if (typeof payload.requestedControl !== "boolean") {
+          this.screenError(socket, message.id, "screen.invalid_signal", "requestedControl is required.");
+          return;
+        }
+        if (payload.requestedControl && !this.hasScope(attachment, "screen:control")) {
+          this.screenError(socket, message.id, "scope.denied", "Screen control is not authorized.");
+          return;
+        }
+        const previous = this.screenSession();
+        if (previous !== null) {
+          if (previous.expires_at <= Date.now() ||
+            this.socketForConnection(previous.origin_connection_id, "mobile") === null ||
+            this.socketForConnection(previous.desktop_connection_id, "desktop") === null) {
+            this.endScreenSession("timeout");
+          } else {
+            this.screenError(socket, message.id, "screen.busy", "A screen request or session is already active.");
+            return;
+          }
+        }
+        const desktop = this.currentDesktop();
+        const desktopAttachment = desktop === null ? null : this.attachment(desktop);
+        if (desktop === null || desktopAttachment === null) {
+          this.screenError(socket, message.id, "desktop.offline", "Desktop is offline.");
+          return;
+        }
+        const now = Date.now();
+        const expiresAt = Math.min(
+          now + SCREEN_PENDING_MS,
+          attachment.credentialExpiresAt ?? Infinity,
+          desktopAttachment.credentialExpiresAt ?? Infinity,
+        );
+        const sessionId = `screen_${crypto.randomUUID().replaceAll("-", "")}`;
+        this.ctx.storage.sql.exec(
+          `INSERT INTO screen_session (
+            id, session_id, request_id, origin_device_id, origin_connection_id,
+            desktop_connection_id, requested_control, can_control, state, expires_at
+          ) VALUES (1, ?, ?, ?, ?, ?, ?, 0, 'pending', ?)`,
+          sessionId,
+          message.id,
+          attachment.deviceId,
+          attachment.connectionId,
+          desktopAttachment.connectionId,
+          payload.requestedControl ? 1 : 0,
+          expiresAt,
+        );
+        this.send(socket, makeScreenEvent("desktop.screen.pending", {
+          sessionId,
+          expiresAt: new Date(expiresAt).toISOString(),
+        }, message.id));
+        if (!this.send(desktop, makeScreenEvent("desktop.screen.requested", {
+          sessionId,
+          deviceId: attachment.deviceId,
+          requestedControl: payload.requestedControl,
+          expiresAt: new Date(expiresAt).toISOString(),
+        }))) {
+          this.endScreenSession("host_disconnected");
+        }
+        await this.scheduleCredentialExpiry();
+        return;
+      }
+
+      const screen = this.screenSession();
+      if (message.type === "desktop.screen.close" &&
+        isValidIdentifier(payload.requestId) && screen !== null &&
+        screen.request_id === payload.requestId &&
+        screen.origin_connection_id === attachment.connectionId) {
+        this.endScreenSession("controller_closed");
+        await this.scheduleCredentialExpiry();
+        return;
+      }
+      if (!isValidIdentifier(payload.sessionId) || screen === null ||
+        screen.session_id !== payload.sessionId ||
+        screen.origin_connection_id !== attachment.connectionId) {
+        this.screenError(socket, message.id, "screen.not_found", "Screen session was not found.");
+        return;
+      }
+      if (screen.expires_at <= Date.now()) {
+        this.endScreenSession("timeout");
+        await this.scheduleCredentialExpiry();
+        return;
+      }
+      if (message.type === "desktop.screen.close") {
+        this.endScreenSession("controller_closed");
+        await this.scheduleCredentialExpiry();
+        return;
+      }
+      if (screen.state !== "approved") {
+        this.screenError(socket, message.id, "screen.not_approved", "The host has not approved the screen session.");
+        return;
+      }
+      const desktop = this.socketForConnection(screen.desktop_connection_id, "desktop");
+      if (desktop === null) {
+        this.endScreenSession("host_disconnected");
+        await this.scheduleCredentialExpiry();
+        return;
+      }
+      if (message.type === "desktop.screen.offer") {
+        if (!validScreenSdp(payload.sdp) || screen.offer_sent !== 0) {
+          this.screenError(socket, message.id, "screen.invalid_offer", "A valid single offer is required.");
+          return;
+        }
+        this.ctx.storage.sql.exec("UPDATE screen_session SET offer_sent = 1 WHERE id = 1");
+        if (!this.send(desktop, makeScreenEvent("desktop.screen.offer", {
+          sessionId: screen.session_id,
+          sdp: payload.sdp,
+        }))) this.endScreenSession("host_disconnected");
+        return;
+      }
+      if (message.type === "desktop.screen.ice") {
+        if (!validScreenCandidate(payload.candidate) || screen.mobile_ice_count >= 128) {
+          this.screenError(socket, message.id, "screen.invalid_ice", "ICE candidate is invalid or limit reached.");
+          return;
+        }
+        this.ctx.storage.sql.exec(
+          "UPDATE screen_session SET mobile_ice_count = mobile_ice_count + 1 WHERE id = 1",
+        );
+        if (!this.send(desktop, makeScreenEvent("desktop.screen.ice", {
+          sessionId: screen.session_id,
+          candidate: payload.candidate,
+        }))) this.endScreenSession("host_disconnected");
+        return;
+      }
+      this.screenError(socket, message.id, "screen.invalid_signal", "Unsupported controller screen signal.");
+      return;
+    }
+
+    const screen = this.screenSession();
+    if (this.currentDesktop() !== socket || screen === null ||
+      !isValidIdentifier(payload.sessionId) || screen.session_id !== payload.sessionId ||
+      screen.desktop_connection_id !== attachment.connectionId) {
+      this.screenError(socket, message.id, "screen.not_found", "Screen session was not found.");
+      return;
+    }
+    if (screen.expires_at <= Date.now()) {
+      this.endScreenSession("timeout");
+      await this.scheduleCredentialExpiry();
+      return;
+    }
+    if (message.type === "desktop.screen.deny" && screen.state === "pending") {
+      this.endScreenSession("denied");
+      await this.scheduleCredentialExpiry();
+      return;
+    }
+    if (message.type === "desktop.screen.close") {
+      this.endScreenSession("host_closed");
+      await this.scheduleCredentialExpiry();
+      return;
+    }
+    const requester = this.socketForConnection(screen.origin_connection_id, "mobile");
+    if (requester === null) {
+      this.endScreenSession("controller_disconnected");
+      await this.scheduleCredentialExpiry();
+      return;
+    }
+    if (message.type === "desktop.screen.approve" && screen.state === "pending") {
+      if (typeof payload.allowControl !== "boolean" ||
+        (payload.allowControl && screen.requested_control !== 1)) {
+        this.screenError(socket, message.id, "screen.invalid_approval", "Approval exceeds requested access.");
+        return;
+      }
+      let hostIceServers: Awaited<ReturnType<typeof generateScreenIceServers>>;
+      let requesterIceServers: Awaited<ReturnType<typeof generateScreenIceServers>>;
+      try {
+        [hostIceServers, requesterIceServers] = await Promise.all([
+          generateScreenIceServers(this.env as RelayEnv),
+          generateScreenIceServers(this.env as RelayEnv),
+        ]);
+      } catch (error) {
+        structuredLog("warn", "screen TURN setup failed", {
+          desktopId: attachment.desktopId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (this.screenSession()?.session_id === screen.session_id) {
+          this.endScreenSession("turn_unavailable");
+        }
+        await this.scheduleCredentialExpiry();
+        return;
+      }
+      const latest = this.screenSession();
+      const now = Date.now();
+      const requesterAttachment = this.attachment(requester);
+      if (latest === null || latest.session_id !== screen.session_id) return;
+      if (latest.state !== "pending") return;
+      if (latest.expires_at <= now ||
+        requester.readyState !== OPEN || socket.readyState !== OPEN || requesterAttachment === null) {
+        this.endScreenSession("timeout");
+        await this.scheduleCredentialExpiry();
+        return;
+      }
+      const expiresAt = Math.min(
+        now + SCREEN_ACTIVE_MS,
+        requesterAttachment.credentialExpiresAt ?? Infinity,
+        attachment.credentialExpiresAt ?? Infinity,
+      );
+      this.ctx.storage.sql.exec(
+        "UPDATE screen_session SET state = 'approved', can_control = ?, expires_at = ? WHERE id = 1",
+        payload.allowControl ? 1 : 0,
+        expiresAt,
+      );
+      const common = {
+        sessionId: screen.session_id,
+        canControl: payload.allowControl,
+        expiresAt: new Date(expiresAt).toISOString(),
+      };
+      const hostSent = this.send(socket, makeScreenEvent("desktop.screen.approved", {
+        ...common,
+        iceServers: hostIceServers,
+      }));
+      const requesterSent = this.send(requester, makeScreenEvent("desktop.screen.approved", {
+        ...common,
+        iceServers: requesterIceServers,
+      }, screen.request_id));
+      if (!hostSent || !requesterSent) this.endScreenSession("peer_disconnected");
+      await this.scheduleCredentialExpiry();
+      return;
+    }
+    if (screen.state !== "approved") {
+      this.screenError(socket, message.id, "screen.not_approved", "Screen session has not been approved.");
+      return;
+    }
+    if (message.type === "desktop.screen.answer") {
+      if (!validScreenSdp(payload.sdp) || screen.offer_sent !== 1 || screen.answer_sent !== 0 ||
+        !Number.isSafeInteger(payload.displayWidth) || !Number.isSafeInteger(payload.displayHeight) ||
+        (payload.displayWidth as number) < 1 || (payload.displayWidth as number) > 16_384 ||
+        (payload.displayHeight as number) < 1 || (payload.displayHeight as number) > 16_384) {
+        this.screenError(socket, message.id, "screen.invalid_answer", "A valid answer and display size are required.");
+        return;
+      }
+      this.ctx.storage.sql.exec("UPDATE screen_session SET answer_sent = 1 WHERE id = 1");
+      if (!this.send(requester, makeScreenEvent("desktop.screen.answer", {
+        sessionId: screen.session_id,
+        sdp: payload.sdp,
+        displayWidth: payload.displayWidth,
+        displayHeight: payload.displayHeight,
+      }))) this.endScreenSession("controller_disconnected");
+      return;
+    }
+    if (message.type === "desktop.screen.ice") {
+      if (!validScreenCandidate(payload.candidate) || screen.desktop_ice_count >= 128) {
+        this.screenError(socket, message.id, "screen.invalid_ice", "ICE candidate is invalid or limit reached.");
+        return;
+      }
+      this.ctx.storage.sql.exec(
+        "UPDATE screen_session SET desktop_ice_count = desktop_ice_count + 1 WHERE id = 1",
+      );
+      if (!this.send(requester, makeScreenEvent("desktop.screen.ice", {
+        sessionId: screen.session_id,
+        candidate: payload.candidate,
+      }))) this.endScreenSession("controller_disconnected");
+      return;
+    }
+    this.screenError(socket, message.id, "screen.invalid_signal", "Unsupported host screen signal.");
   }
 
   private handleMobileCommand(
@@ -962,6 +1379,7 @@ export class DesktopRoom extends DurableObject<Env> {
       if (attachment === null || (deviceId !== null && attachment.deviceId !== deviceId)) {
         continue;
       }
+      this.endScreenForConnection(attachment.connectionId, "credential_revoked");
       socket.close(4003, "Credential revoked.");
       closed += 1;
     }
@@ -974,6 +1392,11 @@ export class DesktopRoom extends DurableObject<Env> {
     for (const socket of this.openSockets()) {
       const expiry = this.attachment(socket)?.credentialExpiresAt;
       if (expiry === undefined || expiry <= now) continue;
+      if (nextExpiry === null || expiry < nextExpiry) nextExpiry = expiry;
+    }
+    const screen = this.screenSession();
+    if (screen !== null) {
+      const expiry = Math.max(now + 1, screen.expires_at);
       if (nextExpiry === null || expiry < nextExpiry) nextExpiry = expiry;
     }
     if (nextExpiry === null) {

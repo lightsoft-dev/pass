@@ -29,6 +29,8 @@ let package = Package(
                 // Whole layers that are macOS-only today.
                 "App",
                 "UI",
+                // ScreenCaptureKit and WebRTC host code is macOS app-only.
+                "Remote/Desktop",
                 // SwiftUI AttributedString output — UI-layer concern despite living in Core.
                 "Core/AnsiRenderer.swift",
                 // Take AppModel (App layer) directly; portable once re-wired via handlers.

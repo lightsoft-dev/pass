@@ -118,6 +118,7 @@ struct Session: Identifiable, Hashable, Sendable {
     var name: String            // tmux session name == id, e.g. "pass-myrepo--feat-x"
     var id: String { name }
     var projectRoot: String     // from @pass_project_root, else git/cwd
+    var isProjectAgent: Bool { ProjectAgentIdentity.isManager(name: name, projectRoot: projectRoot) }
     var cwd: String
     var agent: AgentKind
     var git: GitIdentity?
@@ -159,6 +160,19 @@ struct Session: Identifiable, Hashable, Sendable {
     var displayName: String {
         if let customName, !customName.isEmpty { return customName + gitSuffix }
         return defaultDisplayName
+    }
+
+    /// The project header already names the repository, so session rows show only their
+    /// branch or worktree. Keep user-assigned names intact.
+    var groupedDisplayName: String {
+        if let customName, !customName.isEmpty { return customName + gitSuffix }
+        let suffix = gitSuffix.trimmingCharacters(in: .whitespaces)
+        if !suffix.isEmpty {
+            return suffix.hasPrefix("· ") ? String(suffix.dropFirst(2)) : suffix
+        }
+        let directory = URL(fileURLWithPath: cwd).lastPathComponent
+        return directory == URL(fileURLWithPath: projectRoot).lastPathComponent
+            ? "session" : directory
     }
 
     /// The derived (git/path-based) name, ignoring any alias — shown as secondary context when

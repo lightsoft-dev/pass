@@ -25,7 +25,18 @@ public-account implementation:
   revocable controller credential scoped to each desktop, and show their sessions beside local
   sessions. Machine plates label every group as `LOCAL` or `REMOTE`, include connection presence,
   and keep the remote machine name visible on each session card. The remote detail view supports
-  snapshots, messages, and decision responses; QR pairing remains available for companion devices.
+  snapshots, messages, and decision responses. The controller can choose a registered project on
+  a remote Mac and request a new session on that Mac; the host validates its own project path.
+  Same-named projects on different Macs remain separate. QR pairing remains available for
+  companion devices.
+- The relay web console can request an approved Mac's full display through WebRTC. The host keeps
+  sharing off by default, prompts locally for each request, and may grant view only or input
+  control. ScreenCaptureKit supplies video, and CGEvent input is gated by Accessibility permission,
+  the approved device ID, and the active lease. A browser can resize or full-screen the display,
+  disconnect, and send composed text including Korean IME input. The relay forwards only SDP/ICE
+  connection signals, not screen pixels or input. A room permits one screen lease at a time, with
+  a 60-second approval window and a 15-minute active limit. TURN credentials are short-lived and
+  created only after approval when the Worker has Cloudflare TURN secrets.
 - The Steam Deck client uses a TV-style inverse pairing flow: it displays a five-minute QR, an
   already paired phone approves the target desktop, and the relay hands credentials back through
   an RSA-OAEP + AES-GCM envelope decryptable only by that Deck.
@@ -44,7 +55,8 @@ public-account implementation:
 
 The public path no longer puts a reusable relay bearer in the QR. Remaining launch hardening is
 edge rate limiting, managed OIDC deployment values, provider-side account deletion, abuse and
-retention controls, push delivery, and the realtime voice agent. See
+retention controls, push delivery, production TURN configuration, real two-Mac screen testing,
+and the realtime voice agent. See
 [`relay/README.md`](../relay/README.md) and [`mobile/README.md`](../mobile/README.md).
 
 ## Goals
@@ -63,6 +75,8 @@ retention controls, push delivery, and the realtime voice agent. See
 - Do not replace the existing local panel or share extension.
 - Do not send repository contents to a cloud relay by default; relay traffic should be metadata
   and user messages unless a user explicitly chooses otherwise.
+- Mac-to-Mac remote control does not replicate project folders, uncommitted changes, Git history,
+  or other repository files. Each Mac runs sessions against its own local checkout.
 
 ## Current local shape
 
@@ -125,6 +139,17 @@ signed in to the same account use an account-owned authorization path instead:
    desktop id alone is insufficient, and a request for another account's desktop returns `404`.
 5. The controller Mac stores these credentials in Keychain, connects to each desktop room, and
    renders local and remote groups concurrently. Signing out revokes the controller devices.
+6. The controller keeps each project tied to its source desktop identity and source-local root
+   path. A project named `app` on two Macs appears under each Mac rather than being merged by name
+   or treated as a shared folder. Session names likewise belong to their source desktop.
+7. When the user chooses a remote project, the controller sends `session.create` to that desktop's
+   relay room with the root path advertised by that desktop. The receiving Mac checks that the
+   path is registered locally and creates the tmux session there. The controller displays the new
+   session under that Mac; the local checkout is unaffected.
+
+This flow synchronizes the visible project/session inventory and forwards control commands. It
+does not transfer repository contents or reconcile files between machines. Projects that happen to
+have the same name or Git origin can still have different local paths and different working trees.
 
 ### Recommended relay platform: Cloudflare
 
@@ -206,7 +231,8 @@ Use one versioned JSON protocol over WebSocket for the control plane. Every comm
 ### Desktop-to-mobile events
 
 The developer MVP currently emits `ack`, `error`, `session.snapshot`, `message.delivered`, the
-three `session.message.*` streaming events, and `session.terminal.snapshot`. Other incremental and
+three `session.message.*` streaming events, `session.terminal.snapshot`, and
+`project.agent.snapshot`. Other incremental and
 voice events in this table remain the target contract for later phases; full snapshots remain the
 source of truth.
 
@@ -217,6 +243,7 @@ source of truth.
 | `session.message.updated` | New complete sampled text for the same message id and a higher sequence. |
 | `session.message.completed` | Final complete text when the response stops streaming. |
 | `session.terminal.snapshot` | Revisioned ANSI active-pane image, geometry, cursor, and truncation state. |
+| `project.agent.snapshot` | Bounded Pa conversation for a registered project, including truncation state. |
 | `session.updated` | One changed session: name, display name, agent, project root, git branch, attention, last message, activity. |
 | `session.removed` | Removed tmux session name. |
 | `attention.changed` | Pending decision/input/working/idle state and optional prompt preview. |
@@ -232,13 +259,15 @@ capability by the desktop.
 | Command | Purpose |
 | --- | --- |
 | `session.list` | Request a fresh snapshot. |
-| `session.create` | Create a tmux-backed pass session for a registered project and agent. |
+| `session.create` | Create a tmux-backed pass session for a project registered on the selected host; `projectRoot` is that host's local path. |
 | `session.sendMessage` | Send a typed message to an existing coding session using `ReplyInjector`. |
 | `session.answerDecision` | Send a structured yes/no or permission decision. |
 | `session.terminal.open` | Open or renew a 30-second pane subscription; optionally provide the last revision. |
 | `session.terminal.input` | Send bounded terminal UTF-8/escape input to an active subscription. |
 | `session.terminal.close` | End a terminal subscription. |
-| `project.list` | List registered projects that can start sessions. |
+| `project.list` | List projects registered on the selected host, retaining their host identity. |
+| `project.agent.get` | Read a bounded snapshot of a registered project's Pa conversation. |
+| `project.agent.send` | Send a bounded text instruction to that project's Pa. |
 | `voice.start` | Start a voice-management conversation. |
 | `voice.inputAudio` | Stream or reference audio chunks, depending on transport. |
 | `voice.interrupt` | Stop current speech and return to listening. |

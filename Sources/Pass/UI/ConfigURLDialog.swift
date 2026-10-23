@@ -19,7 +19,7 @@ struct ConfigURLAddButton: View {
             show = true
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 10, weight: .semibold))
+                .font(PassFont.ui(size: 10, weight: .semibold))
                 .frame(width: 18, height: 18)
         }
         .buttonStyle(.plain)
@@ -30,20 +30,20 @@ struct ConfigURLAddButton: View {
         .popover(isPresented: $show, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Add URL")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(PassFont.ui(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                 TextField("localhost:3000 · admin.example.com", text: $rawURL)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13))
+                    .font(PassFont.ui(size: 13))
                     .focused($urlFocused)
                     .onSubmit { add() }
                 TextField("Label (optional)", text: $label)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 13))
+                    .font(PassFont.ui(size: 13))
                     .onSubmit { add() }
                 if let error {
                     Text(error)
-                        .font(.system(size: 10))
+                        .font(PassFont.ui(size: 10))
                         .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }

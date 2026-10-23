@@ -81,7 +81,7 @@ struct ExtensionMarketplaceView: View {
             }
             .frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Extension Market").font(.system(size: 17, weight: .semibold))
+                Text("Extension Market").font(PassFont.ui(size: 17, weight: .semibold))
                 Text("Source-visible tools, shared by Pass users")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -181,29 +181,29 @@ struct ExtensionMarketplaceView: View {
         } label: {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(item.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(item.name).font(PassFont.ui(size: 13, weight: .semibold)).lineLimit(1)
                     Spacer()
                     Text(item.version).font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.tertiary)
                 }
-                Text(item.summary).font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(item.summary).font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
                     .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 7) {
                     if let category = item.category {
-                        Text(category.uppercased()).font(.system(size: 8, weight: .bold))
+                        Text(category.uppercased()).font(PassFont.ui(size: 8, weight: .bold))
                             .foregroundStyle(.teal)
                     }
                     Label("\(item.installCount)", systemImage: "arrow.down.circle")
-                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                        .font(PassFont.ui(size: 9)).foregroundStyle(.tertiary)
                     if item.isOwner {
-                        Text("YOURS").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+                        Text("YOURS").font(PassFont.ui(size: 8, weight: .bold)).foregroundStyle(.secondary)
                     }
                     if item.isHidden {
-                        Text("HIDDEN").font(.system(size: 8, weight: .bold)).foregroundStyle(.orange)
+                        Text("HIDDEN").font(PassFont.ui(size: 8, weight: .bold)).foregroundStyle(.orange)
                     }
                     if item.canModerate, let reportCount = item.reportCount, reportCount > 0 {
                         Label("\(reportCount)", systemImage: "flag.fill")
-                            .font(.system(size: 8, weight: .bold)).foregroundStyle(.red)
+                            .font(PassFont.ui(size: 8, weight: .bold)).foregroundStyle(.red)
                     }
                 }
             }
@@ -220,7 +220,7 @@ struct ExtensionMarketplaceView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(item.name).font(.system(size: 24, weight: .semibold))
+                        Text(item.name).font(PassFont.ui(size: 24, weight: .semibold))
                         Text("v\(item.version) · by \(item.owner.displayName ?? "Pass user")")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -266,7 +266,7 @@ struct ExtensionMarketplaceView: View {
                     Divider().frame(height: 18)
                     Label("\(item.installCount) installs", systemImage: "arrow.down.circle")
                 }
-                .font(.system(size: 10, weight: .medium))
+                .font(PassFont.ui(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12).padding(.vertical, 9)
                 .background(Color.teal.opacity(0.08))
@@ -275,7 +275,7 @@ struct ExtensionMarketplaceView: View {
                 if item.canModerate, let reportCount = item.reportCount, reportCount > 0 {
                     Label("\(reportCount) unresolved report\(reportCount == 1 ? "" : "s") — inspect the source and hide the listing if needed.",
                           systemImage: "flag.fill")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(PassFont.ui(size: 11, weight: .medium))
                         .foregroundStyle(.red)
                         .padding(.horizontal, 12).padding(.vertical, 9)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -284,9 +284,9 @@ struct ExtensionMarketplaceView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(item.summary).font(.system(size: 14, weight: .medium))
+                    Text(item.summary).font(PassFont.ui(size: 14, weight: .medium))
                     if let description = item.description, !description.isEmpty {
-                        Text(description).font(.system(size: 12)).foregroundStyle(.secondary)
+                        Text(description).font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
                 }
@@ -335,7 +335,7 @@ struct ExtensionMarketplaceView: View {
 
     private func detailGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased()).font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
+            Text(title.uppercased()).font(PassFont.ui(size: 10, weight: .bold)).foregroundStyle(.tertiary)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -569,7 +569,7 @@ private struct MarketplaceEditorView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(seed.marketID == nil ? "Publish extension" : "Edit listing")
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(PassFont.ui(size: 17, weight: .semibold))
                     Text("The Git repository remains the downloadable source of truth.")
                         .font(.caption).foregroundStyle(.secondary)
                 }

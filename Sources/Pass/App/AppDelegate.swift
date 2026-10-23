@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             doubleTapHotkey?.invalidate()
             shiftTapHotkey?.invalidate()
             appModel.stopProjectDirectorySync()
+            appModel.workerProgressMonitor?.stopAll()
             appModel.mirror?.shutdown()
             appModel.miniTerminals?.closeAll()
             appModel.sessions?.flushSave()
@@ -84,6 +85,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Build stores + start the reconcile loop.
         appModel.configure()
         let notifications = self.notifications
+        appModel.onWorkerProgressAlert = { request, root in
+            if request.kind == "watch-resumed" {
+                notifications.clear(session: request.sessionName,
+                                    kinds: ["watch-quiet", "watch-disappeared"])
+            } else {
+                Task {
+                    await notifications.notify(
+                        session: request.sessionName, projectRoot: root, kind: request.kind,
+                        title: request.title + (request.kind == "watch-disappeared"
+                            ? " · 세션 종료" : " · 진행 확인 필요"), body: request.summary,
+                        sound: request.kind == "watch-disappeared")
+                }
+            }
+        }
         appModel.clearSessionNotifications = { name in
             notifications.clear(session: name, kinds: [
                 Attention.Kind.decision.rawValue, Attention.Kind.input.rawValue, Attention.Kind.finished.rawValue,
@@ -169,6 +184,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         if !completedOnboarding || Shell.resolveViaLoginShell("tmux") == nil {
             DispatchQueue.main.async { onboardingController.show() }
+        } else if Shell.resolveViaLoginShell("pi") != nil && PiAuthentication.needsLogin() {
+            DispatchQueue.main.async { [appModel] in
+                appModel.miniTerminals.openPiLogin()
+            }
         }
         Log.app.info("pass launched (\(appPresence.rawValue, privacy: .public), hook port \(PassConfig.hookPort))")
     }
@@ -198,6 +217,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let router = EventRouter(
             sessions: appModel.sessions,
             onAttention: { name, display, att in
+                appModel.workerProgressMonitor?.stop(name)
+                notifications.clear(session: name, kinds: ["watch-quiet", "watch-disappeared"])
                 let sound = att.kind != .finished // finished notifies silently
                 let projectRoot = appModel.sessions?.session(named: name)?.projectRoot
                 let body: String
@@ -205,6 +226,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 case .decision: body = "Permission needed — \(att.preview)"
                 case .input:    body = att.preview
                 case .finished: body = att.preview
+                }
+                if let session = appModel.sessions?.session(named: name),
+                   let request = ProjectAgentNotificationRequest.fromWorkerAttention(att, session: session) {
+                    appModel.enqueueProjectAgentNotification(request, for: session.projectRoot)
                 }
                 Task {
                     await notifications.notify(
@@ -223,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     Attention.Kind.decision.rawValue,
                     Attention.Kind.input.rawValue,
                     Attention.Kind.finished.rawValue,
+                    "watch-quiet", "watch-disappeared",
                 ])
                 if appModel.sessions?.isEphemeral(name) != true,
                    appModel.extensionBuilder?.ownsSession(name) != true {
@@ -239,6 +265,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 send: { body in await ShareAPI.send(appModel, body: body) }
             )
             let cli = CLIHandlers(
+                projectSessions: { body in await MainActor.run { CLIAPI.projectSessions(appModel, body: body) } },
+                startProjectSession: { body in await CLIAPI.startProjectSession(appModel, body: body) },
+                sendProjectSession: { body in await CLIAPI.sendProjectSession(appModel, body: body) },
+                chooseProjectSession: { body in await CLIAPI.chooseProjectSession(appModel, body: body) },
+                tailProjectSession: { body in await CLIAPI.tailProjectSession(appModel, body: body) },
+                removeProjectSession: { body in await CLIAPI.removeProjectSession(appModel, body: body) },
                 open: { body in await CLIAPI.open(appModel, body: body) },
                 close: { body in await MainActor.run { CLIAPI.close(appModel, body: body) } },
                 tabs: { await MainActor.run { CLIAPI.tabs(appModel) } },
@@ -269,18 +301,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         [.banner, .sound]
     }
 
-    /// Clicking a notification summons the panel and selects the session/project that emitted it.
+    /// Clicking a worker notification opens its project's Pa and asks Pa to explain the update.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
         let sessionName = response.notification.request.content.userInfo["session"] as? String
         let projectRoot = response.notification.request.content.userInfo["projectRoot"] as? String
+        let kind = response.notification.request.content.userInfo["kind"] as? String ?? "unknown"
+        let content = response.notification.request.content
+        let notificationID = response.notification.request.identifier
+        let title = String(content.title.prefix(200))
+        let summary = String(content.body.prefix(1_500))
         Log.app.debug(
             "notification clicked, session=\(sessionName ?? "-", privacy: .public), project=\(projectRoot ?? "-", privacy: .public)"
         )
         await MainActor.run {
-            panelController.show(preselecting: sessionName, projectRoot: projectRoot)
+            let root = projectRoot ?? sessionName.flatMap { appModel.sessions?.session(named: $0)?.projectRoot }
+            if let root, let sessionName, !root.isEmpty, !kind.hasPrefix("watch-") {
+                let request = ProjectAgentNotificationRequest(
+                    id: notificationID,
+                    sessionName: sessionName,
+                    kind: kind,
+                    title: title,
+                    summary: summary
+                )
+                appModel.enqueueProjectAgentNotification(request, for: root)
+            }
+            panelController.show(preselecting: sessionName, projectRoot: root,
+                                 focusProjectAgent: true)
         }
     }
 

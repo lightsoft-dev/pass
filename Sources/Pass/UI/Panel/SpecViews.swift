@@ -30,10 +30,10 @@ struct SpecsView: View {
                 // the repository until the user asks for it).
                 VStack(spacing: 10) {
                     Spacer()
-                    Image(systemName: "doc.badge.plus").font(.system(size: 30)).foregroundStyle(.secondary)
-                    Text("No spec document yet").font(.system(size: 15, weight: .medium))
+                    Image(systemName: "doc.badge.plus").font(PassFont.ui(size: 30)).foregroundStyle(.secondary)
+                    Text("No spec document yet").font(PassFont.ui(size: 15, weight: .medium))
                     Text(".pass/specs.json will be created inside this project —\ncommit it to share the specs.")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                     Button("Create spec document") {
                         do { try appModel.specs?.ensureDocument(projectRoot: selectedRoot) }
@@ -66,7 +66,7 @@ struct SpecsView: View {
                 .buttonStyle(.plain).foregroundStyle(.secondary)
                 .help("Back to sessions (⌘[)")
             Image(systemName: "doc.text").foregroundStyle(.secondary)
-            Text("Specs").font(.system(size: 14, weight: .semibold))
+            Text("Specs").font(PassFont.ui(size: 14, weight: .semibold))
             Picker("", selection: $selectedRoot) {
                 ForEach(projects) { p in
                     Text(p.name).tag(p.rootPath)
@@ -77,7 +77,7 @@ struct SpecsView: View {
             .frame(maxWidth: 260)
             Spacer()
             if let status {
-                Text(status).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(1)
+                Text(status).font(PassFont.ui(size: 11)).foregroundStyle(.orange).lineLimit(1)
             }
             Button {
                 NSWorkspace.shared.activateFileViewerSelecting([SpecStore.fileURL(projectRoot: selectedRoot)])
@@ -97,7 +97,7 @@ struct SpecsView: View {
                 Divider()
                 specsSection
                 if let err = appModel.specs?.errorByProject[selectedRoot] {
-                    Text("⚠ \(err)").font(.system(size: 11)).foregroundStyle(.orange)
+                    Text("⚠ \(err)").font(PassFont.ui(size: 11)).foregroundStyle(.orange)
                 }
             }
             .padding(14)
@@ -109,7 +109,7 @@ struct SpecsView: View {
     @ViewBuilder
     private var developmentSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Development").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            Text("Development").font(PassFont.ui(size: 11, weight: .semibold)).foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 TextField("run command — e.g. pnpm dev", text: devBinding(\.command))
                     .textFieldStyle(.roundedBorder).font(.system(size: 12, design: .monospaced))
@@ -150,7 +150,7 @@ struct SpecsView: View {
 
     @ViewBuilder
     private var specsSection: some View {
-        Text("Specs").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+        Text("Specs").font(PassFont.ui(size: 11, weight: .semibold)).foregroundStyle(.secondary)
         if let doc = document, !doc.specs.isEmpty {
             ForEach(doc.specs) { spec in
                 SpecRow(
@@ -164,12 +164,12 @@ struct SpecsView: View {
             }
         } else {
             Text("No specs yet — name the first one below.")
-                .font(.system(size: 12)).foregroundStyle(.tertiary)
+                .font(PassFont.ui(size: 12)).foregroundStyle(.tertiary)
         }
         HStack(spacing: 8) {
             Image(systemName: "plus.circle").foregroundStyle(.secondary)
             TextField("new spec title · ⏎ to add", text: $newSpecTitle)
-                .textFieldStyle(.plain).font(.system(size: 12))
+                .textFieldStyle(.plain).font(PassFont.ui(size: 12))
                 .onSubmit {
                     let title = newSpecTitle.trimmingCharacters(in: .whitespaces)
                     guard !title.isEmpty else { return }
@@ -215,9 +215,9 @@ struct SpecsView: View {
     private func emptyState(_ icon: String, _ title: String, _ subtitle: String) -> some View {
         VStack(spacing: 10) {
             Spacer()
-            Image(systemName: icon).font(.system(size: 30)).foregroundStyle(.secondary)
-            Text(title).font(.system(size: 15, weight: .medium))
-            Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary)
+            Image(systemName: icon).font(PassFont.ui(size: 30)).foregroundStyle(.secondary)
+            Text(title).font(PassFont.ui(size: 15, weight: .medium))
+            Text(subtitle).font(PassFont.ui(size: 12)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Spacer()
         }
@@ -246,7 +246,7 @@ private struct SpecRow: View {
                     .foregroundStyle(.secondary)
                 statusBadge
                 TextField("title", text: specBinding(\.title))
-                    .textFieldStyle(.plain).font(.system(size: 13, weight: .medium))
+                    .textFieldStyle(.plain).font(PassFont.ui(size: 13, weight: .medium))
                 Spacer()
                 if let session = liveAgentSession {
                     Button { onOpenSession(session.name) } label: {
@@ -264,7 +264,7 @@ private struct SpecRow: View {
 
             if expanded {
                 TextEditor(text: specBinding(\.detail))
-                    .font(.system(size: 12))
+                    .font(PassFont.ui(size: 12))
                     .frame(minHeight: 70, maxHeight: 160)
                     .scrollContentBackground(.hidden)
                     .padding(6)
@@ -272,7 +272,7 @@ private struct SpecRow: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
 
                 if let last = spec.feedback.last {
-                    Text("↩ \(last.text)").font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)
+                    Text("↩ \(last.text)").font(PassFont.ui(size: 11)).foregroundStyle(.orange).lineLimit(2)
                 }
 
                 HStack(spacing: 8) {
@@ -281,7 +281,7 @@ private struct SpecRow: View {
                     Button("Verify") { run(.verify) }
                         .controlSize(.small).disabled(running)
                     TextField("rework feedback…", text: $reworkText)
-                        .textFieldStyle(.roundedBorder).font(.system(size: 11))
+                        .textFieldStyle(.roundedBorder).font(PassFont.ui(size: 11))
                         .onSubmit { submitRework() }
                     Button("Rework") { submitRework() }
                         .controlSize(.small).disabled(running || reworkText.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -312,7 +312,7 @@ private struct SpecRow: View {
             }
         } label: {
             Text(spec.status.label)
-                .font(.system(size: 10, weight: .semibold))
+                .font(PassFont.ui(size: 10, weight: .semibold))
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(statusTint.opacity(0.18))
                 .foregroundStyle(statusTint)

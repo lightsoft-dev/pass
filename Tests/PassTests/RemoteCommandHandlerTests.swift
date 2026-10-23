@@ -128,6 +128,78 @@ final class RemoteCommandHandlerTests: XCTestCase {
         XCTAssertFalse(events.contains { $0.type == RemoteEventType.messageDelivered })
     }
 
+    func testProjectAgentGetAndSendReturnCorrelatedBoundedSnapshots() async {
+        let backend = FakeRemoteCommandBackend()
+        backend.projects = [.init(rootPath: "/projects/app", name: "app")]
+        let handler = makeHandler(backend)
+
+        let read = await handler.handle(command(
+            id: "cmd_pa_get",
+            command: .projectAgentGet(.init(projectRoot: "  /projects/app  "))
+        ))
+        XCTAssertEqual(read.map(\.type), [RemoteEventType.acknowledgement, RemoteEventType.projectAgentSnapshot])
+        XCTAssertTrue(read.allSatisfy { $0.replyTo == "cmd_pa_get" })
+        XCTAssertEqual(backend.projectAgentRoots, ["/projects/app"])
+        guard case .projectAgentSnapshot(let snapshot) = read[1].event else {
+            return XCTFail("Expected Pa snapshot")
+        }
+        XCTAssertEqual(snapshot.projectRoot, "/projects/app")
+        XCTAssertEqual(snapshot.messages.first?.role, .assistant)
+        XCTAssertFalse(snapshot.truncated)
+
+        let sent = await handler.handle(command(
+            id: "cmd_pa_send",
+            command: .projectAgentSend(.init(projectRoot: "/projects/app", text: "  Run tests  "))
+        ))
+        XCTAssertEqual(sent.map(\.type), [RemoteEventType.acknowledgement, RemoteEventType.projectAgentSnapshot])
+        XCTAssertTrue(sent.allSatisfy { $0.replyTo == "cmd_pa_send" })
+        XCTAssertEqual(backend.projectAgentSends, [.init(projectRoot: "/projects/app", text: "Run tests")])
+    }
+
+    func testProjectAgentRejectsInvalidProjectAndOversizedUTF8Message() async {
+        let backend = FakeRemoteCommandBackend()
+        let handler = makeHandler(backend)
+
+        let unknown = await handler.handle(command(
+            id: "cmd_pa_unknown",
+            command: .projectAgentGet(.init(projectRoot: "/unknown"))
+        ))
+        XCTAssertEqual(errorCode(unknown), "project_not_registered")
+
+        let blank = await handler.handle(command(
+            id: "cmd_pa_blank",
+            command: .projectAgentSend(.init(projectRoot: "/projects/app", text: " \n "))
+        ))
+        XCTAssertEqual(errorCode(blank), "invalid_message")
+
+        let oversized = await handler.handle(command(
+            id: "cmd_pa_large",
+            command: .projectAgentSend(.init(
+                projectRoot: "/projects/app",
+                text: String(repeating: "🙂", count: RemoteCommandHandler.maximumProjectAgentMessageBytes / 4 + 1)
+            ))
+        ))
+        XCTAssertEqual(errorCode(oversized), "message_too_large")
+        XCTAssertTrue(backend.projectAgentSends.isEmpty)
+    }
+
+    func testProjectAgentBusyReturnsErrorWithoutSnapshot() async {
+        let backend = FakeRemoteCommandBackend()
+        backend.projects = [.init(rootPath: "/projects/app", name: "app")]
+        backend.projectAgentError = RemoteExecutionError(
+            code: "project_agent_not_ready", message: "Pa is busy.", retryable: true
+        )
+        let handler = makeHandler(backend)
+
+        let events = await handler.handle(command(
+            id: "cmd_pa_busy",
+            command: .projectAgentSend(.init(projectRoot: "/projects/app", text: "Fix this"))
+        ))
+        XCTAssertEqual(events.map(\.type), [RemoteEventType.error])
+        XCTAssertEqual(errorCode(events), "project_agent_not_ready")
+        XCTAssertEqual(events.first?.replyTo, "cmd_pa_busy")
+    }
+
     func testAnswerDecisionUsesStructuredValuesAndPropagatesNotPending() async {
         let backend = FakeRemoteCommandBackend()
         backend.sessions = [Self.session]
@@ -303,14 +375,37 @@ private final class FakeRemoteCommandBackend: RemoteCommandBackend {
     var createdCommands: [RemoteSessionCreateCommand] = []
     var sentCommands: [RemoteSessionSendMessageCommand] = []
     var decisionCommands: [RemoteSessionAnswerDecisionCommand] = []
+    var projectAgentRoots: [String] = []
+    var projectAgentSends: [RemoteProjectAgentSendCommand] = []
     var terminalInputs: [RemoteSessionTerminalInputCommand] = []
     var closedTerminals: [RemoteSessionTerminalCloseCommand] = []
     var createError: RemoteExecutionError?
     var sendError: RemoteExecutionError?
     var decisionError: RemoteExecutionError?
+    var projectAgentError: RemoteExecutionError?
 
     func currentSessions() -> [RemoteSessionDTO] { sessions }
     func currentProjects() -> [RemoteProjectDTO] { projects }
+
+    func projectAgentSnapshot(_ command: RemoteProjectAgentGetCommand) throws -> RemoteProjectAgentSnapshot {
+        guard projects.contains(where: { $0.rootPath == command.projectRoot }) else {
+            throw RemoteExecutionError(code: "project_not_registered",
+                                       message: "The requested project is not registered on this desktop.")
+        }
+        if let projectAgentError { throw projectAgentError }
+        projectAgentRoots.append(command.projectRoot)
+        return RemoteProjectAgentSnapshot(
+            projectRoot: command.projectRoot,
+            messages: [.init(id: "message_1", role: .assistant, text: "Ready")],
+            isReady: true, isResponding: false, status: "Ready", modelLabel: "provider/model"
+        )
+    }
+
+    func sendProjectAgentMessage(_ command: RemoteProjectAgentSendCommand) throws -> RemoteProjectAgentSnapshot {
+        if let projectAgentError { throw projectAgentError }
+        projectAgentSends.append(command)
+        return try projectAgentSnapshot(.init(projectRoot: command.projectRoot))
+    }
 
     func createSession(_ command: RemoteSessionCreateCommand) async throws -> String {
         guard projects.contains(where: { $0.rootPath == command.projectRoot }) else {

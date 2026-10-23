@@ -22,7 +22,7 @@
     "eas-build-pre-install": "npm run check:icon",
     "postinstall": "node scripts/patch-expo-modules-jsi.mjs && node scripts/build-terminal-document.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/conversation/richText.test.ts src/conversation/terminalConversation.test.ts src/demo/demoData.test.ts src/protocol/protocol.test.ts src/services/accountService.test.ts src/services/appleAuthorizationService.test.ts src/services/appleDeletionFallback.test.ts src/services/deviceCredentialService.test.ts src/services/feedbackService.test.ts src/services/identitySession.test.ts src/services/relayURL.test.ts src/services/remoteClient.test.ts src/state/reducer.test.ts"
+    "test": "node --experimental-strip-types --test src/conversation/richText.test.ts src/conversation/terminalConversation.test.ts src/demo/demoData.test.ts src/protocol/protocol.test.ts src/services/accountService.test.ts src/services/appleAuthorizationService.test.ts src/services/appleDeletionFallback.test.ts src/services/deviceCredentialService.test.ts src/services/feedbackService.test.ts src/services/identitySession.test.ts src/services/relayURL.test.ts src/services/remoteClient.test.ts src/state/reducer.test.ts src/state/selectors.test.ts"
   },
   "dependencies": {
     "@react-native-google-signin/google-signin": "^16.1.4",

@@ -158,6 +158,58 @@ struct CLIConfigURLAddResponse: Codable {
     var error: String? = nil
 }
 
+struct CLIProjectSessionRequest: Codable { var sourceSession: String }
+
+struct CLIProjectSessionInfo: Codable {
+    var name: String
+    var agent: String
+    var cwd: String
+    var state: String
+}
+
+struct CLIProjectSessionListResponse: Codable {
+    var ok: Bool
+    var projectRoot: String? = nil
+    var sessions: [CLIProjectSessionInfo] = []
+    var error: String? = nil
+}
+
+struct CLIProjectSessionStartRequest: Codable {
+    var sourceSession: String
+    var agent: String
+    var message: String
+}
+
+struct CLIProjectSessionSendRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+    var message: String
+}
+
+struct CLIProjectSessionChooseRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+    var option: Int
+}
+
+struct CLIProjectSessionTailRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+    var lines: Int
+}
+
+struct CLIProjectSessionRemoveRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+}
+
+struct CLIProjectSessionResponse: Codable {
+    var ok: Bool
+    var session: String? = nil
+    var content: String? = nil
+    var error: String? = nil
+}
+
 /// Exit codes (BROWSER.md §5.3): 0 ok · 1 pass refused (reason on stderr) ·
 /// 2 no target session · 3 pass not running. ArgumentParser uses EX_USAGE (64)
 /// for malformed commands and validation failures.

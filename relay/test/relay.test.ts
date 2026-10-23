@@ -4,10 +4,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   COMMAND_RETENTION_MS,
   PROTOCOL_VERSION,
+  type ProjectAgentSnapshotPayload,
   TERMINAL_COMMAND_RETENTION_MS,
   commandRetentionMs,
+  isMutatingCommand,
   parseIsoTimestamp,
 } from "../src/protocol";
+import { requiredCommandScope } from "../src/index";
 
 const TEST_TOKEN = "test-only-pass-relay-token";
 
@@ -138,6 +141,13 @@ function desktopEvent(
 }
 
 describe("Pass mobile relay", () => {
+  it("scopes Pa reads and writes and treats sends as mutations", () => {
+    expect(requiredCommandScope("project.agent.get")).toBe("sessions:read");
+    expect(requiredCommandScope("project.agent.send")).toBe("sessions:write");
+    expect(isMutatingCommand("project.agent.get")).toBe(false);
+    expect(isMutatingCommand("project.agent.send")).toBe(true);
+  });
+
   it("keeps high-frequency terminal command metadata for a shorter window", () => {
     expect(commandRetentionMs("session.sendMessage")).toBe(COMMAND_RETENTION_MS);
     expect(commandRetentionMs("session.terminal.input")).toBe(
@@ -264,6 +274,65 @@ describe("Pass mobile relay", () => {
       commands: [],
       latestSequence: 0,
     });
+  });
+
+  it("routes Pa snapshots only to the requesting device and never queues offline sends", async () => {
+    const desktop = await connect({ desktopId: "desk-pa", role: "desktop" });
+    const mobile = await connect({ desktopId: "desk-pa", role: "mobile", deviceId: "phone-pa" });
+    const observer = await connect({ desktopId: "desk-pa", role: "mobile", deviceId: "phone-pa-observer" });
+    await mobile.next("relay.ready");
+    await mobile.next("desktop.presence");
+    await observer.next("relay.ready");
+
+    const get = command("cmd-pa-get", "project.agent.get", { projectRoot: "/projects/app" });
+    mobile.send(get);
+    await expect(desktop.next("project.agent.get")).resolves.toEqual(get);
+    await mobile.next("relay.receipt");
+    const snapshotPayload = {
+      projectRoot: "/projects/app",
+      messages: [{ id: "message_1", role: "assistant", text: "Ready", truncated: false }],
+      truncated: true,
+      isReady: true,
+      isResponding: false,
+      status: "Ready",
+      modelLabel: "provider/model",
+    } satisfies ProjectAgentSnapshotPayload;
+    const snapshot = desktopEvent("evt-pa-snapshot", "project.agent.snapshot", snapshotPayload, "cmd-pa-get");
+    desktop.send(snapshot);
+    const received = await mobile.next("project.agent.snapshot");
+    expect(received).toEqual(snapshot);
+    expect(payloadOf(received).truncated).toBe(true);
+    await observer.expectNo("project.agent.snapshot");
+
+    const send = command("cmd-pa-send", "project.agent.send", {
+      projectRoot: "/projects/app", text: "Run tests",
+    });
+    mobile.send(send);
+    await expect(desktop.next("project.agent.send")).resolves.toEqual(send);
+    const receipt = await mobile.next("relay.receipt");
+    expect(payloadOf(receipt)).toMatchObject({ commandId: "cmd-pa-send", status: "forwarded" });
+    desktop.send(desktopEvent("evt-pa-ack", "ack", { commandType: "project.agent.send" }, "cmd-pa-send"));
+    await mobile.next("ack");
+
+    mobile.send(command("resume-pa", "relay.resume", { afterSequence: 0 }));
+    const resumed = await mobile.next("relay.resume.result");
+    expect(payloadOf(resumed).commands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ commandId: "cmd-pa-get", mutating: false, status: "completed" }),
+      expect.objectContaining({ commandId: "cmd-pa-send", mutating: true }),
+    ]));
+
+    desktop.close();
+    let desktopOnline = true;
+    for (let attempt = 0; attempt < 3 && desktopOnline; attempt += 1) {
+      desktopOnline = payloadOf(await mobile.next("desktop.presence")).desktopOnline === true;
+    }
+    expect(desktopOnline).toBe(false);
+    mobile.send(command("cmd-pa-offline", "project.agent.send", {
+      projectRoot: "/projects/app", text: "After disconnect",
+    }));
+    const error = await mobile.next("error");
+    expect(error.replyTo).toBe("cmd-pa-offline");
+    expect(payloadOf(error).code).toBe("desktop.offline");
   });
 
   it("forwards the original command and routes exact Swift events by replyTo", async () => {

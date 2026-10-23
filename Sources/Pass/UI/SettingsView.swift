@@ -20,6 +20,8 @@ struct SettingsView: View {
     @State private var extensionRepository = ""
     @State private var extensionSharingBusy = false
     @State private var extensionSharingMessage: String?
+    @State private var piConnectedProviders: [String] = []
+    @State private var piAccountError: String?
     @AppStorage("homeMode") private var homeModeRaw = HomeMode.stack.rawValue
     @AppStorage(SummonShortcutMode.storageKey) private var summonShortcutModeRaw = SummonShortcutMode.doubleCommand.rawValue
     @AppStorage(SessionStore.restoreDefaultsKey) private var restoreSessions = true
@@ -28,6 +30,7 @@ struct SettingsView: View {
     @AppStorage(RemoteGatewayPreferenceKey.enabled) private var remoteAccessEnabled = false
     @AppStorage(RemoteGatewayPreferenceKey.relayURL) private var remoteRelayURL = ""
     @AppStorage(RemoteGatewayPreferenceKey.authorizationToken) private var remoteAuthorizationToken = ""
+    @AppStorage(RemoteDesktopPreferenceKey.enabled) private var remoteDesktopSharingEnabled = false
     @AppStorage(ProjectCreationService.defaultParentDirectoryKey) private var newProjectParentDirectory = ""
 
     var body: some View {
@@ -59,6 +62,14 @@ struct SettingsView: View {
         .onDisappear {
             appModel.setSettingsPresented(false)
         }
+        .task(id: selectedSection) {
+            guard selectedSection == .agents else { return }
+            appModel.piUpdater.refreshVersion()
+            while !Task.isCancelled {
+                piConnectedProviders = PiAuthentication.usableProviders().sorted()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
         .sheet(isPresented: $showExtensionBuilder) {
             ExtensionBuilderView().environment(appModel)
         }
@@ -81,6 +92,7 @@ struct SettingsView: View {
         case .backup:
             backupSection
         case .agents:
+            piSection
             agentCommandsSection
         case .extensions:
             extensionsSection
@@ -186,16 +198,16 @@ struct SettingsView: View {
         Section("New projects") {
             HStack(spacing: 10) {
                 Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(PassFont.ui(size: 15, weight: .medium))
                     .foregroundStyle(.tint)
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Default location")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(PassFont.ui(size: 12, weight: .semibold))
                     Text(newProjectParentDirectory.isEmpty
                          ? "Choose where projects created with ⌘N should be saved"
                          : newProjectParentDirectory)
-                        .font(.system(size: 10))
+                        .font(PassFont.ui(size: 10))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.head)
@@ -211,7 +223,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Text("In the ⌘N menu, type a new name and choose Create. Pass makes an empty Git project here and starts the selected agent.")
+            Text("Use New project or ⌘N, type a name, and choose Create. Pass makes an empty Git project here and starts the selected agent.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -228,6 +240,58 @@ struct SettingsView: View {
                 }
             }
             Text("Bundles every registered project + settings into one .tar.gz you can move to another Mac. Build artifacts (node_modules, .build, …) are excluded. With optimize on, git repos that have a remote are stored as URL + commit instead of copied.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var piSection: some View {
+        Section("Pa · Pi") {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pi version")
+                        .font(PassFont.ui(size: 12, weight: .semibold))
+                    Text(appModel.piUpdater.version.map { "v\($0)" } ?? "Version unavailable")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    appModel.piUpdater.update {
+                        appModel.restartProjectAgentsAfterPiUpdate()
+                    }
+                } label: {
+                    if appModel.piUpdater.isUpdating {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Update Pi", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .disabled(appModel.piUpdater.isUpdating)
+            }
+            if let updateStatus = appModel.piUpdater.status {
+                Text(updateStatus)
+                    .font(.caption)
+                    .foregroundStyle(appModel.piUpdater.isUpdating ? .secondary : .primary)
+            }
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pi account")
+                        .font(PassFont.ui(size: 12, weight: .semibold))
+                    Text(piConnectedProviders.isEmpty
+                         ? "No model providers connected"
+                         : piConnectedProviders.joined(separator: ", "))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Connect account…") {
+                    piAccountError = appModel.miniTerminals.openPiLogin()
+                        ? nil : "Pi is not installed. Install Pi and reopen Pass."
+                }
+                .disabled(appModel.piUpdater.isUpdating)
+            }
+            if let piAccountError {
+                Text(piAccountError).font(.caption).foregroundStyle(.orange)
+            }
+            Text("Pi credentials are managed in Pi's own login terminal and shared by every Pa project.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -293,7 +357,7 @@ struct SettingsView: View {
             }
             ForEach(store?.bundledInstallable ?? [], id: \.self) { id in
                 HStack {
-                    Text("\(id) (bundled example)").font(.system(size: 12))
+                    Text("\(id) (bundled example)").font(PassFont.ui(size: 12))
                     Spacer()
                     Button("Install") { try? store?.installBundled(id: id) }
                         .controlSize(.small)
@@ -323,7 +387,7 @@ struct SettingsView: View {
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(entry.ok ? Color.secondary : .orange)
                             if let detail = entry.detail {
-                                Text(detail).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(2)
+                                Text(detail).font(PassFont.ui(size: 9)).foregroundStyle(.tertiary).lineLimit(2)
                             }
                         }
                     }
@@ -399,6 +463,7 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
     private var mobileAccessSection: some View {
         Section(appModel.remotePublicAccessAvailable ? "Remote access" : "Remote access · developer preview") {
             if appModel.remotePublicAccessAvailable {
@@ -426,7 +491,7 @@ struct SettingsView: View {
                                     Circle().fill(remoteControllerColor(connection.state))
                                         .frame(width: 6, height: 6)
                                     Text(connection.profile.desktopName)
-                                        .font(.system(size: 10, weight: .medium))
+                                        .font(PassFont.ui(size: 10, weight: .medium))
                                     Text("REMOTE")
                                         .font(.system(size: 8, weight: .bold, design: .monospaced))
                                         .foregroundStyle(.orange)
@@ -439,6 +504,11 @@ struct SettingsView: View {
                         appModel.refreshLinkedDesktops()
                     }
                     .disabled(remoteAccountBusy)
+                    if let webURL = RemotePublicConfiguration.loadRelayURL() {
+                        Button("Open remote desktop in browser", systemImage: "display") {
+                            NSWorkspace.shared.open(webURL)
+                        }
+                    }
                     Button("Create one-time pairing code", systemImage: "qrcode") {
                         appModel.createRemotePairing()
                     }
@@ -469,7 +539,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
-                Text("Macs signed in with the same account link automatically through device-scoped credentials. QR pairing remains available for companion devices. All secrets are stored in Keychain.")
+                Text("Macs signed in with the same account link automatically through device-scoped credentials. Projects stay on their own Mac, even when they share a name; the relay shares live session and project lists, not repository files. QR pairing remains available for companion devices. All secrets are stored in Keychain.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 Toggle("Enable outbound relay connection", isOn: $remoteAccessEnabled)
@@ -505,6 +575,38 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Text("The Mac only dials out; the local hook listener stays on 127.0.0.1. This development QR carries one reusable shared token. PASS_REMOTE_* environment values override these fields.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+
+        Section("Remote desktop") {
+            Toggle("Allow screen sharing requests", isOn: $remoteDesktopSharingEnabled)
+                .onChange(of: remoteDesktopSharingEnabled) { _, enabled in
+                    appModel.setRemoteDesktopSharingEnabled(enabled)
+                }
+            Text("A linked device can request this Mac's full display. You approve each request on this Mac and choose whether it may use the mouse and keyboard. Sharing turns off after 15 minutes.")
+                .font(.caption).foregroundStyle(.secondary)
+            LabeledContent("Status", value: appModel.remoteDesktopSessionStatus)
+            if let controllerID = appModel.remoteDesktopControllerID {
+                LabeledContent("Connected device") {
+                    Text(controllerID)
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                Button("Stop sharing", role: .destructive) {
+                    appModel.stopRemoteDesktopSharing()
+                }
+            }
+            if remoteDesktopSharingEnabled {
+                HStack {
+                    Button("Grant Screen Recording access") {
+                        appModel.requestRemoteDesktopScreenPermission()
+                    }
+                    Button("Grant Accessibility access") {
+                        appModel.requestRemoteDesktopControlPermission()
+                    }
+                }
+                Text("macOS permissions are required for screen capture and remote input. You may need to restart Pass after granting Screen Recording access.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -847,7 +949,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .home: return "Home layout and terminal theme"
         case .projects: return "Registered project folders"
         case .backup: return "Export project and settings bundle"
-        case .agents: return "Default launch commands"
+        case .agents: return "Pa account, Pi updates, and launch commands"
         case .extensions: return "Browse, publish, and manage extensions"
         case .mobile: return "Account, desktops, and device pairing"
         case .integrations: return "Hooks, CLI, and browser"
@@ -867,7 +969,7 @@ private struct SettingsSidebar: View {
                     selection = section
                 } label: {
                     Label(section.title, systemImage: section.systemImage)
-                        .font(.system(size: 13, weight: selection == section ? .semibold : .regular))
+                        .font(PassFont.ui(size: 13, weight: selection == section ? .semibold : .regular))
                         .foregroundStyle(selection == section ? Color.primary : .secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 10)
@@ -906,7 +1008,7 @@ private struct SettingsHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(section.title)
-                .font(.system(size: 22, weight: .semibold))
+                .font(PassFont.ui(size: 22, weight: .semibold))
             Text(section.subtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -943,10 +1045,10 @@ private struct TerminalThemePicker: View {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(theme.label)
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(PassFont.ui(size: 12, weight: .semibold))
                                     .foregroundStyle(.primary)
                                 Text(theme.detail)
-                                    .font(.system(size: 9))
+                                    .font(PassFont.ui(size: 9))
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
@@ -1013,7 +1115,7 @@ private struct AgentCommandRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(agent.glyph).frame(width: 16)
-            Text(agent.rawValue).font(.system(size: 12, weight: .medium)).frame(width: 56, alignment: .leading)
+            Text(agent.rawValue).font(PassFont.ui(size: 12, weight: .medium)).frame(width: 56, alignment: .leading)
             TextField(agent.defaultLaunchCommand ?? "command", text: $command)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 12, design: .monospaced))
@@ -1042,13 +1144,13 @@ private struct ExtensionRow: View {
                 .foregroundStyle(.secondary).frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(ext.manifest.name).font(.system(size: 12, weight: .medium))
+                    Text(ext.manifest.name).font(PassFont.ui(size: 12, weight: .medium))
                     if let v = ext.manifest.version {
-                        Text(v).font(.system(size: 10)).foregroundStyle(.tertiary)
+                        Text(v).font(PassFont.ui(size: 10)).foregroundStyle(.tertiary)
                     }
                 }
                 if let desc = ext.manifest.description, !desc.isEmpty {
-                    Text(desc).font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(desc).font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
                 }
                 if let perms = ext.manifest.permissions, !perms.isEmpty {
                     Text("permissions: " + perms.sorted().joined(separator: ", "))
@@ -1056,13 +1158,13 @@ private struct ExtensionRow: View {
                 }
                 if appModel.extensions?.wasDisabledAfterChange(ext.id) == true {
                     Text("⚠ Files changed since approval — review and enable again")
-                        .font(.system(size: 10)).foregroundStyle(.orange)
+                        .font(PassFont.ui(size: 10)).foregroundStyle(.orange)
                 }
                 ForEach(ext.problems, id: \.self) { p in
-                    Text("⚠ \(p)").font(.system(size: 10)).foregroundStyle(.orange)
+                    Text("⚠ \(p)").font(PassFont.ui(size: 10)).foregroundStyle(.orange)
                 }
                 if let sharingMessage {
-                    Text(sharingMessage).font(.system(size: 10))
+                    Text(sharingMessage).font(PassFont.ui(size: 10))
                         .foregroundStyle(sharingMessage.hasPrefix("Updated") ? Color.secondary : Color.orange)
                 }
             }
@@ -1160,21 +1262,21 @@ private struct ProjectDirectoryRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "folder.fill")
-                .font(.system(size: 15, weight: .medium))
+                .font(PassFont.ui(size: 15, weight: .medium))
                 .foregroundStyle(.tint)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(displayName)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(PassFont.ui(size: 12, weight: .semibold))
                     Text(projectCountLabel)
-                        .font(.system(size: 9, weight: .medium))
+                        .font(PassFont.ui(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(.secondary.opacity(0.12), in: Capsule())
                 }
-                Text(path).font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(path).font(PassFont.ui(size: 10)).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.head)
             }
             Spacer()

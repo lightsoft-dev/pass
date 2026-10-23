@@ -49,13 +49,13 @@ struct MirrorView: View {
             Image(systemName: "iphone.and.arrow.forward")
                 .foregroundStyle(.secondary)
             Text("Device")
-                .font(.system(size: 11, weight: .semibold))
+                .font(PassFont.ui(size: 11, weight: .semibold))
             if case .streaming(let device) = engine.state {
                 Text("· \(device.displayName)")
-                    .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(PassFont.ui(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                 if !device.supportsPointerInput {
                     Text("VIEW ONLY")
-                        .font(.system(size: 7, weight: .bold))
+                        .font(PassFont.ui(size: 7, weight: .bold))
                         .padding(.horizontal, 5).padding(.vertical, 2)
                         .background(.quaternary, in: Capsule())
                 }
@@ -74,7 +74,7 @@ struct MirrorView: View {
                 .buttonStyle(.plain).help("Refresh devices")
             } else {
                 Button("Devices") { engine.returnToPicker() }
-                    .buttonStyle(.plain).font(.system(size: 10))
+                    .buttonStyle(.plain).font(PassFont.ui(size: 10))
             }
             Button { engine.detach() } label: {
                 Image(systemName: "xmark")
@@ -96,13 +96,13 @@ struct MirrorView: View {
                                     Image(systemName: icon(for: device.transport))
                                         .frame(width: 19).foregroundStyle(.secondary)
                                     VStack(alignment: .leading, spacing: 1) {
-                                        Text(device.displayName).font(.system(size: 11, weight: .medium))
+                                        Text(device.displayName).font(PassFont.ui(size: 11, weight: .medium))
                                         Text(device.detailText).font(.system(size: 9, design: .monospaced))
                                             .foregroundStyle(.secondary).lineLimit(1)
                                     }
                                     Spacer()
                                     Text("\(device.platform.label) · \(device.transport.label)")
-                                        .font(.system(size: 8, weight: .semibold))
+                                        .font(PassFont.ui(size: 8, weight: .semibold))
                                         .padding(.horizontal, 6).padding(.vertical, 2)
                                         .background(.quaternary, in: Capsule())
                                 }
@@ -150,23 +150,23 @@ struct MirrorView: View {
                             .disabled(engine.isPairing || pairingAddress.isEmpty || pairingCode.isEmpty)
                         }
                         Text("Pairing and connection ports shown by Android are often different.")
-                            .font(.system(size: 9)).foregroundStyle(.secondary)
+                            .font(PassFont.ui(size: 9)).foregroundStyle(.secondary)
                     }
                     .padding(.top, 6)
                 }
-                .font(.system(size: 10, weight: .medium))
+                .font(PassFont.ui(size: 10, weight: .medium))
 
                 if let message = engine.connectionMessage {
-                    Text(message).font(.system(size: 9)).foregroundStyle(.green)
+                    Text(message).font(PassFont.ui(size: 9)).foregroundStyle(.green)
                 }
                 if let error = engine.listError, !error.isEmpty {
-                    Text(error).font(.system(size: 9)).foregroundStyle(.red).textSelection(.enabled)
+                    Text(error).font(PassFont.ui(size: 9)).foregroundStyle(.red).textSelection(.enabled)
                 }
 
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "lock.shield").foregroundStyle(.secondary)
                     Text("Video travels directly through ADB for Android or Apple's trusted USB capture path for iOS. Pass does not capture the Mac screen.")
-                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                        .font(PassFont.ui(size: 9)).foregroundStyle(.secondary)
                 }
             }
             .padding(11)
@@ -190,14 +190,14 @@ struct MirrorView: View {
                     VStack(spacing: 9) {
                         ProgressView().controlSize(.small).tint(.white)
                         Text("Starting \(device.displayName)…")
-                            .font(.system(size: 10)).foregroundStyle(.white.opacity(0.8))
+                            .font(PassFont.ui(size: 10)).foregroundStyle(.white.opacity(0.8))
                     }
                 }
                 if !isLaunching, engine.frame != nil, !device.supportsPointerInput {
                     VStack {
                         Spacer()
                         Text("Use the iPhone or iPad for input")
-                            .font(.system(size: 9, weight: .medium))
+                            .font(PassFont.ui(size: 9, weight: .medium))
                             .foregroundStyle(.white.opacity(0.75))
                             .padding(.horizontal, 8).padding(.vertical, 5)
                             .background(.black.opacity(0.55), in: Capsule())
@@ -236,8 +236,8 @@ struct MirrorView: View {
     private func failed(_ message: String) -> some View {
         VStack(spacing: 10) {
             Spacer()
-            Image(systemName: "exclamationmark.triangle").font(.system(size: 25)).foregroundStyle(.orange)
-            Text("Device mirror unavailable").font(.system(size: 12, weight: .medium))
+            Image(systemName: "exclamationmark.triangle").font(PassFont.ui(size: 25)).foregroundStyle(.orange)
+            Text("Device mirror unavailable").font(PassFont.ui(size: 12, weight: .medium))
             Text(message).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).textSelection(.enabled).padding(.horizontal, 12)
             Button("Back to devices") { engine.returnToPicker() }
@@ -247,15 +247,15 @@ struct MirrorView: View {
     }
 
     private func sectionTitle(_ title: String) -> some View {
-        Text(title.uppercased()).font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+        Text(title.uppercased()).font(PassFont.ui(size: 9, weight: .semibold)).foregroundStyle(.secondary)
     }
 
     private func notice(icon: String, title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: icon).foregroundStyle(.secondary).frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 10, weight: .semibold))
-                Text(detail).font(.system(size: 9)).foregroundStyle(.secondary)
+                Text(title).font(PassFont.ui(size: 10, weight: .semibold))
+                Text(detail).font(PassFont.ui(size: 9)).foregroundStyle(.secondary)
             }
         }
         .padding(9).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 7))

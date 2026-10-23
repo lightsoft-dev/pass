@@ -26,6 +26,7 @@ final class MiniTerminalManager {
     private let makeController: ControllerFactory
     private var activeKey: String?
     private var isPanelVisible = true
+    private var piLoginController: MiniTerminalWindowController?
 
     init() {
         makeController = { session, onClose in
@@ -38,7 +39,28 @@ final class MiniTerminalManager {
     }
 
     var isKey: Bool {
-        controllers.values.joined().contains { $0.controller.isKey }
+        piLoginController?.isKey == true || controllers.values.joined().contains { $0.controller.isKey }
+    }
+
+    /// Pi authentication is shared across projects, so its terminal stays visible even when
+    /// the main panel is hidden or a different project is selected.
+    @discardableResult
+    func openPiLogin() -> Bool {
+        if let piLoginController {
+            piLoginController.show()
+            return true
+        }
+        guard let pi = Shell.resolveViaLoginShell("pi") else { return false }
+        var session = Session(name: "pass-pi-login", projectRoot: NSHomeDirectory(),
+                              cwd: NSHomeDirectory(), agent: .pi, git: nil,
+                              lastActivity: Date(), isAttached: false)
+        session.customName = "Pi 계정 연결"
+        let controller = MiniTerminalWindowController(session: session, onClose: { [weak self] in
+            self?.piLoginController = nil
+        }, piExecutable: pi)
+        piLoginController = controller
+        controller.show()
+        return true
     }
 
     /// Reuse the latest shell; adding another window is an explicit, separate action.
@@ -100,6 +122,8 @@ final class MiniTerminalManager {
         let open = controllers.values.flatMap { $0.map(\.controller) }
         controllers.removeAll()
         open.forEach { $0.close() }
+        piLoginController?.close()
+        piLoginController = nil
     }
 }
 
@@ -112,6 +136,7 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
     private let terminalView: IMETerminalView
     private let window: MiniTerminalPanel
     private let onClose: () -> Void
+    private let piExecutable: String?
     private var themeObserver: (any NSObjectProtocol)?
     private var closed = false
     private var hasBeenPositioned = false
@@ -119,9 +144,10 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
 
     var isKey: Bool { window.isKeyWindow }
 
-    init(session: Session, onClose: @escaping () -> Void) {
+    init(session: Session, onClose: @escaping () -> Void, piExecutable: String? = nil) {
         self.session = session
         self.onClose = onClose
+        self.piExecutable = piExecutable
         IMETerminalView.installEventBridges()
         terminalView = IMETerminalView(frame: .zero)
         TerminalTheme.current.apply(to: terminalView)
@@ -132,7 +158,8 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
             backing: .buffered,
             defer: false
         )
-        window.title = "Mini Terminal — \(session.displayName)"
+        window.title = piExecutable == nil
+            ? "Mini Terminal — \(session.displayName)" : "Pi 계정 연결"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
@@ -151,7 +178,9 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
         window.delegate = self
         window.contentView = NSHostingView(rootView: MiniTerminalContent(
             session: session,
-            terminalView: terminalView
+            terminalView: terminalView,
+            isPiLogin: piExecutable != nil,
+            onLogin: { [weak self] in self?.run("/login") }
         ))
         themeObserver = NotificationCenter.default.addObserver(
             forName: .passTerminalThemeChanged,
@@ -222,14 +251,25 @@ private final class MiniTerminalWindowController: NSObject, NSWindowDelegate,
             : "/bin/zsh"
         var environment = Terminal.getEnvironmentVariables()
             .filter { !$0.hasPrefix("PATH=") && !$0.hasPrefix("PASS_PROJECT_ROOT=") }
+        let toolDirectory = piExecutable.map {
+            URL(fileURLWithPath: $0).deletingLastPathComponent().path + ":"
+        } ?? ""
         environment.append(
-            "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:\(NSHomeDirectory())/.local/bin"
+            "PATH=\(toolDirectory)/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:\(NSHomeDirectory())/.local/bin"
         )
         environment.append("PASS_PROJECT_ROOT=\(session.projectRoot)")
         environment.append("PASS_SESSION_NAME=\(session.name)")
+        let args: [String]
+        if let piExecutable {
+            let launch = "exec \(Shell.singleQuoted(piExecutable)) --no-extensions --no-skills "
+                + "--no-prompt-templates --no-context-files --no-session"
+            args = ["-l", "-c", launch]
+        } else {
+            args = ["-l"]
+        }
         terminalView.startProcess(
             executable: shell,
-            args: ["-l"],
+            args: args,
             environment: environment,
             execName: "-\(URL(fileURLWithPath: shell).lastPathComponent)",
             currentDirectory: session.cwd
@@ -309,6 +349,8 @@ private final class MiniTerminalPanel: NSPanel {
 private struct MiniTerminalContent: View {
     let session: Session
     let terminalView: LocalProcessTerminalView
+    var isPiLogin = false
+    var onLogin: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -318,16 +360,21 @@ private struct MiniTerminalContent: View {
                     .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(session.displayName)
-                        .font(.custom("New York", size: 12).weight(.semibold))
+                        .font(PassFont.ui(size: 12, weight: .semibold))
                         .lineLimit(1)
-                    Text(session.cwd)
+                    Text(isPiLogin ? "모델 서비스를 선택해 로그인하세요" : session.cwd)
                         .font(.custom("SF Mono", size: 9))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 Spacer()
-                Label("PROJECT SHELL", systemImage: "terminal.fill")
+                if isPiLogin {
+                    Button("로그인 시작") { onLogin?() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+                Label(isPiLogin ? "PI LOGIN" : "PROJECT SHELL", systemImage: "terminal.fill")
                     .font(.custom("SF Mono", size: 8).weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
@@ -381,6 +428,6 @@ struct MiniTerminalButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .font(.system(size: 11))
+        .font(PassFont.ui(size: 11))
     }
 }

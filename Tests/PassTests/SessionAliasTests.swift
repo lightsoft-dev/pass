@@ -20,6 +20,16 @@ final class SessionAliasTests: XCTestCase {
         XCTAssertEqual(s.displayName, "x · main")
         s.customName = "결제 서버"
         XCTAssertEqual(s.displayName, "결제 서버 · main")
+        XCTAssertEqual(s.groupedDisplayName, "결제 서버 · main")
+    }
+
+    func testGroupedNameUsesBranchWithoutRepeatingProject() {
+        let s = Session(name: "pass-x", projectRoot: "/tmp/x", cwd: "/tmp/x", agent: .claude,
+                        git: GitIdentity(root: "/tmp/x", branch: "main", detachedSha: nil,
+                                         isLinkedWorktree: false, mainRepoRoot: nil, worktreeDirName: nil),
+                        lastActivity: Date(), isAttached: false)
+        XCTAssertEqual(s.displayName, "x · main")
+        XCTAssertEqual(s.groupedDisplayName, "main")
     }
 
     func testCustomNameKeepsWorktreeSuffix() {

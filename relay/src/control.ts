@@ -34,6 +34,13 @@ const MOBILE_SCOPES = [
   "projects:read",
   "decisions:answer",
 ] as const;
+// Screen access is issued only to a controller authenticated as the desktop owner.
+// QR-paired mobile credentials retain MOBILE_SCOPES without these permissions.
+const CONTROLLER_SCOPES = [
+  ...MOBILE_SCOPES,
+  "screen:view",
+  "screen:control",
+] as const;
 
 type ControlEnv = Env & {
   DEVICE_CREDENTIAL_PEPPER?: string;
@@ -758,7 +765,7 @@ async function handleAuthorizeOwnedDesktop(
   const now = Date.now();
   const deviceId = `device_${compactUUID()}`;
   const credentials = await createCredentialPair(pepper, now);
-  const scopesJSON = JSON.stringify(MOBILE_SCOPES);
+  const scopesJSON = JSON.stringify(CONTROLLER_SCOPES);
   await env.CONTROL_DB.batch([
     env.CONTROL_DB.prepare(
       "INSERT INTO devices (id, account_id, name, platform, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -796,7 +803,7 @@ async function handleAuthorizeOwnedDesktop(
   return apiResponse({
     device: { id: deviceId, name: deviceName, platform },
     desktop: { id: desktop.id, name: desktop.name },
-    scopes: MOBILE_SCOPES,
+    scopes: CONTROLLER_SCOPES,
     credentials: credentialResponse(credentials),
     relayUrl: publicRelayURL(request),
   }, 201);

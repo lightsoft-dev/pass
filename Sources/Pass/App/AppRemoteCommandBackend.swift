@@ -19,6 +19,51 @@ final class AppRemoteCommandBackend: RemoteCommandBackend {
         return projects.projects.map(RemoteProjectDTO.init)
     }
 
+    func projectAgentSnapshot(_ command: RemoteProjectAgentGetCommand) throws -> RemoteProjectAgentSnapshot {
+        let conversation = try projectAgent(for: command.projectRoot)
+        conversation.start()
+        return Self.snapshot(for: conversation)
+    }
+
+    func sendProjectAgentMessage(_ command: RemoteProjectAgentSendCommand) throws -> RemoteProjectAgentSnapshot {
+        let conversation = try projectAgent(for: command.projectRoot)
+        conversation.start()
+        guard conversation.canSendMessage else {
+            throw RemoteExecutionError(code: "project_agent_not_ready",
+                                       message: "Pa is still starting. Try again shortly.", retryable: true)
+        }
+        guard conversation.send(command.text) else {
+            throw RemoteExecutionError(code: "project_agent_send_failed",
+                                       message: "Pa could not accept the message.", retryable: true)
+        }
+        return Self.snapshot(for: conversation)
+    }
+
+    private func projectAgent(for root: String) throws -> ProjectAgentConversation {
+        guard let appModel, appModel.isReady, let projects = appModel.projects else {
+            throw RemoteExecutionError(code: "desktop_not_ready",
+                                       message: "The desktop is still starting.", retryable: true)
+        }
+        guard projects.projects.contains(where: { $0.rootPath == root }) else {
+            throw RemoteExecutionError(code: "project_not_registered",
+                                       message: "The requested project is not registered on this desktop.")
+        }
+        return appModel.projectAgentConversation(for: root)
+    }
+
+    private static func snapshot(for conversation: ProjectAgentConversation) -> RemoteProjectAgentSnapshot {
+        RemoteProjectAgentSnapshot(
+            projectRoot: conversation.projectRoot,
+            messages: conversation.messages.suffix(RemoteWireLimits.maximumProjectAgentMessages)
+                .map(RemoteProjectAgentMessage.init),
+            isReady: conversation.isReady,
+            isResponding: conversation.isResponding,
+            status: conversation.status,
+            modelLabel: conversation.modelLabel,
+            truncated: conversation.messages.count > RemoteWireLimits.maximumProjectAgentMessages
+        )
+    }
+
     func createSession(_ command: RemoteSessionCreateCommand) async throws -> String {
         guard let appModel, appModel.isReady,
               let sessions = appModel.sessions,

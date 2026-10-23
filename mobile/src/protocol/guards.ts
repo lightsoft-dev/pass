@@ -38,6 +38,7 @@ const SERVER_EVENT_TYPES = new Set<ServerEventType>([
   "session.message.updated",
   "session.message.completed",
   "session.terminal.snapshot",
+  "project.agent.snapshot",
 ]);
 
 const RECEIPT_STATUSES = new Set([
@@ -153,7 +154,8 @@ export function isRemoteSession(value: unknown): value is RemoteSession {
     isTimestamp(value.lastActivity) &&
     typeof value.isAttached === "boolean" &&
     typeof value.unacknowledged === "boolean" &&
-    typeof value.launching === "boolean"
+    typeof value.launching === "boolean" &&
+    (value.isProjectAgent === undefined || typeof value.isProjectAgent === "boolean")
   );
 }
 
@@ -259,6 +261,26 @@ function validPayload(type: ServerEventType, payload: unknown): boolean {
         isNonNegativeInteger(payload.cursorY) &&
         payload.cursorY < payload.rows &&
         typeof payload.truncated === "boolean"
+      );
+    case "project.agent.snapshot":
+      return (
+        isString(payload.projectRoot, 4_096) &&
+        Array.isArray(payload.messages) &&
+        payload.messages.length <= 64 &&
+        payload.messages.every((message: unknown) =>
+          isRecord(message) &&
+          isString(message.id, 128) &&
+          ["user", "assistant", "activity", "notice", "error"].includes(String(message.role)) &&
+          typeof message.text === "string" &&
+          utf8ByteLength(message.text) <= 8 * 1_024 &&
+          typeof message.truncated === "boolean"
+        ) &&
+        typeof payload.truncated === "boolean" &&
+        typeof payload.isReady === "boolean" &&
+        typeof payload.isResponding === "boolean" &&
+        typeof payload.status === "string" &&
+        payload.status.length <= 4_096 &&
+        isString(payload.modelLabel, 500)
       );
   }
 }

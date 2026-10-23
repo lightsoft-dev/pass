@@ -128,6 +128,58 @@ struct CLIConfigURLAddResponse: Codable {
     var error: String? = nil
 }
 
+struct CLIProjectSessionRequest: Codable { var sourceSession: String }
+
+struct CLIProjectSessionInfo: Codable {
+    var name: String
+    var agent: String
+    var cwd: String
+    var state: String
+}
+
+struct CLIProjectSessionListResponse: Codable {
+    var ok: Bool
+    var projectRoot: String? = nil
+    var sessions: [CLIProjectSessionInfo] = []
+    var error: String? = nil
+}
+
+struct CLIProjectSessionStartRequest: Codable {
+    var sourceSession: String
+    var agent: String
+    var message: String
+}
+
+struct CLIProjectSessionSendRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+    var message: String
+}
+
+struct CLIProjectSessionChooseRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+    var option: Int
+}
+
+struct CLIProjectSessionTailRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+    var lines: Int
+}
+
+struct CLIProjectSessionRemoveRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+}
+
+struct CLIProjectSessionResponse: Codable {
+    var ok: Bool
+    var session: String? = nil
+    var content: String? = nil
+    var error: String? = nil
+}
+
 /// Serves passcli: opens/closes/lists embedded-browser pages plus observation and interaction
 /// verbs. Always answers 200 + `{ok,…}` JSON — errors ride in the body so the
 /// CLI can print them verbatim. Loopback-only, same trust posture as /hook/* and /share/*:
@@ -135,6 +187,153 @@ struct CLIConfigURLAddResponse: Codable {
 /// privilege (BROWSER.md §6).
 @MainActor
 enum CLIAPI {
+    // MARK: project agent worker control
+
+    static func projectSessions(_ appModel: AppModel, body: Data) -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes,
+              let request = try? JSONDecoder().decode(CLIProjectSessionRequest.self, from: body),
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession) else {
+            return encode(CLIProjectSessionListResponse(ok: false, error: "project agent session required"))
+        }
+        let sessions = (appModel.sessions?.sessions ?? [])
+            .filter { $0.projectRoot == projectRoot && !$0.isProjectAgent }
+            .map { session in
+                let state: String
+                switch session.attention {
+                case .working: state = "working"
+                case .idle: state = "idle"
+                case .pending(let attention): state = attention.kind.rawValue
+                }
+                return CLIProjectSessionInfo(name: session.name, agent: session.agent.rawValue,
+                                             cwd: session.cwd, state: state)
+            }
+        return encode(CLIProjectSessionListResponse(ok: true, projectRoot: projectRoot,
+                                                    sessions: sessions))
+    }
+
+    static func startProjectSession(_ appModel: AppModel, body: Data) async -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes,
+              let request = try? JSONDecoder().decode(CLIProjectSessionStartRequest.self, from: body),
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession) else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "project agent session required"))
+        }
+        guard let agent = AgentKind(rawValue: request.agent), AgentKind.launchable.contains(agent),
+              request.message.utf8.count <= 16_384 else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "invalid agent or message"))
+        }
+        guard let store = appModel.sessions else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "sessions unavailable"))
+        }
+        let name = await store.createSession(projectDir: projectRoot, agent: agent,
+                                             initialPrompt: request.message)
+        guard await TmuxClient.shared.hasSession(name) else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "worker session could not start"))
+        }
+        if !request.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            appModel.workerProgressMonitor?.track(name, projectRoot: projectRoot)
+        }
+        return encode(CLIProjectSessionResponse(ok: true, session: name))
+    }
+
+    static func sendProjectSession(_ appModel: AppModel, body: Data) async -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes,
+              let request = try? JSONDecoder().decode(CLIProjectSessionSendRequest.self, from: body),
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession),
+              let target = projectWorker(appModel, request.targetSession, root: projectRoot),
+              !request.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              request.message.utf8.count <= 16_384 else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "invalid project worker or message"))
+        }
+        if case .pending(let attention) = target.attention, attention.kind == .decision {
+            return encode(CLIProjectSessionResponse(ok: false,
+                error: "worker needs a permission decision; ask the user and use session choose if numbered options are visible"))
+        }
+        if case .pending(let attention) = target.attention, attention.kind == .input {
+            let pane = await TmuxClient.shared.capturePane(target.name, colors: false)
+            if !DecisionParser.parse(pane).isEmpty {
+                return encode(CLIProjectSessionResponse(ok: false,
+                    error: "worker shows numbered choices; ask the user and use session choose"))
+            }
+        }
+        let result = await appModel.reply(to: target.name, text: request.message)
+        switch result {
+        case .delivered:
+            appModel.workerProgressMonitor?.track(target.name, projectRoot: projectRoot)
+            return encode(CLIProjectSessionResponse(ok: true, session: target.name))
+        case .refusedShell:
+            return encode(CLIProjectSessionResponse(ok: false, error: "worker agent is not running"))
+        case .error(let message):
+            return encode(CLIProjectSessionResponse(ok: false, error: message))
+        }
+    }
+
+    static func chooseProjectSession(_ appModel: AppModel, body: Data) async -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes,
+              let request = try? JSONDecoder().decode(CLIProjectSessionChooseRequest.self, from: body),
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession),
+              let target = projectWorker(appModel, request.targetSession, root: projectRoot),
+              (1...20).contains(request.option) else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "invalid project worker or option"))
+        }
+        guard case .pending(let attention) = target.attention,
+              attention.kind == .decision || attention.kind == .input else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "worker is not waiting for a choice"))
+        }
+        let result = await ReplyInjector.shared.pick(target.name, agent: target.agent, option: request.option)
+        switch result {
+        case .delivered:
+            appModel.sessions?.acknowledge(target.name)
+            appModel.sessions?.applyAttention(name: target.name, .working)
+            appModel.workerProgressMonitor?.track(target.name, projectRoot: projectRoot)
+            return encode(CLIProjectSessionResponse(ok: true, session: target.name))
+        case .refusedShell:
+            return encode(CLIProjectSessionResponse(ok: false, error: "worker agent is not running"))
+        case .error(let message):
+            return encode(CLIProjectSessionResponse(ok: false, error: message))
+        }
+    }
+
+    static func tailProjectSession(_ appModel: AppModel, body: Data) async -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes,
+              let request = try? JSONDecoder().decode(CLIProjectSessionTailRequest.self, from: body),
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession),
+              let target = projectWorker(appModel, request.targetSession, root: projectRoot),
+              (1...200).contains(request.lines) else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "invalid project worker or line count"))
+        }
+        let content = await TmuxClient.shared.capturePaneHistory(target.name, lines: request.lines)
+        return encode(CLIProjectSessionResponse(ok: true, session: target.name,
+                                                content: String(content.suffix(100_000))))
+    }
+
+    static func removeProjectSession(_ appModel: AppModel, body: Data) async -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes,
+              let request = try? JSONDecoder().decode(CLIProjectSessionRemoveRequest.self, from: body),
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession),
+              let target = projectWorker(appModel, request.targetSession, root: projectRoot),
+              let store = appModel.sessions else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "invalid project worker"))
+        }
+        await store.kill(target.name)
+        guard !(await TmuxClient.shared.hasSession(target.name)) else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "worker session could not be removed"))
+        }
+        appModel.workerProgressMonitor?.stop(target.name)
+        return encode(CLIProjectSessionResponse(ok: true, session: target.name))
+    }
+
+    private static func projectAgentRoot(_ appModel: AppModel, _ name: String) -> String? {
+        appModel.projects?.projects.first {
+            ProjectAgentIdentity.sessionName(for: $0.rootPath) == name
+        }?.rootPath
+    }
+
+    private static func projectWorker(_ appModel: AppModel, _ name: String, root: String) -> Session? {
+        guard let session = appModel.sessions?.session(named: name),
+              session.projectRoot == root, !session.isProjectAgent else { return nil }
+        return session
+    }
+
     // MARK: browser open / close / tabs
 
     static func open(_ appModel: AppModel, body: Data) async -> Data {

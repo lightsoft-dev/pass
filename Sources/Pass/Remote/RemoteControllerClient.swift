@@ -53,6 +53,27 @@ final class RemoteControllerConnection: Identifiable {
 
     func refresh() { send(.sessionList); send(.projectList) }
 
+    /// Project paths belong to the selected host. Never resolve one against this Mac's store:
+    /// two desktops may register the same project name at different paths.
+    @discardableResult
+    func createSession(projectRoot: String, agent: RemoteAgent) -> Bool {
+        guard state == .online, socket != nil else {
+            lastCommandError = "\(profile.desktopName) is offline."
+            return false
+        }
+        guard capabilities.contains(.sessionsWrite) else {
+            lastCommandError = "\(profile.desktopName) cannot start remote sessions."
+            return false
+        }
+        guard projects.contains(where: { $0.rootPath == projectRoot }) else {
+            lastCommandError = "The project is no longer available on \(profile.desktopName)."
+            return false
+        }
+        lastCommandError = nil
+        send(.sessionCreate(.init(projectRoot: projectRoot, agent: agent)))
+        return true
+    }
+
     func sendMessage(session: String, text: String) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         send(.sessionSendMessage(.init(session: session, text: text)))
@@ -192,7 +213,7 @@ final class RemoteControllerConnection: Identifiable {
             send(.sessionList)
         case .error(let failure):
             lastCommandError = failure.message
-        case .unsupported:
+        case .projectAgentSnapshot, .unsupported:
             break
         }
     }
