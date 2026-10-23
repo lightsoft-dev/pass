@@ -108,6 +108,48 @@ final class ReplyInjectorTests: XCTestCase {
         XCTAssertEqual(result, .error("tmux could not submit the decision"))
         XCTAssertEqual(sentKeys, [["3"]])
     }
+
+    func testTextRefusesVisiblePermissionPromptWithoutPasting() async {
+        let pane = "Do you want to run this command?\n❯ 1. Yes\n  2. Always allow\n  3. No\nEsc to cancel"
+        let tmux = FakeReplyInjectorTmux(states: [(false, "claude")], pane: pane)
+        let injector = ReplyInjector(tmux: tmux)
+
+        let result = await injector.sendText("pass-app", agent: .claude, text: "yes")
+        let pasteCount = await tmux.pasteCount
+        let sentKeys = await tmux.sentKeys
+
+        XCTAssertEqual(result, .error("permission prompt needs a decision, not a text message"))
+        XCTAssertEqual(pasteCount, 0)
+        XCTAssertEqual(sentKeys, [])
+    }
+
+    func testTextRechecksPermissionPromptAfterLeavingCopyMode() async {
+        let pane = "Do you want to run this command?\n❯ 1. Yes\n  2. Always allow\n  3. No\nEsc to cancel"
+        let tmux = FakeReplyInjectorTmux(
+            states: [(true, "claude"), (false, "claude")], pane: pane
+        )
+        let injector = ReplyInjector(tmux: tmux)
+
+        let result = await injector.sendText("pass-app", agent: .claude, text: "yes")
+        let cancelCount = await tmux.cancelCount
+        let pasteCount = await tmux.pasteCount
+
+        XCTAssertEqual(result, .error("permission prompt needs a decision, not a text message"))
+        XCTAssertEqual(cancelCount, 1)
+        XCTAssertEqual(pasteCount, 0)
+    }
+
+    func testPickRejectsChoiceMissingFromVisiblePrompt() async {
+        let pane = "Which option?\n❯ 1. Keep current\n  2. Change it"
+        let tmux = FakeReplyInjectorTmux(states: [(false, "claude")], pane: pane)
+        let injector = ReplyInjector(tmux: tmux)
+
+        let result = await injector.pick("pass-app", agent: .claude, option: 3)
+        let sentKeys = await tmux.sentKeys
+
+        XCTAssertEqual(result, .error("selected option is no longer visible"))
+        XCTAssertEqual(sentKeys, [])
+    }
 }
 
 private actor FakeReplyInjectorTmux: ReplyInjectorTmux {

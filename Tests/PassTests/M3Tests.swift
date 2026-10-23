@@ -190,4 +190,16 @@ final class ProjectAgentNotificationTests: XCTestCase {
         model.markProjectAgentNotificationSent(request.id, for: "/repos/project")
         XCTAssertNil(model.pendingProjectAgentNotification(for: "/repos/project"))
     }
+
+    @MainActor func testAutomaticWorkerAttentionAsksPaToInspectBeforeActing() {
+        let request = ProjectAgentNotificationRequest(
+            id: "worker:decision", sessionName: "worker", kind: "decision",
+            title: "Permission needed", summary: "Allow access?", automatic: true
+        )
+
+        XCTAssertTrue(request.prompt.contains("session list --json"))
+        XCTAssertTrue(request.prompt.contains("session tail"))
+        XCTAssertTrue(request.prompt.contains("권한 승인"))
+        XCTAssertTrue(request.prompt.contains("worker"))
+    }
 }

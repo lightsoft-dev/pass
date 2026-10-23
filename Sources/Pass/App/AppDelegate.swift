@@ -210,6 +210,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 case .input:    body = att.preview
                 case .finished: body = att.preview
                 }
+                if (att.kind == .decision || att.kind == .input),
+                   let projectRoot, !projectRoot.isEmpty,
+                   appModel.sessions?.session(named: name)?.isProjectAgent == false {
+                    appModel.enqueueProjectAgentNotification(
+                        ProjectAgentNotificationRequest(
+                            id: "\(name):\(att.kind.rawValue)", sessionName: name,
+                            kind: att.kind.rawValue, title: display,
+                            summary: String(att.preview.prefix(1_500)), automatic: true
+                        ), for: projectRoot
+                    )
+                }
                 Task {
                     await notifications.notify(
                         session: name, projectRoot: projectRoot, kind: att.kind.rawValue,
@@ -246,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 projectSessions: { body in await MainActor.run { CLIAPI.projectSessions(appModel, body: body) } },
                 startProjectSession: { body in await CLIAPI.startProjectSession(appModel, body: body) },
                 sendProjectSession: { body in await CLIAPI.sendProjectSession(appModel, body: body) },
+                chooseProjectSession: { body in await CLIAPI.chooseProjectSession(appModel, body: body) },
                 tailProjectSession: { body in await CLIAPI.tailProjectSession(appModel, body: body) },
                 removeProjectSession: { body in await CLIAPI.removeProjectSession(appModel, body: body) },
                 open: { body in await CLIAPI.open(appModel, body: body) },

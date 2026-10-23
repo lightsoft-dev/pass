@@ -156,6 +156,12 @@ struct CLIProjectSessionSendRequest: Codable {
     var message: String
 }
 
+struct CLIProjectSessionChooseRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+    var option: Int
+}
+
 struct CLIProjectSessionTailRequest: Codable {
     var sourceSession: String
     var targetSession: String
@@ -235,9 +241,45 @@ enum CLIAPI {
               request.message.utf8.count <= 16_384 else {
             return encode(CLIProjectSessionResponse(ok: false, error: "invalid project worker or message"))
         }
+        if case .pending(let attention) = target.attention, attention.kind == .decision {
+            return encode(CLIProjectSessionResponse(ok: false,
+                error: "worker needs a permission decision; ask the user and use session choose if numbered options are visible"))
+        }
+        if case .pending(let attention) = target.attention, attention.kind == .input {
+            let pane = await TmuxClient.shared.capturePane(target.name, colors: false)
+            if !DecisionParser.parse(pane).isEmpty {
+                return encode(CLIProjectSessionResponse(ok: false,
+                    error: "worker shows numbered choices; ask the user and use session choose"))
+            }
+        }
         let result = await appModel.reply(to: target.name, text: request.message)
         switch result {
         case .delivered: return encode(CLIProjectSessionResponse(ok: true, session: target.name))
+        case .refusedShell:
+            return encode(CLIProjectSessionResponse(ok: false, error: "worker agent is not running"))
+        case .error(let message):
+            return encode(CLIProjectSessionResponse(ok: false, error: message))
+        }
+    }
+
+    static func chooseProjectSession(_ appModel: AppModel, body: Data) async -> Data {
+        guard body.count <= PassConfig.cliMaxBodyBytes,
+              let request = try? JSONDecoder().decode(CLIProjectSessionChooseRequest.self, from: body),
+              let projectRoot = projectAgentRoot(appModel, request.sourceSession),
+              let target = projectWorker(appModel, request.targetSession, root: projectRoot),
+              (1...20).contains(request.option) else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "invalid project worker or option"))
+        }
+        guard case .pending(let attention) = target.attention,
+              attention.kind == .decision || attention.kind == .input else {
+            return encode(CLIProjectSessionResponse(ok: false, error: "worker is not waiting for a choice"))
+        }
+        let result = await ReplyInjector.shared.pick(target.name, agent: target.agent, option: request.option)
+        switch result {
+        case .delivered:
+            appModel.sessions?.acknowledge(target.name)
+            appModel.sessions?.applyAttention(name: target.name, .working)
+            return encode(CLIProjectSessionResponse(ok: true, session: target.name))
         case .refusedShell:
             return encode(CLIProjectSessionResponse(ok: false, error: "worker agent is not running"))
         case .error(let message):

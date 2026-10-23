@@ -22,6 +22,7 @@ struct CLIHandlers: Sendable {
     var projectSessions: @Sendable (Data) async -> Data
     var startProjectSession: @Sendable (Data) async -> Data
     var sendProjectSession: @Sendable (Data) async -> Data
+    var chooseProjectSession: @Sendable (Data) async -> Data
     var tailProjectSession: @Sendable (Data) async -> Data
     var removeProjectSession: @Sendable (Data) async -> Data
     var open: @Sendable (Data) async -> Data
@@ -115,6 +116,10 @@ actor HookServer {
             await server.appendRoute("POST /cli/session/send") { request in
                 let body = await cliJSONBody(request)
                 return HTTPResponse(statusCode: .ok, headers: json, body: await cli.sendProjectSession(body))
+            }
+            await server.appendRoute("POST /cli/session/choose") { request in
+                let body = await cliJSONBody(request)
+                return HTTPResponse(statusCode: .ok, headers: json, body: await cli.chooseProjectSession(body))
             }
             await server.appendRoute("POST /cli/session/tail") { request in
                 let body = await cliJSONBody(request)
