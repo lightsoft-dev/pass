@@ -80,12 +80,7 @@ struct ProjectAgentView: View {
                         self.pendingLoginMessage = nil
                         if message == pendingLoginMessage { sendMessage() }
                     }
-                    if let conversation, conversation.canSendMessage,
-                       let request = appModel.pendingProjectAgentNotification(for: projectRoot) {
-                        let sent = conversation.send(request.prompt)
-                        appModel.markProjectAgentNotificationSent(request.id, for: projectRoot)
-                        if !sent { status = "알림 내용을 Pa에게 전달하지 못했습니다." }
-                    }
+                    appModel.processPendingProjectAgentNotifications(for: projectRoot)
                 }
                 try? await Task.sleep(for: .seconds(1))
             }
@@ -535,6 +530,11 @@ private struct ProjectAgentChatView: View {
             }
         case .activity:
             ProjectAgentActivityRow(entry: entry)
+        case .notice:
+            Label(entry.text, systemImage: "bell.badge")
+                .font(PassFont.ui(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         case .error:
             Label(entry.text, systemImage: "exclamationmark.circle")
                 .font(PassFont.ui(size: 11))

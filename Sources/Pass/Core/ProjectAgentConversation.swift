@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 struct ProjectAgentMessage: Identifiable {
-    enum Role: Equatable { case user, assistant, activity, error }
+    enum Role: Equatable { case user, assistant, activity, notice, error }
     let id = UUID()
     let role: Role
     var text: String
@@ -156,7 +156,7 @@ final class ProjectAgentConversation {
     }
 
     @discardableResult
-    func send(_ text: String, files: [URL] = []) -> Bool {
+    func send(_ text: String, files: [URL] = [], visibleText: String? = nil) -> Bool {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSendMessage, !body.isEmpty || !files.isEmpty else { return false }
         let storedFiles: [URL]
@@ -174,7 +174,8 @@ final class ProjectAgentConversation {
             return false
         }
         let prompt = ProjectAgentAttachments.prompt(body, files: storedFiles)
-        let entry = ProjectAgentMessage(role: .user, text: body.isEmpty ? "첨부 파일을 확인해 주세요." : body,
+        let entry = ProjectAgentMessage(role: visibleText == nil ? .user : .notice,
+                                        text: visibleText ?? (body.isEmpty ? "첨부 파일을 확인해 주세요." : body),
                                         attachments: storedFiles)
         messages.append(entry)
         isResponding = true

@@ -88,10 +88,14 @@ actor ReplyInjector {
     /// Returns `.refusedShell` when the agent isn't running (safety).
     func sendText(_ session: String, agent: AgentKind, text: String, allowShell: Bool = false) async -> Result {
         let profile = InteractionProfile.for(agent)
-        let kind = await classify(session, agent: agent)
+        var kind = await classify(session, agent: agent)
+        if kind == .copyMode {
+            await tmux.cancelMode(session)
+            kind = await classify(session, agent: agent)
+        }
         switch kind {
-        case .copyMode:
-            await tmux.cancelMode(session) // then fall through by re-injecting as agentReady
+        case .permissionDialog:
+            return .error("permission prompt needs a decision, not a text message")
         case .shell where !allowShell:
             return .refusedShell
         default:
@@ -148,7 +152,17 @@ actor ReplyInjector {
     /// Pick a numbered option from a menu (permission dialog / AskUserQuestion). A bare digit
     /// selects+confirms the highlighted-by-number choice (FINDINGS.md §2). Refuses a bare shell.
     func pick(_ session: String, agent: AgentKind, option: Int) async -> Result {
-        guard await classify(session, agent: agent) != .shell else { return .refusedShell }
+        var kind = await classify(session, agent: agent)
+        if kind == .copyMode {
+            await tmux.cancelMode(session)
+            kind = await classify(session, agent: agent)
+        }
+        guard kind != .shell else { return .refusedShell }
+        guard kind != .copyMode else { return .error("worker is in copy mode") }
+        let options = DecisionParser.parse(await tmux.capturePane(session, colors: false))
+        guard options.contains(where: { $0.number == option }) else {
+            return .error("selected option is no longer visible")
+        }
         guard await tmux.sendKeys(session, [String(option)]) else {
             return .error("tmux could not submit the selected option")
         }

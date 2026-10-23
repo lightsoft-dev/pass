@@ -186,6 +186,12 @@ struct CLIProjectSessionSendRequest: Codable {
     var message: String
 }
 
+struct CLIProjectSessionChooseRequest: Codable {
+    var sourceSession: String
+    var targetSession: String
+    var option: Int
+}
+
 struct CLIProjectSessionTailRequest: Codable {
     var sourceSession: String
     var targetSession: String
