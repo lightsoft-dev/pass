@@ -210,16 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 case .input:    body = att.preview
                 case .finished: body = att.preview
                 }
-                if (att.kind == .decision || att.kind == .input),
-                   let projectRoot, !projectRoot.isEmpty,
-                   appModel.sessions?.session(named: name)?.isProjectAgent == false {
-                    appModel.enqueueProjectAgentNotification(
-                        ProjectAgentNotificationRequest(
-                            id: "\(name):\(att.kind.rawValue)", sessionName: name,
-                            kind: att.kind.rawValue, title: display,
-                            summary: String(att.preview.prefix(1_500)), automatic: true
-                        ), for: projectRoot
-                    )
+                if let session = appModel.sessions?.session(named: name),
+                   let request = ProjectAgentNotificationRequest.fromWorkerAttention(att, session: session) {
+                    appModel.enqueueProjectAgentNotification(request, for: session.projectRoot)
                 }
                 Task {
                     await notifications.notify(

@@ -56,6 +56,9 @@ final class EventRouter {
             emit(name, Attention(kind: .input, receivedAt: now, preview: event.preview ?? "\(agentLabel) needs your input"))
         case .finished:
             if let msg = event.preview, !msg.isEmpty { sessions.setLastMessage(name: name, msg) }
+            // Grok may emit both task_complete and Stop for one turn. Avoid a
+            // duplicate Pa report while retaining Stop after a resolved prompt.
+            guard Self.shouldEmitFinished(after: sessions.attentionByName[name]) else { break }
             emit(name, Attention(kind: .finished, receivedAt: now, preview: event.preview ?? "Finished"))
         }
         Log.hooks.info("event \(raw.eventName, privacy: .public) -> \(name, privacy: .public)")
@@ -65,5 +68,10 @@ final class EventRouter {
         sessions.applyAttention(name: name, .pending(attention))
         let display = sessions.session(named: name)?.displayName ?? name
         onAttention(name, display, attention)
+    }
+
+    static func shouldEmitFinished(after state: AttentionState?) -> Bool {
+        guard case .pending(let current) = state else { return true }
+        return current.kind != .finished
     }
 }

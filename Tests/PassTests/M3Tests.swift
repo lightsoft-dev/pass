@@ -202,4 +202,31 @@ final class ProjectAgentNotificationTests: XCTestCase {
         XCTAssertTrue(request.prompt.contains("권한 승인"))
         XCTAssertTrue(request.prompt.contains("worker"))
     }
+
+    @MainActor func testFinishedWorkerTurnIsForwardedToPaAsAStatusUpdate() {
+        let session = Session(name: "worker", projectRoot: "/repos/project",
+                              cwd: "/repos/project", agent: .codex,
+                              lastActivity: .now, isAttached: false)
+        let attention = Attention(kind: .finished, receivedAt: .now, preview: "Tests passed")
+
+        let request = ProjectAgentNotificationRequest.fromWorkerAttention(attention, session: session)
+
+        XCTAssertEqual(request?.id, "worker:finished")
+        XCTAssertTrue(request?.displayText.contains("워커의 턴 종료를 확인하는 중") == true)
+        XCTAssertTrue(request?.prompt.contains("턴 종료가 전체 작업 완료를 뜻하지는 않습니다") == true)
+        XCTAssertTrue(request?.prompt.contains("Tests passed") == true)
+    }
+
+    @MainActor func testRepeatedTurnEndIsNotForwardedTwice() {
+        let completed = AttentionState.pending(
+            Attention(kind: .finished, receivedAt: .now, preview: "done"))
+        XCTAssertFalse(EventRouter.shouldEmitFinished(after: completed))
+        for kind in [Attention.Kind.input, .decision] {
+            let state = AttentionState.pending(
+                Attention(kind: kind, receivedAt: .now, preview: "waiting"))
+            XCTAssertTrue(EventRouter.shouldEmitFinished(after: state), "\(kind)")
+        }
+        XCTAssertTrue(EventRouter.shouldEmitFinished(after: .working))
+        XCTAssertTrue(EventRouter.shouldEmitFinished(after: .idle))
+    }
 }
