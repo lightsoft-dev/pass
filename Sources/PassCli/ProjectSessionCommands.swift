@@ -23,7 +23,7 @@ struct ProjectSessions: AsyncParsableCommand {
             if json { printJSON(result); return }
             if result.sessions.isEmpty { print("No worker sessions in \(result.projectRoot ?? "project")"); return }
             for session in result.sessions {
-                print("\(session.name)\t\(session.agent)\t\(session.state)\t\(session.cwd)")
+                print("\(session.name)\t\(session.agent)\t\(session.state)\t\(session.lastActivitySecondsAgo)s since activity\t\(session.cwd)")
             }
         }
     }

@@ -135,6 +135,7 @@ struct CLIProjectSessionInfo: Codable {
     var agent: String
     var cwd: String
     var state: String
+    var lastActivitySecondsAgo: Int
 }
 
 struct CLIProjectSessionListResponse: Codable {
@@ -180,6 +181,27 @@ struct CLIProjectSessionResponse: Codable {
     var error: String? = nil
 }
 
+/// A removal ends the tmux process and discards its restore descriptor. Reject states that
+/// Pa cannot safely infer are finished, even if a prompt instruction is missed.
+enum ProjectWorkerRemovalGuard {
+    static func rejectionReason(for worker: Session, now: Date = .now) -> String? {
+        if worker.launching { return "worker is still starting" }
+        switch worker.attention {
+        case .working:
+            return "worker is still working"
+        case .pending(let attention) where attention.kind == .decision || attention.kind == .input:
+            return "worker is waiting for input or a permission decision"
+        case .pending, .idle:
+            break
+        }
+        if case .idle = worker.attention,
+           now.timeIntervalSince(worker.lastActivity) < 30 {
+            return "worker was active within the last 30 seconds; check it again before removing"
+        }
+        return nil
+    }
+}
+
 /// Serves passcli: opens/closes/lists embedded-browser pages plus observation and interaction
 /// verbs. Always answers 200 + `{ok,…}` JSON — errors ride in the body so the
 /// CLI can print them verbatim. Loopback-only, same trust posture as /hook/* and /share/*:
@@ -199,13 +221,18 @@ enum CLIAPI {
             .filter { $0.projectRoot == projectRoot && !$0.isProjectAgent }
             .map { session in
                 let state: String
-                switch session.attention {
-                case .working: state = "working"
-                case .idle: state = "idle"
-                case .pending(let attention): state = attention.kind.rawValue
+                if session.launching {
+                    state = "launching"
+                } else {
+                    switch session.attention {
+                    case .working: state = "working"
+                    case .idle: state = "idle"
+                    case .pending(let attention): state = attention.kind.rawValue
+                    }
                 }
                 return CLIProjectSessionInfo(name: session.name, agent: session.agent.rawValue,
-                                             cwd: session.cwd, state: state)
+                                             cwd: session.cwd, state: state,
+                                             lastActivitySecondsAgo: max(0, Int(Date().timeIntervalSince(session.lastActivity))))
             }
         return encode(CLIProjectSessionListResponse(ok: true, projectRoot: projectRoot,
                                                     sessions: sessions))
@@ -313,6 +340,9 @@ enum CLIAPI {
               let target = projectWorker(appModel, request.targetSession, root: projectRoot),
               let store = appModel.sessions else {
             return encode(CLIProjectSessionResponse(ok: false, error: "invalid project worker"))
+        }
+        if let reason = ProjectWorkerRemovalGuard.rejectionReason(for: target) {
+            return encode(CLIProjectSessionResponse(ok: false, error: reason))
         }
         await store.kill(target.name)
         guard !(await TmuxClient.shared.hasSession(target.name)) else {

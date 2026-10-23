@@ -262,7 +262,7 @@ struct ProjectAgentView: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 Menu {
-                                    Button("Pa에게 삭제 요청", role: .destructive) {
+                                    Button("Pa에게 정리 요청") {
                                         requestWorkerRemoval(worker)
                                     }
                                 } label: {
@@ -271,7 +271,7 @@ struct ProjectAgentView: View {
                                 }
                                 .menuStyle(.borderlessButton)
                                 .disabled(conversation?.canSendMessage != true)
-                                .help("Pa가 이 워커의 상태를 확인하고 삭제")
+                                .help("Pa가 작업 상태를 확인하고 정리 여부를 판단")
                             }
                             .padding(.horizontal, 9).padding(.vertical, 7)
                             .background(Color.primary.opacity(0.05),
@@ -344,7 +344,7 @@ struct ProjectAgentView: View {
             connectAccount()
             return
         }
-        let request = "이 프로젝트의 워커 \(worker.name)을 삭제해 주세요. 먼저 작업 상태와 최근 출력을 확인하세요. 작업 중이거나 입력을 기다리고 있으면 삭제 전에 저에게 알려주세요. 삭제할 수 있으면 passcli session remove 명령을 사용하고 결과를 알려주세요."
+        let request = "이 프로젝트의 워커 \(worker.name)을 정리할 수 있는지 판단해 주세요. 상태, 최근 출력, 작업 결과와 후속 작업을 확인하세요. 실행 중이거나 입력을 기다리거나 완료 여부가 불확실하면 유지하고 이유를 알려주세요. 완료되어 더 쓸 일이 없으면 session remove 명령으로 정리하고 이유를 알려주세요."
         if conversation.send(request) { status = nil }
     }
 
