@@ -144,7 +144,7 @@ export default function ProjectScreen() {
   const draft = message.trim();
   const tooLong = utf8ByteLength(draft) > MAX_PA_MESSAGE_BYTES;
   const canSend = canReadPa && state.capabilities.includes("sessions:write") &&
-    agent?.isReady === true && !agent.isResponding && !sendInFlight &&
+    agent?.isReady === true && !sendInFlight &&
     draft.length > 0 && !tooLong;
 
   const send = () => {
@@ -262,18 +262,23 @@ export default function ProjectScreen() {
                       styles.message,
                       entry.role === "user" && styles.userMessage,
                       entry.role === "activity" && styles.activityMessage,
+                      entry.role === "notice" && styles.noticeMessage,
                       entry.role === "error" && styles.errorMessage,
                     ]}
                   >
                     <Text style={[
                       styles.messageRole,
+                      entry.role === "notice" && styles.noticeText,
                       entry.role === "error" && styles.errorText,
                     ]}>
                       {entry.role === "assistant" ? "Pa" :
                         entry.role === "user" ? "You" :
-                        entry.role === "activity" ? "Activity" : "Error"}
+                        entry.role === "activity" ? "Activity" :
+                          entry.role === "notice" ? "Notice" : "Error"}
                     </Text>
-                    <Text style={styles.messageText}>{entry.text}{entry.truncated ? "\n… message truncated" : ""}</Text>
+                    <Text style={[styles.messageText, entry.role === "notice" && styles.noticeText]}>
+                      {entry.text}{entry.truncated ? "\n… message truncated" : ""}
+                    </Text>
                   </View>
                 ))
               ) : (
@@ -360,6 +365,8 @@ const styles = StyleSheet.create({
   message: { maxWidth: "90%", alignSelf: "flex-start", backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, padding: spacing.sm, gap: 5 },
   userMessage: { alignSelf: "flex-end", backgroundColor: colors.accentSoft, borderColor: colors.accent },
   activityMessage: { maxWidth: "100%", backgroundColor: colors.raised },
+  noticeMessage: { maxWidth: "100%", alignSelf: "center", backgroundColor: "transparent", borderWidth: 0 },
+  noticeText: { color: colors.muted, textAlign: "center" },
   errorMessage: { maxWidth: "100%", borderColor: colors.danger },
   messageRole: { color: colors.muted, fontSize: 10, fontWeight: "800" },
   errorText: { color: colors.danger },

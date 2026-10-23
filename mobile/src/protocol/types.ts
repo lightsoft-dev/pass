@@ -53,7 +53,7 @@ export interface RemoteProject {
 
 export interface ProjectAgentMessage {
   id: string;
-  role: "user" | "assistant" | "activity" | "error";
+  role: "user" | "assistant" | "activity" | "notice" | "error";
   text: string;
   truncated: boolean;
 }

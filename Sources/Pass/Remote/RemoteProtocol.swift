@@ -563,6 +563,7 @@ enum RemoteProjectAgentRole: String, Codable, Equatable, Sendable {
     case user
     case assistant
     case activity
+    case notice
     case error
 }
 
@@ -587,6 +588,7 @@ struct RemoteProjectAgentMessage: Codable, Equatable, Sendable {
         case .user: role = .user
         case .assistant: role = .assistant
         case .activity: role = .activity
+        case .notice: role = .notice
         case .error: role = .error
         }
         self.init(id: message.id.uuidString, role: role, text: message.text)

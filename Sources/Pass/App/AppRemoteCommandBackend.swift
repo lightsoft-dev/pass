@@ -30,7 +30,7 @@ final class AppRemoteCommandBackend: RemoteCommandBackend {
         conversation.start()
         guard conversation.canSendMessage else {
             throw RemoteExecutionError(code: "project_agent_not_ready",
-                                       message: "Pa is starting or already responding. Try again shortly.", retryable: true)
+                                       message: "Pa is still starting. Try again shortly.", retryable: true)
         }
         guard conversation.send(command.text) else {
             throw RemoteExecutionError(code: "project_agent_send_failed",
