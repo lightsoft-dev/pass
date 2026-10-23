@@ -205,8 +205,7 @@ actor TmuxClient: TerminalPaneAccess {
     }
 
     /// Create a detached session running a shell in `cwd`, tag it, then launch the agent.
-    /// The agent is launched via send-keys (not as the session command) so a post-mortem
-    /// shell survives when the agent exits.
+    /// Launch inside the shell (not as the session command) so a post-mortem shell survives.
     @discardableResult
     func newSession(name: String, cwd: String, projectRoot: String, agent: AgentKind,
                     launchCommand: String?) async -> Bool {
@@ -231,10 +230,9 @@ actor TmuxClient: TerminalPaneAccess {
             return false
         }
         if let cmd = launchCommand, !cmd.isEmpty {
-            let sent = await run(["send-keys", "-t", name, cmd, "Enter"])
-            guard sent.ok else {
+            guard await submitShellCommand(cmd, in: name) else {
                 await run(["kill-session", "-t", name])
-                Log.tmux.error("launch session \(name, privacy: .public) failed: \(sent.stderr, privacy: .public)")
+                Log.tmux.error("launch session \(name, privacy: .public) failed")
                 return false
             }
         }
@@ -399,6 +397,43 @@ actor TmuxClient: TerminalPaneAccess {
             return .pasteFailed
         }
         return .pasted
+    }
+
+    /// A long Unicode command sent with one `send-keys` call can be dropped partway through
+    /// zsh's line editor, leaving an unterminated quote at the prompt. Bracketed paste lets
+    /// the shell receive the entire command before a separate Enter submits it. Wait for the
+    /// prompt first: a new tmux shell may spend a second in rc files before enabling its editor.
+    func submitShellCommand(_ command: String, in name: String) async -> Bool {
+        guard let target = await workerPaneTarget(name, agent: .shell) else { return false }
+        var ready = false
+        var previousLine = ""
+        var stableChecks = 0
+        for attempt in 0..<100 {
+            let state = await paneState(target)
+            if AgentKind.infer(fromPaneCommand: state.command) == .shell {
+                let lines = await capturePane(target, colors: false)
+                    .split(separator: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                if let last = lines.last(where: { !$0.isEmpty }) {
+                    if ["%", "$", "#", ">", "❯", "➜", "λ"].contains(where: last.hasSuffix) {
+                        ready = true
+                        break
+                    }
+                    stableChecks = last == previousLine ? stableChecks + 1 : 0
+                    previousLine = last
+                    // Custom prompts need not end in a familiar glyph. A stable visible
+                    // line after startup is the fallback; never paste into a blank pane.
+                    if attempt >= 10, stableChecks >= 5 {
+                        ready = true
+                        break
+                    }
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard ready, await paste(command, into: target) == .pasted else { return false }
+        try? await Task.sleep(nanoseconds: PassConfig.pasteToEnterDelayMs * 1_000_000)
+        return await sendKeys(target, ["Enter"])
     }
 
     /// Send literal key names (e.g. ["Enter"], ["1"], ["y"]) to a pane.

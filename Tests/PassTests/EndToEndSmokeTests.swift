@@ -98,4 +98,42 @@ final class EndToEndSmokeTests: XCTestCase {
         let gone = await client.hasSession(name)
         XCTAssertFalse(gone, "kill-session left the session behind")
     }
+
+    func testLongUnicodeShellCommandLaunchesInNarrowPane() async throws {
+        let client = TmuxClient()
+        guard await client.isAvailable, FileManager.default.isExecutableFile(atPath: "/bin/zsh") else {
+            throw XCTSkip("tmux or zsh not installed")
+        }
+
+        let name = "portspike-launch-\(UInt32.random(in: 0x1000...0xFFFF))"
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(name)-complete")
+        let created = await client.newSession(name: name, cwd: NSTemporaryDirectory(),
+                                              projectRoot: "/tmp/portspike", agent: .codex,
+                                              launchCommand: nil)
+        XCTAssertTrue(created)
+        guard created else { return }
+
+        // Delayed zsh startup proves the command waits for a real prompt, rather than
+        // sending a long paste while the shell is still loading its configuration.
+        let shell = await client.run(["respawn-pane", "-k", "-t", name,
+                                      "sleep 0.7; exec /bin/zsh -f -i"])
+        let resized = await client.run(["resize-window", "-t", name, "-x", "66", "-y", "39"])
+        XCTAssertTrue(shell.ok)
+        XCTAssertTrue(resized.ok)
+        let prompt = String(repeating: "프로젝트 동기화 요청", count: 180)
+        let command = ": \(Shell.singleQuoted(prompt)); printf complete > \(Shell.singleQuoted(output.path))"
+        let submitted = await client.submitShellCommand(command, in: name)
+        XCTAssertTrue(submitted)
+
+        var completed = false
+        for _ in 0..<40 {
+            completed = FileManager.default.fileExists(atPath: output.path)
+            if completed { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertTrue(completed, "long Korean command did not execute")
+        await client.killSession(name)
+        try? FileManager.default.removeItem(at: output)
+    }
 }
