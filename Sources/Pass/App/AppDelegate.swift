@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             doubleTapHotkey?.invalidate()
             shiftTapHotkey?.invalidate()
             appModel.stopProjectDirectorySync()
+            appModel.workerProgressMonitor?.stopAll()
             appModel.mirror?.shutdown()
             appModel.miniTerminals?.closeAll()
             appModel.sessions?.flushSave()
@@ -84,6 +85,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Build stores + start the reconcile loop.
         appModel.configure()
         let notifications = self.notifications
+        appModel.onWorkerProgressAlert = { request, root in
+            if request.kind == "watch-resumed" {
+                notifications.clear(session: request.sessionName,
+                                    kinds: ["watch-quiet", "watch-disappeared"])
+            } else {
+                Task {
+                    await notifications.notify(
+                        session: request.sessionName, projectRoot: root, kind: request.kind,
+                        title: request.title + (request.kind == "watch-disappeared"
+                            ? " · 세션 종료" : " · 진행 확인 필요"), body: request.summary,
+                        sound: request.kind == "watch-disappeared")
+                }
+            }
+        }
         appModel.clearSessionNotifications = { name in
             notifications.clear(session: name, kinds: [
                 Attention.Kind.decision.rawValue, Attention.Kind.input.rawValue, Attention.Kind.finished.rawValue,
@@ -202,6 +217,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let router = EventRouter(
             sessions: appModel.sessions,
             onAttention: { name, display, att in
+                appModel.workerProgressMonitor?.stop(name)
+                notifications.clear(session: name, kinds: ["watch-quiet", "watch-disappeared"])
                 let sound = att.kind != .finished // finished notifies silently
                 let projectRoot = appModel.sessions?.session(named: name)?.projectRoot
                 let body: String
@@ -231,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     Attention.Kind.decision.rawValue,
                     Attention.Kind.input.rawValue,
                     Attention.Kind.finished.rawValue,
+                    "watch-quiet", "watch-disappeared",
                 ])
                 if appModel.sessions?.isEphemeral(name) != true,
                    appModel.extensionBuilder?.ownsSession(name) != true {
@@ -300,7 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         await MainActor.run {
             let root = projectRoot ?? sessionName.flatMap { appModel.sessions?.session(named: $0)?.projectRoot }
-            if let root, let sessionName, !root.isEmpty {
+            if let root, let sessionName, !root.isEmpty, !kind.hasPrefix("watch-") {
                 let request = ProjectAgentNotificationRequest(
                     id: notificationID,
                     sessionName: sessionName,

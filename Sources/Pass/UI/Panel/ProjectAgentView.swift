@@ -251,7 +251,9 @@ struct ProjectAgentView: View {
                                         .lineLimit(1)
                                     Text(workerStatus(worker))
                                         .font(PassFont.ui(size: 10))
-                                        .foregroundStyle(worker.needsUser ? Color.orange : Color.secondary)
+                                        .foregroundStyle(worker.needsUser
+                                            || appModel.workerProgressMonitor?.statuses[worker.name] == .quiet
+                                            ? Color.orange : Color.secondary)
                                 }
                                 Spacer()
                                 Button(selectedWorkerName == worker.name ? "숨기기" : "보기") {
@@ -301,6 +303,12 @@ struct ProjectAgentView: View {
     private func workerStatus(_ worker: Session) -> String {
         if worker.launching { return "Starting" }
         if worker.needsUser { return "Needs your input" }
+        if let watch = appModel.workerProgressMonitor?.statuses[worker.name] {
+            switch watch {
+            case .checking: return "5초 간격으로 확인 중"
+            case .quiet: return "진행 상태 확인 필요"
+            }
+        }
         if case .working = worker.attention { return "Working" }
         return "Ready"
     }

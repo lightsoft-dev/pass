@@ -229,4 +229,47 @@ final class ProjectAgentNotificationTests: XCTestCase {
         XCTAssertTrue(EventRouter.shouldEmitFinished(after: .working))
         XCTAssertTrue(EventRouter.shouldEmitFinished(after: .idle))
     }
+
+    func testWorkerProgressWatchReportsQuietAndRecoveryOnlyOnTransitions() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var sample = ProjectWorkerProgressSample(startedAt: start)
+
+        XCTAssertNil(sample.observe(now: start.addingTimeInterval(5), isLive: true,
+                                    pane: "working", lastActivity: start.addingTimeInterval(4)))
+        XCTAssertNil(sample.observe(now: start.addingTimeInterval(34), isLive: true,
+                                    pane: "working", lastActivity: start.addingTimeInterval(4)))
+        XCTAssertEqual(sample.observe(now: start.addingTimeInterval(35), isLive: true,
+                                      pane: "working", lastActivity: start.addingTimeInterval(4)),
+                       .quiet)
+        XCTAssertNil(sample.observe(now: start.addingTimeInterval(45), isLive: true,
+                                    pane: "working", lastActivity: start.addingTimeInterval(4)))
+        XCTAssertEqual(sample.observe(now: start.addingTimeInterval(50), isLive: true,
+                                      pane: "new output", lastActivity: start.addingTimeInterval(49)),
+                       .resumed)
+        XCTAssertEqual(sample.observe(now: start.addingTimeInterval(80), isLive: true,
+                                      pane: "new output", lastActivity: start.addingTimeInterval(49)),
+                       .quiet)
+    }
+
+    func testWorkerProgressWatchConfirmsMissingSessionTwice() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var sample = ProjectWorkerProgressSample(startedAt: start)
+        XCTAssertNil(sample.observe(now: start.addingTimeInterval(5), isLive: false,
+                                    pane: "", lastActivity: nil))
+        XCTAssertNil(sample.observe(now: start.addingTimeInterval(10), isLive: true,
+                                    pane: "working", lastActivity: nil))
+        XCTAssertNil(sample.observe(now: start.addingTimeInterval(15), isLive: false,
+                                    pane: "", lastActivity: nil))
+        XCTAssertEqual(sample.observe(now: start.addingTimeInterval(20), isLive: false,
+                                      pane: "", lastActivity: nil), .disappeared)
+    }
+
+    @MainActor func testWorkerProgressAlertAsksPaToVerifyInsteadOfResending() {
+        let request = ProjectAgentNotificationRequest.fromWorkerWatch(
+            .quiet, sessionName: "worker", title: "Coding worker")
+        XCTAssertEqual(request.kind, "watch-quiet")
+        XCTAssertTrue(request.prompt.contains("session list --json"))
+        XCTAssertTrue(request.prompt.contains("session tail"))
+        XCTAssertTrue(request.prompt.contains("중복 전달하지 마세요"))
+    }
 }
