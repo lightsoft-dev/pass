@@ -145,4 +145,65 @@ final class ProjectAgentIdentityTests: XCTestCase {
         XCTAssertEqual(messages[0].role, .assistant)
         XCTAssertEqual(messages[0].images, [imageData])
     }
+
+    @MainActor func testFollowUpMessagesRemainVisibleAndRunInOrder() {
+        var commands: [[String: Any]] = []
+        let root = "/tmp/pa-follow-up-\(UUID().uuidString)"
+        let conversation = ProjectAgentConversation(projectRoot: root) { command in
+            commands.append(command)
+            return true
+        }
+        conversation.receive(["type": "response", "id": "history", "success": true,
+                              "data": ["messages": []]])
+
+        XCTAssertTrue(conversation.send("첫 요청"))
+        XCTAssertTrue(conversation.send("두 번째 요청"))
+        XCTAssertTrue(conversation.send("세 번째 요청"))
+        XCTAssertEqual(commands.compactMap { $0["message"] as? String }, ["첫 요청"])
+        XCTAssertEqual(conversation.queuedMessageCount, 2)
+        XCTAssertEqual(conversation.messages.map(\.isQueued), [false, true, true])
+
+        conversation.receive(["type": "message_start",
+                              "message": ["role": "assistant", "content": []]])
+        conversation.receive(["type": "message_end",
+                              "message": ["role": "assistant", "content": [
+                                ["type": "text", "text": "첫 답변"]]]])
+        XCTAssertEqual(conversation.messages.map(\.text),
+                       ["첫 요청", "첫 답변", "두 번째 요청", "세 번째 요청"])
+
+        conversation.receive(["type": "agent_end"])
+        XCTAssertEqual(commands.compactMap { $0["message"] as? String },
+                       ["첫 요청", "두 번째 요청"])
+        XCTAssertEqual(conversation.queuedMessageCount, 1)
+        XCTAssertEqual(conversation.messages.map(\.isQueued), [false, false, false, true])
+
+        conversation.receive(["type": "agent_end"])
+        XCTAssertEqual(commands.compactMap { $0["message"] as? String },
+                       ["첫 요청", "두 번째 요청", "세 번째 요청"])
+        conversation.receive(["type": "agent_end"])
+        XCTAssertEqual(conversation.queuedMessageCount, 0)
+        XCTAssertFalse(conversation.isResponding)
+    }
+
+    @MainActor func testRejectedPromptDoesNotDiscardQueuedMessage() {
+        var commands: [[String: Any]] = []
+        let conversation = ProjectAgentConversation(
+            projectRoot: "/tmp/pa-follow-up-\(UUID().uuidString)") { command in
+                commands.append(command)
+                return true
+            }
+        conversation.receive(["type": "response", "id": "history", "success": true,
+                              "data": ["messages": []]])
+        XCTAssertTrue(conversation.send("첫 요청"))
+        XCTAssertTrue(conversation.send("후속 요청"))
+
+        conversation.receive(["type": "response", "id": commands[0]["id"] as! String,
+                              "success": false, "error": "요청을 처리하지 못했습니다."])
+
+        XCTAssertEqual(commands.compactMap { $0["message"] as? String },
+                       ["첫 요청", "후속 요청"])
+        XCTAssertEqual(conversation.messages.map(\.role), [.user, .error, .user])
+        XCTAssertEqual(conversation.queuedMessageCount, 0)
+        XCTAssertTrue(conversation.isResponding)
+    }
 }

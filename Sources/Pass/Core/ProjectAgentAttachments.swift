@@ -26,6 +26,7 @@ enum ProjectAgentAttachments {
         guard urls.count <= maximumFiles else {
             throw AttachmentError.tooManyFiles
         }
+        if urls.isEmpty { return [] }
         let support = baseDirectory ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let directory = support.appendingPathComponent("Pass/Pa", isDirectory: true)
