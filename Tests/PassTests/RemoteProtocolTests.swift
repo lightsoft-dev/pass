@@ -270,6 +270,19 @@ final class RemoteProtocolTests: XCTestCase {
                           RemoteWireLimits.maximumOutboundFrameBytes)
     }
 
+    func testProjectAgentNoticeMapsToWireRole() throws {
+        let notice = RemoteProjectAgentMessage(
+            ProjectAgentMessage(role: .notice, text: "Worker needs your attention")
+        )
+
+        XCTAssertEqual(notice.role, .notice)
+        XCTAssertEqual(notice.text, "Worker needs your attention")
+        XCTAssertEqual(
+            try JSONDecoder().decode(RemoteProjectAgentMessage.self, from: JSONEncoder().encode(notice)),
+            notice
+        )
+    }
+
     func testProjectAgentSnapshotCapsMessagesAndUTF8Fields() throws {
         let messages = (0...RemoteWireLimits.maximumProjectAgentMessages).map { index in
             RemoteProjectAgentMessage(

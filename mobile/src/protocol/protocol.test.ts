@@ -102,6 +102,9 @@ test("validates Pa commands and bounded project conversation snapshots", () => {
     },
   };
   assert.equal(parseServerEvent(snapshot).ok, true);
+  assert.equal(parseServerEvent({ ...snapshot, payload: { ...snapshot.payload, messages: [
+    { id: "msg_notice", role: "notice", text: "Worker needs your attention", truncated: false },
+  ] } }).ok, true);
   assert.equal(parseServerEvent({ ...snapshot, payload: { ...snapshot.payload, truncated: undefined } }).ok, false);
   assert.equal(parseServerEvent({ ...snapshot, payload: { ...snapshot.payload, messages: [
     { id: "msg_1", role: "assistant", text: "x".repeat(8 * 1_024 + 1), truncated: true },

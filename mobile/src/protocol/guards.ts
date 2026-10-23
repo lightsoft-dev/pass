@@ -270,7 +270,7 @@ function validPayload(type: ServerEventType, payload: unknown): boolean {
         payload.messages.every((message: unknown) =>
           isRecord(message) &&
           isString(message.id, 128) &&
-          ["user", "assistant", "activity", "error"].includes(String(message.role)) &&
+          ["user", "assistant", "activity", "notice", "error"].includes(String(message.role)) &&
           typeof message.text === "string" &&
           utf8ByteLength(message.text) <= 8 * 1_024 &&
           typeof message.truncated === "boolean"
