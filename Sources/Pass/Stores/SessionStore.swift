@@ -461,8 +461,14 @@ final class SessionStore {
            !prompt.isEmpty {
             launch = base + " " + Shell.singleQuoted(prompt) // e.g. claude '<shared content>'
         }
-        await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
-                              agent: agent, launchCommand: launch)
+        let launched = await tmux.newSession(name: name, cwd: projectDir, projectRoot: projectRoot,
+                                             agent: agent, launchCommand: launch)
+        if !launched {
+            ephemeralSessions.remove(name)
+            sessions.removeAll { $0.name == provisional || $0.name == name && $0.launching }
+            await reconcile()
+            return ""
+        }
         if rememberProject { projects.remember(rootPath: projectRoot) }
 
         // 3. Swap the provisional card for the real one (name may differ once git/uniqueness resolve).
@@ -492,7 +498,7 @@ final class SessionStore {
                 }
                 if state.inMode { await tmux.cancelMode(name) }
                 guard await tmux.sendKeys(name, ["C-c"]),
-                      await tmux.sendKeys(name, [launch, "Enter"]) else {
+                      await tmux.submitShellCommand(launch, in: name) else {
                     return .failure(.launchFailed)
                 }
                 projectAgentLaunchTimes[name] = Date()
