@@ -34,7 +34,7 @@ type PairingOptions = {
 
 /**
  * MVP bootstrap for the relay's shared RELAY_AUTH_TOKEN mode. There is deliberately no
- * network-side registration call here: the QR/manual JSON bearer is stored in SecureStore and
+ * network-side registration call here: the QR bearer is stored in SecureStore and
  * used only in the WebSocket Authorization header. Device-key registration replaces this path
  * when the relay gains a one-time pairing API.
  */

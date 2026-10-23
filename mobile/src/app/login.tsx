@@ -5,7 +5,7 @@ import {
 import * as AppleAuthentication from "expo-apple-authentication";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Platform, StyleSheet, Text, View } from "react-native";
 
 import { AppButton } from "../components/AppButton";
 import { Screen } from "../components/Screen";
@@ -93,7 +93,7 @@ function ConfiguredLogin({
   return (
     <Screen style={styles.screen} edges={["top", "bottom", "left", "right"]}>
       <View style={styles.content}>
-        <View style={styles.mark}><Text style={styles.markText}>P</Text></View>
+        <Image source={require("../../assets/icon.png")} style={styles.mark} />
         <Text style={styles.title}>Sign in to Pass</Text>
         <Text style={styles.subtitle}>
           Sign in, then securely link this device to your Mac with a QR code.
@@ -174,7 +174,9 @@ function MissingConfiguration() {
       <View style={styles.content}>
         <Text style={styles.title}>Sign in is unavailable</Text>
         <Text style={styles.subtitle}>This build has no Google OAuth client.</Text>
-        <AppButton label="Use development pairing" onPress={() => router.replace("/pair")} />
+        {__DEV__ ? (
+          <AppButton label="Use development pairing" onPress={() => router.replace("/pair")} />
+        ) : null}
         <AppButton label="Explore demo" onPress={() => router.replace("./demo")} variant="ghost" />
       </View>
     </Screen>
@@ -188,12 +190,8 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: radius.md,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
     marginBottom: spacing.sm,
   },
-  markText: { color: colors.white, fontSize: 32, fontWeight: "900" },
   title: { color: colors.text, fontSize: 28, fontWeight: "800", textAlign: "center" },
   subtitle: { color: colors.muted, fontSize: 15, lineHeight: 22, textAlign: "center" },
   error: { color: colors.danger, fontSize: 13, lineHeight: 19, textAlign: "center" },

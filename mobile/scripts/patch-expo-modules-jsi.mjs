@@ -11,10 +11,14 @@ const ambiguousCall =
   "guard milliseconds.isFinite, abs(milliseconds) <= maxJavaScriptDateMilliseconds else {";
 const qualifiedCall =
   "guard milliseconds.isFinite, Swift.abs(milliseconds) <= maxJavaScriptDateMilliseconds else {";
+const upstreamCall =
+  "guard milliseconds.isFinite, milliseconds.magnitude <= maxJavaScriptDateMilliseconds else {";
 
 const source = await readFile(target, "utf8");
 
-if (source.includes(qualifiedCall)) {
+if (source.includes(upstreamCall)) {
+  console.log("expo-modules-jsi already avoids the ambiguous abs call");
+} else if (source.includes(qualifiedCall)) {
   console.log("expo-modules-jsi Xcode compatibility patch already applied");
 } else if (source.includes(ambiguousCall)) {
   await writeFile(target, source.replace(ambiguousCall, qualifiedCall));
