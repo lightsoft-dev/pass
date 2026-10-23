@@ -3,7 +3,7 @@
     "name": "Pass Remote",
     "slug": "pass-mobile",
     "owner": "lightsoft-crew",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "icon": "./assets/icon.png",
     "orientation": "default",
     "scheme": "passremote",
@@ -31,6 +31,14 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "enableSceneSupport": true
+          }
+        }
+      ],
       [
         "expo-camera",
         {

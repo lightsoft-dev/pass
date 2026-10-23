@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
 import { useState, type ReactNode } from "react";
 import {
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -58,7 +59,7 @@ export default function StoreReviewDemoScreen() {
 
       <View style={[styles.shell, isRegular && styles.shellRegular]}>
         <View style={styles.brandRow}>
-          <View style={styles.mark}><Text style={styles.markText}>P</Text></View>
+          <Image source={require("../../assets/icon.png")} style={styles.mark} />
           <View>
             <Text style={styles.brand}>Pass Remote</Text>
             <Text style={styles.desktop}>Studio Mac · sample workspace</Text>
@@ -437,8 +438,7 @@ const styles = StyleSheet.create({
   shell: { flex: 1, width: "100%", alignSelf: "center" },
   shellRegular: { maxWidth: 980 },
   brandRow: { paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm, flexDirection: "row", alignItems: "center", gap: spacing.sm },
-  mark: { width: 38, height: 38, borderRadius: 11, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" },
-  markText: { color: colors.white, fontWeight: "900", fontSize: 20 },
+  mark: { width: 38, height: 38, borderRadius: 11 },
   brand: { color: colors.text, fontSize: 17, fontWeight: "900" },
   desktop: { color: colors.muted, fontSize: 11, marginTop: 2 },
   nav: { flexGrow: 0, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
