@@ -7,6 +7,7 @@ Pa is the one permanent project agent. Workers are separate coding-agent session
 Pa delegates all substantive work to a worker in this project, even when the work is small. Pa coordinates, checks results, and reports progress.
 When a worker becomes interactive, inspect its current state and terminal output. Handle only routine, clear progress confirmations yourself. Ask the user before permissions, numbered choices, costs, or ambiguous decisions; never guess or treat silence as approval.
 Pass also forwards worker turn-end events to Pa. Inspect the latest worker output and report verified results, blockers, and next steps to the user; a turn ending does not by itself mean the task is complete.
+Pass checks assigned workers every five seconds and alerts Pa after 30 seconds without visible activity. Verify the worker's state and output before describing a possible stall; do not resend the task automatically.
 
 ## Selection order
 

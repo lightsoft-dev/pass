@@ -229,6 +229,9 @@ enum CLIAPI {
         guard await TmuxClient.shared.hasSession(name) else {
             return encode(CLIProjectSessionResponse(ok: false, error: "worker session could not start"))
         }
+        if !request.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            appModel.workerProgressMonitor?.track(name, projectRoot: projectRoot)
+        }
         return encode(CLIProjectSessionResponse(ok: true, session: name))
     }
 
@@ -254,7 +257,9 @@ enum CLIAPI {
         }
         let result = await appModel.reply(to: target.name, text: request.message)
         switch result {
-        case .delivered: return encode(CLIProjectSessionResponse(ok: true, session: target.name))
+        case .delivered:
+            appModel.workerProgressMonitor?.track(target.name, projectRoot: projectRoot)
+            return encode(CLIProjectSessionResponse(ok: true, session: target.name))
         case .refusedShell:
             return encode(CLIProjectSessionResponse(ok: false, error: "worker agent is not running"))
         case .error(let message):
@@ -279,6 +284,7 @@ enum CLIAPI {
         case .delivered:
             appModel.sessions?.acknowledge(target.name)
             appModel.sessions?.applyAttention(name: target.name, .working)
+            appModel.workerProgressMonitor?.track(target.name, projectRoot: projectRoot)
             return encode(CLIProjectSessionResponse(ok: true, session: target.name))
         case .refusedShell:
             return encode(CLIProjectSessionResponse(ok: false, error: "worker agent is not running"))
@@ -312,6 +318,7 @@ enum CLIAPI {
         guard !(await TmuxClient.shared.hasSession(target.name)) else {
             return encode(CLIProjectSessionResponse(ok: false, error: "worker session could not be removed"))
         }
+        appModel.workerProgressMonitor?.stop(target.name)
         return encode(CLIProjectSessionResponse(ok: true, session: target.name))
     }
 
