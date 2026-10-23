@@ -193,7 +193,6 @@ struct ProjectAgentView: View {
                             .background(Color.primary.opacity(0.08), in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .keyboardShortcut(.return, modifiers: .control)
                     .disabled(conversation?.canSendMessage != true
                               || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                   && attachedFiles.isEmpty)
