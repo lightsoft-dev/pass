@@ -28,6 +28,44 @@ struct TerminalPaneSnapshot: Equatable, Sendable {
     var cursorY: Int
 }
 
+/// A session may contain several panes. The selected pane can be a tiny auxiliary agent,
+/// while the main worker is in a larger pane. Keep injection and observation on one pane ID.
+struct WorkerPaneCandidate: Equatable {
+    let id: String
+    let active: Bool
+    let width: Int
+    let height: Int
+    let command: String
+
+    init?(line: String) {
+        let fields = line.components(separatedBy: "\t")
+        guard fields.count == 5, fields[0].hasPrefix("%"),
+              let width = Int(fields[2]), let height = Int(fields[3]),
+              width > 0, height > 0 else { return nil }
+        id = fields[0]
+        active = fields[1] == "1"
+        self.width = width
+        self.height = height
+        command = fields[4]
+    }
+
+    static func select(_ panes: [Self], agent: AgentKind? = nil) -> Self? {
+        panes.max { first, second in
+            func rank(_ pane: Self) -> Int {
+                let foreground = AgentKind.infer(fromPaneCommand: pane.command)
+                if let agent, foreground == agent { return 2 }
+                return foreground == .shell ? 0 : 1
+            }
+            let firstRank = rank(first), secondRank = rank(second)
+            if firstRank != secondRank { return firstRank < secondRank }
+            let firstArea = first.width * first.height
+            let secondArea = second.width * second.height
+            if firstArea != secondArea { return firstArea < secondArea }
+            return !first.active && second.active
+        }
+    }
+}
+
 protocol TerminalPaneAccess: Sendable {
     func terminalSnapshot(_ name: String) async -> TerminalPaneSnapshot?
     func sendTerminalInput(_ input: String, to name: String) async -> Bool
@@ -233,9 +271,23 @@ actor TmuxClient: TerminalPaneAccess {
 
     // MARK: Preview & injection primitives (used by ReplyInjector in M2)
 
+    /// Resolve the primary coding-agent pane in the session's active window. A pane ID remains
+    /// stable across focus changes, so the following capture, paste and Enter hit the same TUI.
+    func workerPaneTarget(_ name: String, agent: AgentKind? = nil) async -> String? {
+        if name.hasPrefix("%") { return name }
+        let response = await run(["list-panes", "-t", name, "-F",
+                                  "#{pane_id}\t#{pane_active}\t#{pane_width}\t#{pane_height}\t#{pane_current_command}"])
+        guard response.ok else { return nil }
+        let panes = response.stdout.split(separator: "\n").compactMap {
+            WorkerPaneCandidate(line: String($0))
+        }
+        return WorkerPaneCandidate.select(panes, agent: agent)?.id
+    }
+
     /// Visible pane contents. `colors: true` includes SGR escapes (`-e`).
     func capturePane(_ name: String, colors: Bool) async -> String {
-        var args = ["capture-pane", "-p", "-J", "-t", name]
+        guard let target = await workerPaneTarget(name) else { return "" }
+        var args = ["capture-pane", "-p", "-J", "-t", target]
         if colors { args.insert("-e", at: 1) }
         return await run(args).stdout
     }
@@ -244,18 +296,20 @@ actor TmuxClient: TerminalPaneAccess {
     /// `capturePane`: previews only need the visible grid, while conversation views need turns
     /// that have already scrolled off-screen.
     func capturePaneHistory(_ name: String, lines: Int = 2_000) async -> String {
-        await run([
-            "capture-pane", "-p", "-J", "-S", "-\(max(1, lines))", "-t", name,
+        guard let target = await workerPaneTarget(name) else { return "" }
+        return await run([
+            "capture-pane", "-p", "-J", "-S", "-\(max(1, lines))", "-t", target,
         ]).stdout
     }
 
     /// Captures the visible terminal grid without joining wrapped rows. Cursor and dimensions
     /// let a remote terminal renderer reconstruct the current screen after every reconnect.
     func terminalSnapshot(_ name: String) async -> TerminalPaneSnapshot? {
+        guard let target = await workerPaneTarget(name) else { return nil }
         let marker = "__PASS_TERMINAL_PANE__"
         let capture = await run([
-            "capture-pane", "-p", "-e", "-t", name,
-            ";", "display-message", "-p", "-t", name,
+            "capture-pane", "-p", "-e", "-t", target,
+            ";", "display-message", "-p", "-t", target,
             "\(marker)\t#{pane_width}\t#{pane_height}\t#{cursor_x}\t#{cursor_y}",
         ])
         guard capture.ok,
@@ -320,7 +374,8 @@ actor TmuxClient: TerminalPaneAccess {
 
     /// (pane_in_mode, pane_current_command) in one query — the ReplyInjector pre-check.
     func paneState(_ name: String) async -> (inMode: Bool, command: String) {
-        let out = await display(name, "#{pane_in_mode}\t#{pane_current_command}")
+        guard let target = await workerPaneTarget(name) else { return (false, "") }
+        let out = await display(target, "#{pane_in_mode}\t#{pane_current_command}")
         let f = out.components(separatedBy: "\t")
         return (f.first == "1", f.count > 1 ? f[1] : "")
     }

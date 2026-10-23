@@ -150,50 +150,103 @@ final class ReplyInjectorTests: XCTestCase {
         XCTAssertEqual(result, .error("selected option is no longer visible"))
         XCTAssertEqual(sentKeys, [])
     }
+
+    func testExistingWorkerStaysOnResolvedPaneThroughPasteAndSubmit() async {
+        let tmux = FakeReplyInjectorTmux(states: [(false, "claude")], paneTarget: "%49")
+        let injector = ReplyInjector(tmux: tmux)
+
+        let result = await injector.sendText("pass-worker", agent: .claude, text: "Continue work")
+        let resolved = await tmux.resolvedTargets
+        let observed = await tmux.observedTargets
+        let pasted = await tmux.pastedTargets
+        let submitted = await tmux.sentKeyTargets
+
+        XCTAssertEqual(result, .delivered)
+        XCTAssertEqual(resolved, ["pass-worker"])
+        XCTAssertEqual(observed, ["%49", "%49"])
+        XCTAssertEqual(pasted, ["%49"])
+        XCTAssertEqual(submitted, ["%49"])
+    }
+
+    func testWorkerPaneSelectionPrefersMainAgentPaneOverNarrowActivePane() {
+        let panes = [
+            WorkerPaneCandidate(line: "%43\t1\t4\t42\tclaude.exe")!,
+            WorkerPaneCandidate(line: "%49\t0\t61\t42\tclaude.exe")!,
+        ]
+
+        XCTAssertEqual(WorkerPaneCandidate.select(panes, agent: .claude)?.id, "%49")
+    }
+
+    func testWorkerPaneSelectionPrefersExpectedAgentOverLargerOtherPane() {
+        let panes = [
+            WorkerPaneCandidate(line: "%1\t1\t100\t40\tpi")!,
+            WorkerPaneCandidate(line: "%2\t0\t60\t40\tclaude.exe")!,
+        ]
+
+        XCTAssertEqual(WorkerPaneCandidate.select(panes, agent: .claude)?.id, "%2")
+    }
 }
 
 private actor FakeReplyInjectorTmux: ReplyInjectorTmux {
     private var states: [(inMode: Bool, command: String)]
     private let pane: String
+    private let paneTarget: String?
     private let setBufferSucceeds: Bool
     private let pasteBufferSucceeds: Bool
     private let sendKeysSucceeds: Bool
     private(set) var sentKeys: [[String]] = []
     private(set) var cancelCount = 0
     private(set) var pasteCount = 0
+    private(set) var resolvedTargets: [String] = []
+    private(set) var observedTargets: [String] = []
+    private(set) var pastedTargets: [String] = []
+    private(set) var sentKeyTargets: [String] = []
 
     init(
         states: [(Bool, String)],
         pane: String = "",
+        paneTarget: String? = "pass-app",
         setBufferSucceeds: Bool = true,
         pasteBufferSucceeds: Bool = true,
         sendKeysSucceeds: Bool = true
     ) {
         self.states = states.map { (inMode: $0.0, command: $0.1) }
         self.pane = pane
+        self.paneTarget = paneTarget
         self.setBufferSucceeds = setBufferSucceeds
         self.pasteBufferSucceeds = pasteBufferSucceeds
         self.sendKeysSucceeds = sendKeysSucceeds
     }
 
+    func workerPaneTarget(_ name: String, agent: AgentKind?) -> String? {
+        resolvedTargets.append(name)
+        return paneTarget
+    }
+
     func paneState(_ name: String) -> (inMode: Bool, command: String) {
+        observedTargets.append(name)
         if states.count > 1 { return states.removeFirst() }
         return states.first ?? (false, "zsh")
     }
 
-    func capturePane(_ name: String, colors: Bool) -> String { pane }
+    func capturePane(_ name: String, colors: Bool) -> String {
+        observedTargets.append(name)
+        return pane
+    }
 
     func cancelMode(_ name: String) {
         cancelCount += 1
     }
 
     func paste(_ text: String, into name: String) -> TmuxPasteResult {
+        pastedTargets.append(name)
         guard setBufferSucceeds else { return .stagingFailed }
         pasteCount += 1
         return pasteBufferSucceeds ? .pasted : .pasteFailed
     }
 
     func sendKeys(_ name: String, _ keys: [String]) -> Bool {
+        sentKeyTargets.append(name)
         sentKeys.append(keys)
         return sendKeysSucceeds
     }

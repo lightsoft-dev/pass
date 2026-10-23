@@ -1,6 +1,7 @@
 import Foundation
 
 protocol ReplyInjectorTmux: Sendable {
+    func workerPaneTarget(_ name: String, agent: AgentKind?) async -> String?
     func paneState(_ name: String) async -> (inMode: Bool, command: String)
     func capturePane(_ name: String, colors: Bool) async -> String
     func cancelMode(_ name: String) async
@@ -87,11 +88,14 @@ actor ReplyInjector {
     /// Send free-text into the agent's input box. Bracketed paste + delay + Enter.
     /// Returns `.refusedShell` when the agent isn't running (safety).
     func sendText(_ session: String, agent: AgentKind, text: String, allowShell: Bool = false) async -> Result {
+        guard let target = await tmux.workerPaneTarget(session, agent: agent) else {
+            return .error("worker pane is unavailable")
+        }
         let profile = InteractionProfile.for(agent)
-        var kind = await classify(session, agent: agent)
+        var kind = await classify(target, agent: agent)
         if kind == .copyMode {
-            await tmux.cancelMode(session)
-            kind = await classify(session, agent: agent)
+            await tmux.cancelMode(target)
+            kind = await classify(target, agent: agent)
         }
         switch kind {
         case .permissionDialog:
@@ -101,7 +105,7 @@ actor ReplyInjector {
         default:
             break
         }
-        switch await tmux.paste(text, into: session) {
+        switch await tmux.paste(text, into: target) {
         case .pasted:
             break
         case .stagingFailed:
@@ -110,7 +114,7 @@ actor ReplyInjector {
             return .error("tmux could not paste the message into the session")
         }
         try? await Task.sleep(nanoseconds: profile.pasteToEnterDelayMs * 1_000_000)
-        guard await tmux.sendKeys(session, ["Enter"]) else {
+        guard await tmux.sendKeys(target, ["Enter"]) else {
             return .error("tmux could not submit the message")
         }
         Log.inject.info("sent text to \(session, privacy: .public) (\(text.count) chars)")
@@ -121,10 +125,13 @@ actor ReplyInjector {
     enum Decision: Sendable { case allowOnce, allowAll, deny }
 
     func sendDecision(_ session: String, agent: AgentKind, _ decision: Decision) async -> Result {
-        var kind = await classify(session, agent: agent)
+        guard let target = await tmux.workerPaneTarget(session, agent: agent) else {
+            return .error("worker pane is unavailable")
+        }
+        var kind = await classify(target, agent: agent)
         if kind == .copyMode {
-            await tmux.cancelMode(session)
-            kind = await classify(session, agent: agent)
+            await tmux.cancelMode(target)
+            kind = await classify(target, agent: agent)
         }
         switch kind {
         case .shell:
@@ -142,7 +149,7 @@ actor ReplyInjector {
         case .allowAll:  keys = profile.approveAll
         case .deny:      keys = profile.deny
         }
-        guard await tmux.sendKeys(session, keys) else {
+        guard await tmux.sendKeys(target, keys) else {
             return .error("tmux could not submit the decision")
         }
         Log.inject.info("sent decision \(String(describing: decision), privacy: .public) to \(session, privacy: .public)")
@@ -152,18 +159,21 @@ actor ReplyInjector {
     /// Pick a numbered option from a menu (permission dialog / AskUserQuestion). A bare digit
     /// selects+confirms the highlighted-by-number choice (FINDINGS.md §2). Refuses a bare shell.
     func pick(_ session: String, agent: AgentKind, option: Int) async -> Result {
-        var kind = await classify(session, agent: agent)
+        guard let target = await tmux.workerPaneTarget(session, agent: agent) else {
+            return .error("worker pane is unavailable")
+        }
+        var kind = await classify(target, agent: agent)
         if kind == .copyMode {
-            await tmux.cancelMode(session)
-            kind = await classify(session, agent: agent)
+            await tmux.cancelMode(target)
+            kind = await classify(target, agent: agent)
         }
         guard kind != .shell else { return .refusedShell }
         guard kind != .copyMode else { return .error("worker is in copy mode") }
-        let options = DecisionParser.parse(await tmux.capturePane(session, colors: false))
+        let options = DecisionParser.parse(await tmux.capturePane(target, colors: false))
         guard options.contains(where: { $0.number == option }) else {
             return .error("selected option is no longer visible")
         }
-        guard await tmux.sendKeys(session, [String(option)]) else {
+        guard await tmux.sendKeys(target, [String(option)]) else {
             return .error("tmux could not submit the selected option")
         }
         Log.inject.info("picked option \(option) in \(session, privacy: .public)")
