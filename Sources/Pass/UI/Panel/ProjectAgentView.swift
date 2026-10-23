@@ -429,6 +429,9 @@ private struct ProjectAgentChatView: View {
                             HStack(spacing: 6) {
                                 ProgressView().controlSize(.mini)
                                 Text(conversation.status)
+                                if conversation.queuedMessageCount > 0 {
+                                    Text("· \(conversation.queuedMessageCount)개 대기 중")
+                                }
                             }
                             .font(PassFont.ui(size: 11)).foregroundStyle(.secondary)
                         }
@@ -510,6 +513,11 @@ private struct ProjectAgentChatView: View {
                             }
                         }
                     }
+                    if entry.isQueued {
+                        Label("대기 중", systemImage: "clock")
+                            .font(PassFont.ui(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.horizontal, 13).padding(.vertical, 10)
                 .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
@@ -531,10 +539,16 @@ private struct ProjectAgentChatView: View {
         case .activity:
             ProjectAgentActivityRow(entry: entry)
         case .notice:
-            Label(entry.text, systemImage: "bell.badge")
-                .font(PassFont.ui(size: 11))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                Label(entry.text, systemImage: "bell.badge")
+                if entry.isQueued {
+                    Label("대기 중", systemImage: "clock")
+                        .font(PassFont.ui(size: 10))
+                }
+            }
+            .font(PassFont.ui(size: 11))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .error:
             Label(entry.text, systemImage: "exclamationmark.circle")
                 .font(PassFont.ui(size: 11))

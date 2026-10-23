@@ -14,10 +14,12 @@ struct ProjectAgentMessage: Identifiable {
     var toolSummary: String? = nil
     var toolIsRunning = false
     var toolIsError = false
+    var isQueued = false
 }
 
 enum ProjectAgentToolActivity {
-    static func start(_ event: [String: Any], in messages: inout [ProjectAgentMessage]) {
+    static func start(_ event: [String: Any], in messages: inout [ProjectAgentMessage],
+                      insertAt index: Int? = nil) {
         let name = event["toolName"] as? String ?? "도구"
         let callID = event["toolCallId"] as? String
         let args = event["args"] as? [String: Any] ?? [:]
@@ -25,13 +27,14 @@ enum ProjectAgentToolActivity {
         let summary = ["command", "path", "file_path", "pattern", "query", "description", "url"]
             .compactMap { args[$0] as? String }.first?
             .replacingOccurrences(of: "\n", with: " ")
-        messages.append(ProjectAgentMessage(role: .activity, text: "", toolCallID: callID,
+        messages.insert(ProjectAgentMessage(role: .activity, text: "", toolCallID: callID,
                                             toolName: name, toolInput: input,
-                                            toolSummary: summary, toolIsRunning: true))
+                                            toolSummary: summary, toolIsRunning: true),
+                        at: index ?? messages.endIndex)
     }
 
     static func finish(_ event: [String: Any], in messages: inout [ProjectAgentMessage],
-                       isComplete: Bool) {
+                       isComplete: Bool, insertAt insertionIndex: Int? = nil) {
         let callID = event["toolCallId"] as? String
         let name = event["toolName"] as? String ?? "도구"
         let result = (isComplete ? event["result"] : event["partialResult"]) as? [String: Any] ?? [:]
@@ -45,9 +48,10 @@ enum ProjectAgentToolActivity {
                 messages[index].toolIsError = event["isError"] as? Bool == true
             }
         } else if isComplete {
-            messages.append(ProjectAgentMessage(role: .activity, text: output,
+            messages.insert(ProjectAgentMessage(role: .activity, text: output,
                                                 toolCallID: callID, toolName: name,
-                                                toolIsError: event["isError"] as? Bool == true))
+                                                toolIsError: event["isError"] as? Bool == true),
+                            at: insertionIndex ?? messages.endIndex)
         }
     }
 
@@ -72,10 +76,17 @@ enum ProjectAgentToolActivity {
 @MainActor
 @Observable
 final class ProjectAgentConversation {
+    private struct PendingMessage {
+        let entryID: UUID
+        let prompt: String
+        let images: [[String: Any]]
+    }
+
     let projectRoot: String
     private(set) var messages: [ProjectAgentMessage] = []
     private(set) var isReady = false
     private(set) var isResponding = false
+    private(set) var queuedMessageCount = 0
     private(set) var status = "에이전트를 시작하는 중…"
     private(set) var modelLabel = "Pi 기본 모델"
     private(set) var modelError = false
@@ -88,9 +99,10 @@ final class ProjectAgentConversation {
     }
 
     var canChangeModel: Bool { isReady && !isResponding && !settingModel && !waitingForModels }
-    var canSendMessage: Bool { isReady && !isResponding && !settingModel }
+    var canSendMessage: Bool { isReady }
 
     @ObservationIgnored private var process: Process?
+    @ObservationIgnored private let commandWriter: (([String: Any]) -> Bool)?
     @ObservationIgnored private var input: Pipe?
     @ObservationIgnored private var output: Pipe?
     @ObservationIgnored private var errorOutput: Pipe?
@@ -100,7 +112,9 @@ final class ProjectAgentConversation {
     @ObservationIgnored private var started = false
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var activePrompt: String?
+    @ObservationIgnored private var activePromptID: String?
     @ObservationIgnored private var activeImages: [[String: Any]] = []
+    @ObservationIgnored private var pendingMessages: [PendingMessage] = []
     @ObservationIgnored private var toolStartedForPrompt = false
     @ObservationIgnored private var attemptedModels: Set<String> = []
     @ObservationIgnored private var blockedProviders: Set<String> = []
@@ -112,8 +126,9 @@ final class ProjectAgentConversation {
     @ObservationIgnored private var pendingSelectionIsManual = false
     @ObservationIgnored private var restartWhenIdle = false
 
-    init(projectRoot: String) {
+    init(projectRoot: String, commandWriter: (([String: Any]) -> Bool)? = nil) {
         self.projectRoot = projectRoot
+        self.commandWriter = commandWriter
         manuallySelectedModel = UserDefaults.standard.string(forKey:
             "projectAgent.manualModel." + ProjectAgentIdentity.sessionName(for: projectRoot))
     }
@@ -144,6 +159,7 @@ final class ProjectAgentConversation {
         availableModels = []
         assistantID = nil
         retryError = nil
+        activePromptID = nil
         activeImages = []
         waitingForModels = false
         waitingForAgentEnd = false
@@ -174,10 +190,24 @@ final class ProjectAgentConversation {
             return false
         }
         let prompt = ProjectAgentAttachments.prompt(body, files: storedFiles)
-        let entry = ProjectAgentMessage(role: visibleText == nil ? .user : .notice,
+        var entry = ProjectAgentMessage(role: visibleText == nil ? .user : .notice,
                                         text: visibleText ?? (body.isEmpty ? "첨부 파일을 확인해 주세요." : body),
                                         attachments: storedFiles)
+        entry.isQueued = isResponding || settingModel || !pendingMessages.isEmpty
         messages.append(entry)
+        if entry.isQueued {
+            pendingMessages.append(PendingMessage(entryID: entry.id, prompt: prompt, images: images))
+            queuedMessageCount = pendingMessages.count
+            if !isResponding && !settingModel { sendNextQueuedMessage() }
+            return true
+        }
+        if startPrompt(prompt, images: images) { return true }
+        messages.removeAll { $0.id == entry.id }
+        for file in storedFiles { try? FileManager.default.removeItem(at: file) }
+        return false
+    }
+
+    private func startPrompt(_ prompt: String, images: [[String: Any]]) -> Bool {
         isResponding = true
         activePrompt = prompt
         activeImages = images
@@ -189,9 +219,11 @@ final class ProjectAgentConversation {
         modelError = false
         status = "생각하는 중…"
         if !sendPrompt(prompt, images: images) {
-            messages.append(ProjectAgentMessage(role: .error, text: "메시지를 보낼 수 없습니다. 에이전트를 다시 열어 주세요."))
+            appendAgentMessage(ProjectAgentMessage(role: .error,
+                text: "메시지를 보낼 수 없습니다. 에이전트를 다시 열어 주세요."))
             isResponding = false
             activePrompt = nil
+            activePromptID = nil
             activeImages = []
             return false
         }
@@ -199,10 +231,33 @@ final class ProjectAgentConversation {
     }
 
     private func sendPrompt(_ body: String, images: [[String: Any]]) -> Bool {
-        var command: [String: Any] = ["id": UUID().uuidString, "type": "prompt", "message": body,
+        let id = UUID().uuidString
+        var command: [String: Any] = ["id": id, "type": "prompt", "message": body,
                                       "streamingBehavior": "followUp"]
         if !images.isEmpty { command["images"] = images }
-        return write(command)
+        guard write(command) else { return false }
+        activePromptID = id
+        return true
+    }
+
+    private var firstQueuedMessageIndex: Int? {
+        messages.firstIndex(where: \.isQueued)
+    }
+
+    private func appendAgentMessage(_ message: ProjectAgentMessage) {
+        messages.insert(message, at: firstQueuedMessageIndex ?? messages.endIndex)
+    }
+
+    private func sendNextQueuedMessage() {
+        guard isReady, !isResponding, !settingModel, !pendingMessages.isEmpty else { return }
+        while !pendingMessages.isEmpty {
+            let next = pendingMessages.removeFirst()
+            queuedMessageCount = pendingMessages.count
+            if let index = messages.firstIndex(where: { $0.id == next.entryID }) {
+                messages[index].isQueued = false
+            }
+            if startPrompt(next.prompt, images: next.images) { return }
+        }
     }
 
     private var modelPreferenceKey: String {
@@ -365,6 +420,10 @@ final class ProjectAgentConversation {
                 guard let self, self.generation == generation else { return }
                 self.isReady = false
                 self.isResponding = false
+                self.activePrompt = nil
+                self.activePromptID = nil
+                self.activeImages = []
+                self.failQueuedMessages()
                 self.status = "Pi 연결이 종료되었습니다 (코드 \(process.terminationStatus))."
                 if !self.stderrTail.isEmpty {
                     self.messages.append(ProjectAgentMessage(role: .error,
@@ -388,6 +447,7 @@ final class ProjectAgentConversation {
     }
 
     private func write(_ command: [String: Any]) -> Bool {
+        if let commandWriter { return commandWriter(command) }
         guard let input, let data = try? JSONSerialization.data(withJSONObject: command) else { return false }
         do {
             try input.fileHandleForWriting.write(contentsOf: data + Data([10]))
@@ -406,17 +466,19 @@ final class ProjectAgentConversation {
         }
     }
 
-    private func receive(_ event: [String: Any]) {
+    func receive(_ event: [String: Any]) {
         let type = event["type"] as? String ?? ""
         if type == "response" {
             let id = event["id"] as? String ?? ""
             if id == "history" {
                 if let data = event["data"] as? [String: Any],
                    let history = data["messages"] as? [[String: Any]] {
-                    messages = Self.messagesFromHistory(history)
+                    let queuedEntries = messages.filter(\.isQueued)
+                    messages = Self.messagesFromHistory(history) + queuedEntries
                 }
                 isReady = event["success"] as? Bool == true
                 status = isReady ? "준비됨" : (event["error"] as? String ?? "대화를 불러올 수 없습니다.")
+                sendNextQueuedMessage()
             } else if id == "models" {
                 waitingForModels = false
                 if let data = event["data"] as? [String: Any],
@@ -449,17 +511,20 @@ final class ProjectAgentConversation {
                 } else {
                     status = "모델을 바꿀 수 없습니다"
                     let error = event["error"] as? String ?? "선택한 모델을 사용할 수 없습니다."
-                    messages.append(ProjectAgentMessage(role: .error, text: Self.readableError(error)))
+                    appendAgentMessage(ProjectAgentMessage(role: .error, text: Self.readableError(error)))
                 }
                 pendingModel = nil
-            } else if event["success"] as? Bool == false {
+                sendNextQueuedMessage()
+            } else if event["success"] as? Bool == false, id == activePromptID {
                 let error = event["error"] as? String ?? "Pi 요청이 실패했습니다."
                 if !handleModelFailure(error) {
-                    messages.append(ProjectAgentMessage(role: .error, text: Self.readableError(error)))
+                    appendAgentMessage(ProjectAgentMessage(role: .error, text: Self.readableError(error)))
                     isResponding = false
                     activePrompt = nil
+                    activePromptID = nil
                     activeImages = []
                     status = "응답 오류"
+                    sendNextQueuedMessage()
                 } else {
                     tryNextModel()
                 }
@@ -471,7 +536,7 @@ final class ProjectAgentConversation {
             if let message = event["message"] as? [String: Any], message["role"] as? String == "assistant" {
                 let entry = ProjectAgentMessage(role: .assistant, text: "")
                 assistantID = entry.id
-                messages.append(entry)
+                appendAgentMessage(entry)
             }
         case "message_update", "message_end":
             guard let message = event["message"] as? [String: Any],
@@ -493,8 +558,8 @@ final class ProjectAgentConversation {
                             messages.removeAll { $0.id == completedAssistantID }
                         }
                     } else {
-                        messages.append(ProjectAgentMessage(role: .error,
-                                                            text: Self.readableError(error)))
+                        appendAgentMessage(ProjectAgentMessage(role: .error,
+                                                                text: Self.readableError(error)))
                         activePrompt = nil
                         activeImages = []
                         status = "응답 오류"
@@ -505,11 +570,13 @@ final class ProjectAgentConversation {
             toolStartedForPrompt = true
             let name = event["toolName"] as? String ?? "도구"
             status = "\(name) 실행 중…"
-            ProjectAgentToolActivity.start(event, in: &messages)
+            ProjectAgentToolActivity.start(event, in: &messages,
+                                           insertAt: firstQueuedMessageIndex)
         case "tool_execution_update":
             ProjectAgentToolActivity.finish(event, in: &messages, isComplete: false)
         case "tool_execution_end":
-            ProjectAgentToolActivity.finish(event, in: &messages, isComplete: true)
+            ProjectAgentToolActivity.finish(event, in: &messages, isComplete: true,
+                                            insertAt: firstQueuedMessageIndex)
             status = "결과를 정리하는 중…"
         case "agent_end":
             if event["willRetry"] as? Bool == true { return }
@@ -522,10 +589,15 @@ final class ProjectAgentConversation {
                     UserDefaults.standard.set(modelLabel, forKey: Self.lastWorkingModelKey)
                 }
                 activePrompt = nil
+                activePromptID = nil
                 activeImages = []
                 isResponding = false
                 if !modelError { status = "준비됨" }
-                if restartWhenIdle { restartAfterPiUpdate() }
+                if restartWhenIdle && pendingMessages.isEmpty {
+                    restartAfterPiUpdate()
+                } else {
+                    sendNextQueuedMessage()
+                }
             }
         default: break
         }
@@ -578,13 +650,32 @@ final class ProjectAgentConversation {
         pendingModel = nil
         settingModel = false
         activePrompt = nil
+        activePromptID = nil
         activeImages = []
         isResponding = false
         modelError = true
         status = "모델에 연결할 수 없습니다"
-        messages.append(ProjectAgentMessage(role: .error,
+        appendAgentMessage(ProjectAgentMessage(role: .error,
             text: Self.readableError(error) + " Pi 계정을 연결하거나 모델 설정을 확인해 주세요."))
-        if restartWhenIdle { restartAfterPiUpdate() }
+        if restartWhenIdle && pendingMessages.isEmpty {
+            restartAfterPiUpdate()
+        } else {
+            sendNextQueuedMessage()
+        }
+    }
+
+    private func failQueuedMessages() {
+        guard !pendingMessages.isEmpty else { return }
+        for pending in pendingMessages {
+            if let index = messages.firstIndex(where: { $0.id == pending.entryID }) {
+                messages[index].isQueued = false
+            }
+        }
+        let count = pendingMessages.count
+        pendingMessages.removeAll()
+        queuedMessageCount = 0
+        messages.append(ProjectAgentMessage(role: .error,
+            text: "Pi 연결이 종료되어 대기 중인 메시지 \(count)개를 보내지 못했습니다. 다시 보내 주세요."))
     }
 
     private static func isRecoverableModelError(_ error: String) -> Bool {
